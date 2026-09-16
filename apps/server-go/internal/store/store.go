@@ -159,6 +159,32 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
   used_at    TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 动态密钥（M4 #9）：高权限连接串 Master Key 加密自举；lease 绑定机器身份
+CREATE TABLE IF NOT EXISTS dynamic_engines (
+  id             TEXT PRIMARY KEY,
+  org_id         TEXT NOT NULL,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  type           TEXT NOT NULL DEFAULT 'postgres' CHECK (type IN ('postgres')),
+  conn_encrypted TEXT NOT NULL,
+  database       TEXT NOT NULL DEFAULT 'postgres',
+  default_ttl    INTEGER NOT NULL DEFAULT 3600,
+  max_ttl        INTEGER NOT NULL DEFAULT 86400,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS dynamic_leases (
+  id                 TEXT PRIMARY KEY,
+  engine_id          TEXT NOT NULL REFERENCES dynamic_engines(id) ON DELETE CASCADE,
+  identity_id        TEXT NOT NULL,
+  username           TEXT NOT NULL UNIQUE,
+  password_encrypted TEXT NOT NULL,
+  status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','expired','revoked','failed')),
+  expires_at         INTEGER NOT NULL,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  revoked_at         TEXT
+);
 `)
 	if err != nil {
 		return err

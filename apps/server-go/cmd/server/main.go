@@ -2,15 +2,19 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/config"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/server"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 )
@@ -46,6 +50,15 @@ func main() {
 	}
 	defer db.Close()
 
+	// 动态密钥引擎 mock 开关（冒烟/CI：TABOO_DYNAMIC_ENGINE=mock）
+	if os.Getenv("TABOO_DYNAMIC_ENGINE") == "mock" {
+		mock := dynamic.NewMockEngine()
+		dynamic.Factory = func(string) (dynamic.Engine, error) { return mock, nil }
+		log.Println("[taboo] dynamic engine: MOCK (no real database touched)")
+	}
+
+	dynSvc := dynamic.New(db, masterKey)
+
 	r := server.New(&server.Deps{
 		DB:        db,
 		MasterKey: masterKey,
@@ -53,7 +66,11 @@ func main() {
 		CORS:      cfg.CORS,
 		DEKs:      tc.NewDEKCache(),
 		LoginRate: cfg.LoginRate,
+		Dynamic:   dynSvc,
 	})
+
+	// 动态密钥后台 worker：到期回收 + 身份吊销联动（M4 #9）
+	dynSvc.StartWorker(context.Background(), 20*time.Second)
 
 	// 静态前端（embed）；SPA fallback 到 index.html
 	dist, err := fs.Sub(webFS, "web")

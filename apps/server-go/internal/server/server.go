@@ -12,6 +12,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/identity"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
@@ -27,6 +28,7 @@ type Deps struct {
 	CORS      string
 	DEKs      *tc.DEKCache
 	LoginRate int // 登录类接口每 IP 每窗口限流（0 → 默认 5）
+	Dynamic   *dynamic.Service
 }
 
 func New(d *Deps) *chi.Mux {
@@ -42,6 +44,10 @@ func New(d *Deps) *chi.Mux {
 	folders := &folder.Service{DB: d.DB}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
 	totps := &totpsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
+	dyn := d.Dynamic
+	if dyn == nil {
+		dyn = dynamic.New(d.DB, d.MasterKey)
+	}
 	loginRate := d.LoginRate
 	if loginRate <= 0 {
 		loginRate = 5
@@ -70,6 +76,7 @@ func New(d *Deps) *chi.Mux {
 				r.Post("/environments", orgs.CreateEnv)
 				folders.Routes(r)
 				secrets.Routes(r)
+				dyn.Routes(r)
 			})
 		})
 	})

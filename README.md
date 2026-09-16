@@ -33,7 +33,8 @@
 - [x] **OpenAPI 3.1 契约（M3 #7）**：`api/openapi.yaml` 为 REST 唯一事实源（auth/TOTP/orgs/identities/folders/secrets 全量端点 + `{code,message,details}` 错误模型）；前端 TS 类型由契约生成（`npm run types -w @taboo/web`）；Go 契约漂移测试（chi 路由表 vs 契约，漂移即失败）；Scalar 文档页 `/api/docs`
 - [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export、folders；`examples/basic` 集成示例已对真实服务跑通
 - [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份 scope 限定（dev 身份访问 prod 即拒）、吊销立即断连；11 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档
-- [ ] 动态密钥、MCP Server、Secret Sync、TOTP 2FA → 见路线图
+- [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 动态引擎 —— 机器身份申请短期账号 lease（`taboo_` 前缀随机用户名，CREATE USER … VALID UNTIL + 最小只读授权），到期/吊销自动 DROP（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请；17 项专项冒烟全过（`TABOO_DYNAMIC_ENGINE=mock`，真实 PG 联调待补）
+- [ ] Secret Sync、Webhooks、OIDC → 见路线图
 
 ## 双后端说明
 
@@ -97,7 +98,7 @@ taboo/                       # 根 workspace（private）
 │   ├── server-go/           # Go 后端（M1 起主推）：cmd/server + internal/*（auth/crypto/org/secret/identity/folder/store…）
 │   ├── web/                 # @taboo/web — React 19 + TS + Vite Dashboard
 │   ├── cli/                 # @taboo/cli — bin: taboo（login/set/get/list/export/run/scan，支持机器身份）
-│   └── mcp/                 # （预留）MCP Server（v1.1，见 issue #10）
+│   └── mcp/                 # MCP Server（M4 #10）：stdio JSON-RPC，secrets.list / secrets.get
 ├── packages/
 │   └── sdk-go/              # Go SDK（M3 #8）：原生手写薄封装 REST 契约 + examples/basic
 ├── api/
@@ -126,7 +127,7 @@ npm run cli -- login you@example.com your-password
 | **M1（进行中）** | Go 后端已落地（Chi + modernc.org/sqlite、Argon2id、embed.FS 单二进制，冒烟全过）；剩余：sqlc 代码生成、PostgreSQL 主模式 |
 | M2 | 机器身份（✅ #3）、文件夹多级路径（✅ #5）、TOTP 2FA（✅ #4）—— **M2 全部完成** |
 | M3 | CLI 全命令（scan ✅ #6，Dashboard 报告页遗留）、OpenAPI 契约（✅ #7）、Go SDK（✅ #8）；Python/Node SDK 待 OpenAPI 生成器接入 |
-| M4 | 动态密钥（PG/MySQL lease，#9）、MCP Server（✅ #10） |
+| M4 | 动态密钥（✅ #9，PostgreSQL lease + worker 回收 + 身份联动）、MCP Server（✅ #10）—— **M4 全部完成** |
 | M5 | Secret Sync、Webhooks、OIDC SSO、审计导出、Docker/Helm 发布 |
 
 ## 许可

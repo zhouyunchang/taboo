@@ -454,7 +454,7 @@ func (s *Service) Audit(w http.ResponseWriter, r *http.Request) {
 	if limit > 500 {
 		limit = 500
 	}
-	rows, err := s.DB.Query(`SELECT id, actor_name, action, resource, ip, created_at FROM audit_logs
+	rows, err := s.DB.Query(`SELECT id, actor_name, action, resource, metadata, ip, created_at FROM audit_logs
 		WHERE org_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`, orgID, limit)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
@@ -462,17 +462,23 @@ func (s *Service) Audit(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type log struct {
-		ID        string `json:"id"`
-		ActorName string `json:"actor_name"`
-		Action    string `json:"action"`
-		Resource  string `json:"resource"`
-		IP        string `json:"ip"`
-		CreatedAt string `json:"created_at"`
+		ID        string          `json:"id"`
+		ActorName string          `json:"actor_name"`
+		Action    string          `json:"action"`
+		Resource  string          `json:"resource"`
+		Metadata  json.RawMessage `json:"metadata"`
+		IP        string          `json:"ip"`
+		CreatedAt string          `json:"created_at"`
 	}
 	out := []log{}
 	for rows.Next() {
 		var l log
-		_ = rows.Scan(&l.ID, &l.ActorName, &l.Action, &l.Resource, &l.IP, &l.CreatedAt)
+		var meta string
+		_ = rows.Scan(&l.ID, &l.ActorName, &l.Action, &l.Resource, &meta, &l.IP, &l.CreatedAt)
+		if meta == "" {
+			meta = "{}"
+		}
+		l.Metadata = json.RawMessage(meta)
 		out = append(out, l)
 	}
 	writeJSON(w, 200, map[string]any{"logs": out})

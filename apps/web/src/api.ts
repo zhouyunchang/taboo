@@ -76,3 +76,6 @@ export type AuditLog = Schemas['AuditLog'];
 export type IdentityScope = Schemas['IdentityScope'];
 export type Identity = Schemas['Identity'];
 export type CreatedIdentity = Schemas['IdentityWithSecret'];
+export type DynamicEngine = Schemas['DynamicEngine'];
+export type DynamicLease = Schemas['DynamicLease'];
+export type LeaseCredentials = Schemas['LeaseCredentials'];

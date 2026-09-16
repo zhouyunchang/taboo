@@ -367,6 +367,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{pid}/dynamic-engines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 动态密钥引擎列表 + 活跃 lease（不含连接串/密码） */
+        get: operations["listDynamicEngines"];
+        put?: never;
+        /** 创建 PostgreSQL 动态密钥引擎（owner/admin；连接串 Master Key 加密落库） */
+        post: operations["createDynamicEngine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/dynamic-engines/{eid}/lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 申请动态密钥 lease（仅限机器身份 token，绑定 identity；服务端 CREATE USER ... VALID UNTIL） */
+        post: operations["requestLease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/dynamic-leases/{lid}/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 续期 lease（延长 VALID UNTIL，不超 max_ttl；lease 所属身份或 owner/admin） */
+        post: operations["renewLease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/dynamic-leases/{lid}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 手动回收 lease（立即 DROP USER；lease 所属身份或 owner/admin） */
+        post: operations["revokeLease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -504,6 +573,49 @@ export interface components {
         AuthResponse: {
             user?: components["schemas"]["User"];
             tokens?: components["schemas"]["TokenPair"];
+        };
+        DynamicEngine: {
+            id?: string;
+            name?: string;
+            /** @example postgres */
+            type?: string;
+            database?: string;
+            default_ttl?: number;
+            max_ttl?: number;
+            created_at?: string;
+            leases?: components["schemas"]["DynamicLease"][];
+        };
+        DynamicEngineCreateRequest: {
+            name: string;
+            /** @enum {string} */
+            type?: "postgres";
+            /** @description 高权限连接串（postgres://…），加密落库 */
+            connection_string: string;
+            /** @default postgres */
+            database: string;
+            /** @default 3600 */
+            default_ttl: number;
+            /** @default 86400 */
+            max_ttl: number;
+        };
+        DynamicLease: {
+            id?: string;
+            /** @example taboo_a1b2c3d4e5f6 */
+            username?: string;
+            /** @enum {string} */
+            status?: "active" | "expired" | "revoked" | "failed";
+            expires_at?: number;
+            seconds_left?: number;
+            created_at?: string;
+        };
+        LeaseCredentials: {
+            id?: string;
+            username?: string;
+            /** @description 仅此一次明文返回 */
+            password?: string;
+            database?: string;
+            expires_at?: number;
+            seconds_left?: number;
         };
         LoginResponse: components["schemas"]["AuthResponse"] | {
             /** @constant */
@@ -1352,6 +1464,165 @@ export interface operations {
                 };
             };
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listDynamicEngines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 引擎与活跃 lease */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        engines?: components["schemas"]["DynamicEngine"][];
+                    };
+                };
+            };
+        };
+    };
+    createDynamicEngine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DynamicEngineCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description 已创建 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicEngine"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    requestLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                eid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description 秒，默认引擎 default_ttl，上限 max_ttl */
+                    ttl?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description lease 凭证（明文密码仅此一次返回） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaseCredentials"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description 目标库不可达/授权失败 */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    renewLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                lid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    ttl?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description 已续期 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        expires_at?: number;
+                    };
+                };
+            };
+            /** @description lease 非活跃 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    revokeLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                lid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已回收（或原本非活跃） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        status?: string;
+                    };
+                };
+            };
         };
     };
 }

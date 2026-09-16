@@ -468,6 +468,91 @@ paths:
           content:
             text/plain: {}
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/projects/{pid}/dynamic-engines:
+    get:
+      tags: [secrets]
+      summary: 动态密钥引擎列表 + 活跃 lease（不含连接串/密码）
+      operationId: listDynamicEngines
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
+      responses:
+        '200':
+          description: 引擎与活跃 lease
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  engines:
+                    type: array
+                    items: { $ref: '#/components/schemas/DynamicEngine' }
+    post:
+      tags: [secrets]
+      summary: 创建 PostgreSQL 动态密钥引擎（owner/admin；连接串 Master Key 加密落库）
+      operationId: createDynamicEngine
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DynamicEngineCreateRequest' }
+      responses:
+        '201': { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/DynamicEngine' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/projects/{pid}/dynamic-engines/{eid}/lease:
+    post:
+      tags: [secrets]
+      summary: 申请动态密钥 lease（仅限机器身份 token，绑定 identity；服务端 CREATE USER ... VALID UNTIL）
+      operationId: requestLease
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { name: eid, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { ttl: { type: integer, description: 秒，默认引擎 default_ttl，上限 max_ttl } }
+      responses:
+        '201':
+          description: lease 凭证（明文密码仅此一次返回）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LeaseCredentials' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '502': { description: 目标库不可达/授权失败, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /api/v1/projects/{pid}/dynamic-leases/{lid}/renew:
+    post:
+      tags: [secrets]
+      summary: 续期 lease（延长 VALID UNTIL，不超 max_ttl；lease 所属身份或 owner/admin）
+      operationId: renewLease
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { name: lid, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { ttl: { type: integer } }
+      responses:
+        '200': { description: 已续期, content: { application/json: { schema: { type: object, properties: { id: { type: string }, expires_at: { type: integer } } } } } }
+        '409': { description: lease 非活跃, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /api/v1/projects/{pid}/dynamic-leases/{lid}/revoke:
+    post:
+      tags: [secrets]
+      summary: 手动回收 lease（立即 DROP USER；lease 所属身份或 owner/admin）
+      operationId: revokeLease
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { name: lid, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已回收（或原本非活跃）, content: { application/json: { schema: { type: object, properties: { id: { type: string }, status: { type: string } } } } } }
 
 components:
   securitySchemes:
@@ -627,6 +712,47 @@ components:
       properties:
         user: { $ref: '#/components/schemas/User' }
         tokens: { $ref: '#/components/schemas/TokenPair' }
+    DynamicEngine:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, example: postgres }
+        database: { type: string }
+        default_ttl: { type: integer }
+        max_ttl: { type: integer }
+        created_at: { type: string }
+        leases:
+          type: array
+          items: { $ref: '#/components/schemas/DynamicLease' }
+    DynamicEngineCreateRequest:
+      type: object
+      required: [name, connection_string]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [postgres] }
+        connection_string: { type: string, description: 高权限连接串（postgres://…），加密落库 }
+        database: { type: string, default: postgres }
+        default_ttl: { type: integer, default: 3600 }
+        max_ttl: { type: integer, default: 86400 }
+    DynamicLease:
+      type: object
+      properties:
+        id: { type: string }
+        username: { type: string, example: taboo_a1b2c3d4e5f6 }
+        status: { type: string, enum: [active, expired, revoked, failed] }
+        expires_at: { type: integer }
+        seconds_left: { type: integer }
+        created_at: { type: string }
+    LeaseCredentials:
+      type: object
+      properties:
+        id: { type: string }
+        username: { type: string }
+        password: { type: string, description: 仅此一次明文返回 }
+        database: { type: string }
+        expires_at: { type: integer }
+        seconds_left: { type: integer }
     LoginResponse:
       oneOf:
         - title: 直接登录成功

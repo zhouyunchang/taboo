@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
-import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope } from '../api';
+import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
 
 interface Props {
   user: User;
@@ -15,7 +15,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
   const [project, setProject] = useState<Project | null>(null);
   const [envs, setEnvs] = useState<Env[]>([]);
   const [env, setEnv] = useState('dev');
-  const [tab, setTab] = useState<'secrets' | 'audit' | 'identities'>('secrets');
+  const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic'>('secrets');
   const [show2FA, setShow2FA] = useState(false);
   const [error, setError] = useState('');
 
@@ -83,13 +83,16 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
             ))}
             <div className="spacer" />
             <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>
+            <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>
             <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>
           </div>
           {tab === 'secrets'
             ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} />
             : tab === 'identities'
               ? <IdentitiesPanel orgSlug={org.slug} project={project} envs={envs} />
-              : <AuditPanel orgSlug={org.slug} />}
+              : tab === 'dynamic'
+                ? project && <DynamicPanel key={project.id} projectId={project.id} projectSlug={project.slug} />
+                : <AuditPanel orgSlug={org.slug} />}
         </main>
       </div>
       {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
@@ -625,6 +628,128 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
         <div className="drawer-actions">
           <button type="button" className="ghost" onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function DynamicPanel({ projectId, projectSlug }: { projectId: string; projectSlug: string }) {
+  const [engines, setEngines] = useState<DynamicEngine[]>([]);
+  const [error, setError] = useState('');
+  const [showNew, setShowNew] = useState(false);
+
+  const load = useCallback(() => {
+    api.get<{ engines: DynamicEngine[] }>(`/api/v1/projects/${projectId}/dynamic-engines`)
+      .then((d) => setEngines(d.engines))
+      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+  }, [projectId]);
+  useEffect(load, [load]);
+  // 每 10s 刷新：seconds_left 倒计时 + worker 回收结果可见
+  useEffect(() => {
+    const t = setInterval(load, 10_000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  async function revokeLease(lid: string, username: string) {
+    if (!window.confirm(`立即回收 lease ${username}？（数据库账号将被 DROP）`)) return;
+    try {
+      await api.post(`/api/v1/projects/${projectId}/dynamic-leases/${lid}/revoke`);
+      load();
+    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+  }
+
+  const fmtLeft = (l: DynamicLease) => {
+    if (l.status !== 'active') return l.status;
+    const s = l.seconds_left ?? 0;
+    if (s <= 0) return '回收中…';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+  };
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>{projectSlug} / 动态密钥</h2>
+        <button className="ghost" onClick={load}>刷新</button>
+        <button onClick={() => setShowNew(true)}>＋ 接入数据库引擎</button>
+      </div>
+      <p className="muted">
+        为数据库配置动态引擎后，机器身份可用 <code>POST /projects/{'{pid}'}/dynamic-engines/{'{eid}'}/lease</code> 申请短期账号（自动创建、到期回收）。
+        lease 仅机器身份可申请；此处供 owner/admin 管理引擎与手动回收。
+      </p>
+      {error && <div className="error">{error}</div>}
+      {engines.length === 0 && <p className="muted">尚未接入任何数据库引擎。</p>}
+      {engines.map((e) => (
+        <div key={e.id} className="card">
+          <div className="panel-head">
+            <h3><span className="tag">{e.type}</span> {e.name} <span className="muted mono">{e.database}</span></h3>
+            <span className="muted">TTL {e.default_ttl}s / 上限 {e.max_ttl}s</span>
+          </div>
+          <table className="table">
+            <thead><tr><th>Lease 账号</th><th>状态</th><th>剩余</th><th>到期时间</th><th /></tr></thead>
+            <tbody>
+              {(e.leases ?? []).map((l) => (
+                <tr key={l.id}>
+                  <td className="mono">{l.username}</td>
+                  <td><span className={`tag ${l.status === 'active' ? 'ok' : ''}`}>{l.status}</span></td>
+                  <td className="mono">{fmtLeft(l)}</td>
+                  <td className="muted nowrap">{l.expires_at ? new Date(l.expires_at * 1000).toLocaleString() : ''}</td>
+                  <td>{l.status === 'active' && <button className="ghost" onClick={() => l.id && revokeLease(l.id, l.username ?? '')}>回收</button>}</td>
+                </tr>
+              ))}
+              {(e.leases ?? []).length === 0 && <tr><td colSpan={5} className="muted center">当前无活跃 lease</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      ))}
+      {showNew && (
+        <DynamicEngineCreator projectId={projectId}
+          onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load(); }} />
+      )}
+    </div>
+  );
+}
+
+function DynamicEngineCreator({ projectId, onClose, onCreated }: {
+  projectId: string; onClose: () => void; onCreated: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [conn, setConn] = useState('');
+  const [database, setDatabase] = useState('postgres');
+  const [defTTL, setDefTTL] = useState(3600);
+  const [maxTTL, setMaxTTL] = useState(86400);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      await api.post(`/api/v1/projects/${projectId}/dynamic-engines`, {
+        name, connection_string: conn, database, default_ttl: defTTL, max_ttl: maxTTL,
+      });
+      onCreated();
+    } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : String(e2)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="drawer" onClick={onClose}>
+      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+        <h3>接入数据库引擎（PostgreSQL）</h3>
+        <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="pg-main" /></label>
+        <label>高权限连接串<input className="mono" value={conn} onChange={(e) => setConn(e.target.value)} required
+          placeholder="postgres://admin:****@db.internal:5432/postgres" /></label>
+        <label>目标库<input value={database} onChange={(e) => setDatabase(e.target.value)} required /></label>
+        <label>默认 TTL（秒）<input type="number" value={defTTL} onChange={(e) => setDefTTL(Number(e.target.value))} min={60} /></label>
+        <label>最大 TTL（秒）<input type="number" value={maxTTL} onChange={(e) => setMaxTTL(Number(e.target.value))} min={300} /></label>
+        <p className="muted">连接串用 Master Key 加密落库，列表不回显。lease 到期后账号自动 DROP。</p>
+        {err && <div className="error">{err}</div>}
+        <div className="drawer-actions">
+          <button type="button" className="ghost" onClick={onClose}>取消</button>
+          <button type="submit" disabled={busy}>{busy ? '接入中…' : '接入'}</button>
         </div>
       </form>
     </div>
