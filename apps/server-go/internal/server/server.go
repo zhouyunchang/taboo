@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -13,12 +14,16 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/identity"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
+	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
 	totpsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/totp"
+	whsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/webhooks"
 )
 
 type Deps struct {
@@ -29,6 +34,10 @@ type Deps struct {
 	DEKs      *tc.DEKCache
 	LoginRate int // 登录类接口每 IP 每窗口限流（0 → 默认 5）
 	Dynamic   *dynamic.Service
+	DataDir   string // 数据目录（审计导出文件落盘；空 = 禁用异步导出）
+	Events    *events.Bus        // M5：密钥变更事件总线（nil → 自动创建）
+	Sync      *syncsvc.Service   // M5 #11：nil → 自动创建（Subscribe 到 Events）
+	Webhooks  *whsvc.Service     // M5 #12：nil → 自动创建（Subscribe 到 Events）
 }
 
 func New(d *Deps) *chi.Mux {
@@ -39,11 +48,25 @@ func New(d *Deps) *chi.Mux {
 	r.Use(cors(d.CORS))
 	r.Use(securityHeaders)
 
-	orgs := &orgsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs}
-	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
+	orgs := &orgsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir}
+	bus := d.Events
+	if bus == nil {
+		bus = events.NewBus()
+	}
+	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs, Events: bus}
 	folders := &folder.Service{DB: d.DB}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
 	totps := &totpsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
+	syncs := d.Sync
+	if syncs == nil {
+		syncs = &syncsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
+		syncs.Subscribe(bus)
+	}
+	webhooks := d.Webhooks
+	if webhooks == nil {
+		webhooks = &whsvc.Service{DB: d.DB, MasterKey: d.MasterKey}
+		webhooks.Subscribe(bus)
+	}
 	dyn := d.Dynamic
 	if dyn == nil {
 		dyn = dynamic.New(d.DB, d.MasterKey)
@@ -52,6 +75,8 @@ func New(d *Deps) *chi.Mux {
 	if loginRate <= 0 {
 		loginRate = 5
 	}
+	// 审计导出后台 worker：异步生成导出文件（M5 #14）
+	orgs.StartExportWorker(context.Background(), 10*time.Second)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		orgs.PublicRoutes(r)
@@ -59,6 +84,12 @@ func New(d *Deps) *chi.Mux {
 		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/identities/token", identities.Token)
 		// TOTP 2FA 第二步（公开，登录同窗口限流）
 		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/auth/totp/login", totps.Login2FA)
+		// OIDC SSO 登录跳转 + callback（公开，登录同窗口限流；M5 #13）
+		oidcSvc := &oidc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
+		r.Route("/auth/oidc/{slug}", func(r chi.Router) {
+			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/login", oidcSvc.Login)
+			r.Get("/callback", oidcSvc.Callback)
+		})
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(d.DB, d.JWTSecret))
 			orgs.Routes(r)
@@ -69,6 +100,12 @@ func New(d *Deps) *chi.Mux {
 				r.Post("/", identities.Create)
 				r.Post("/{id}/revoke", identities.Revoke)
 			})
+			// Secret Sync 目标与同步记录（M5 #11）
+			syncs.Routes(r)
+			// Webhooks 订阅与投递日志（M5 #12）
+			webhooks.Routes(r)
+			// OIDC SSO 配置（M5 #13）
+			oidcSvc.Routes(r)
 			// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥 + 文件夹路由
 			r.Route("/projects/{pid}", func(r chi.Router) {
 				r.Use(projectCtx(d.DB))

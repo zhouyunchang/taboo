@@ -10,14 +10,19 @@
 
 修仙小说里，藏有重宝的洞府必有禁制：外人不可见、不可触，擅动者必被察觉。密钥管理的本质一样——**高价值数据 + 严格访问控制 + 全程留痕**。
 
-## 当前状态：MVP（Node.js 验证版）
+## 当前状态：v1.0（Go 后端，功能全量落地）
 
-> 本 MVP 用 Node.js 标准库（`node:http` / `node:sqlite` / `node:crypto`）零外部依赖快速验证设计；
-> 目标架构为 **Go 后端 + React 前端**（见设计文档 §3），加密契约、API 契约、数据模型保持一致，可平滑迁移。
+> 当前版本为 **Go 后端 + React 前端**（设计文档 §3 目标架构），单二进制 embed.FS 交付；
+> Node MVP 保留在 `apps/server` 仅作契约回归参考。v1.0 发布说明见 [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md)。
 
-已实现（对齐设计文档 Must Have 子集）：
+功能总览（对齐设计文档）：
 
 - [x] 信封加密三层结构：Root Key (KEK) → 组织 DEK → Secret Value（AES-256-GCM，nonce 12B 随机不复用）
+- [x] 密钥 CRUD + 版本历史 + 回滚 + reveal 分离（RBAC 二次校验 + 审计）
+- [x] 机器身份（client_credentials + 显式 scope）、TOTP 2FA、多级文件夹
+- [x] CLI / Go SDK / MCP Server / OpenAPI 3.1 契约（含路由漂移检查）
+- [x] 动态密钥：PostgreSQL 短期账号 lease（到期自动回收）
+- [x] M5：Secret Sync（GitHub/Vercel/Cloudflare）、Webhooks（HMAC 签名）、OIDC SSO（JIT 入组）、审计导出 CSV/JSONL、Docker/Helm/GoReleaser 发布
 - [x] 注册即建个人组织 + 默认项目 + dev/staging/prod 三环境；组织/项目/环境模型
 - [x] 密钥 CRUD + 版本历史 + 回滚（`secret_versions` 只追加）
 - [x] 用户认证：**Argon2id**（m=64MB,t=3,p=4）密码哈希（旧 scrypt 登录透明迁移）+ JWT 15min + refresh 旋转 + 登录限流 5 次/分钟/IP
@@ -128,7 +133,12 @@ npm run cli -- login you@example.com your-password
 | M2 | 机器身份（✅ #3）、文件夹多级路径（✅ #5）、TOTP 2FA（✅ #4）—— **M2 全部完成** |
 | M3 | CLI 全命令（scan ✅ #6，Dashboard 报告页遗留）、OpenAPI 契约（✅ #7）、Go SDK（✅ #8）；Python/Node SDK 待 OpenAPI 生成器接入 |
 | M4 | 动态密钥（✅ #9，PostgreSQL lease + worker 回收 + 身份联动）、MCP Server（✅ #10）—— **M4 全部完成** |
-| M5 | Secret Sync、Webhooks、OIDC SSO、审计导出、Docker/Helm 发布 |
+| M5 | **全部完成**：Secret Sync（✅ #11）、Webhooks（✅ #12）、OIDC SSO（✅ #13）、审计导出 + Docker/Helm/GoReleaser（✅ #14）—— **v1.0 发布** |
+
+## 文档
+
+- [快速开始](docs/quickstart.md) · [部署指南](docs/deployment.md) · [API 参考](docs/api.md) · [安全模型](docs/security.md)
+- 运行时 API 文档：`GET /api/docs`（Scalar，契约本体 [api/openapi.yaml](api/openapi.yaml)）
 
 ## 部署
 

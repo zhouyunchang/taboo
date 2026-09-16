@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +23,7 @@ type Service struct {
 	MasterKey []byte
 	JWTSecret string
 	DEKs      *tc.DEKCache
+	DataDir   string // M5 #14：审计导出文件落盘目录（空 = 禁用异步导出）
 }
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
@@ -77,6 +77,9 @@ func (s *Service) Routes(r chi.Router) {
 		r.Get("/projects", s.ListProjects)
 		r.Post("/projects", s.CreateProject)
 		r.Get("/audit", s.Audit)
+		r.Get("/audit/export", s.AuditExport)
+		r.Get("/audit/exports", s.ListAuditExports)
+		r.Get("/audit/exports/{id}", s.AuditExportDownload)
 	})
 	// 注意：/projects/{pid} 作用域在 internal/server 统一挂载（含密钥路由），此处只提供 handler
 }
@@ -445,17 +448,10 @@ func (s *Service) Audit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := 100
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
-		}
-	}
-	if limit > 500 {
-		limit = 500
-	}
+	f := parseAuditFilter(r)
+	cond, args := buildAuditQuery(orgID, f)
 	rows, err := s.DB.Query(`SELECT id, actor_name, action, resource, metadata, ip, created_at FROM audit_logs
-		WHERE org_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`, orgID, limit)
+		WHERE `+cond+` ORDER BY created_at DESC, id DESC LIMIT ?`, append(args, f.Limit)...)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return

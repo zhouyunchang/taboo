@@ -1,0 +1,53 @@
+# taboo Helm Chart 默认 values
+# Master Key 与 JWT Secret 必须经 existingSecret 注入（禁止明文进 values/git）
+
+image:
+  repository: ghcr.io/zhouyunchang/taboo
+  tag: ""              # 缺省 = appVersion
+  pullPolicy: IfNotPresent
+
+replicaCount: 1        # SQLite 内嵌模式仅支持单副本；外接 PG 后仍建议 1（事件 worker 为进程内）
+
+service:
+  type: ClusterIP
+  port: 7100
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: taboo.example.com
+      paths: ["/"]
+
+# 关键 Secret（K8s Secret 注入，设计文档 §8 供应链）
+existingSecret: ""
+  # secret 中需包含两个键：
+  #   TABOO_MASTER_KEY   —— openssl rand -hex 32
+  #   TABOO_JWT_SECRET   —— openssl rand -hex 32
+
+env: []
+  # - name: TABOO_CORS_ORIGIN
+  #   value: "https://taboo.example.com"
+
+# SQLite 数据卷（含 master.key / taboo.db / 审计导出文件，务必备份）
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits:   { cpu: "1",  memory: 512Mi }
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

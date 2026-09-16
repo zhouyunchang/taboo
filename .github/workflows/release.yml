@@ -1,0 +1,37 @@
+name: release
+
+# GoReleaser 发布流水线：tag 推送 → 二进制 + 镜像 + SBOM + cosign 签名（设计文档 §8）
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write      # 上传 release 资产
+  packages: write      # 推送 ghcr.io 镜像
+  id-token: write      # cosign keyless 签名
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # cosign keyless 签名（OIDC）；SBOM 由 goreleaser 内嵌 syft 生成
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

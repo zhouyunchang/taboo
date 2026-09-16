@@ -11,6 +11,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
 )
@@ -27,6 +28,7 @@ type Service struct {
 	DB        *sql.DB
 	MasterKey []byte
 	DEKs      *tc.DEKCache
+	Events    *events.Bus // M5：密钥变更事件（Sync #11 / Webhooks #12 订阅）
 }
 
 type Meta struct {
@@ -83,8 +85,22 @@ func (s *Service) Routes(r chi.Router) {
 	r.Post("/secrets", s.Upsert)
 	r.Route("/secrets/{key}", func(r chi.Router) {
 		r.Get("/", s.Reveal)
+		r.Delete("/", s.Delete)
 		r.Get("/versions", s.Versions)
 		r.Post("/rollback", s.Rollback)
+	})
+}
+
+// publish 密钥变更事件（commit 后调用；事件不含明文）
+func (s *Service) publish(r *http.Request, p ProjectCtx, envSlug, folder, key string, version int, action string) {
+	if s.Events == nil {
+		return
+	}
+	u := auth.From(r)
+	s.Events.Publish(events.SecretEvent{
+		EventID: tc.NewID(), OrgID: p.OrgID, ProjectID: p.ID, ProjectSlug: p.Slug,
+		EnvSlug: envSlug, Folder: folder, Key: key, Version: version, Action: action,
+		ActorID: u.ID, ActorName: u.Name, ActorKind: u.Kind,
 	})
 }
 
@@ -282,6 +298,11 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.Audit(s.DB, p.OrgID, u, action, "project/"+p.Slug+"/env/"+envSlug+"/secret/"+b.Key,
 		map[string]any{"version": next}, clientIP(r))
+	eventAction := "updated"
+	if isCreate {
+		eventAction = "created"
+	}
+	s.publish(r, p, envSlug, normPath, b.Key, next, eventAction)
 	writeJSON(w, 200, map[string]any{"key": b.Key, "version": next})
 }
 
@@ -450,7 +471,55 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.Audit(s.DB, p.OrgID, u, "secrets.rollback", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key,
 		map[string]any{"from": b.Version, "to": next}, clientIP(r))
+	s.publish(r, p, envSlug, folderPathOf(r, s, envID), key, next, "rolled_back")
 	writeJSON(w, 200, map[string]any{"key": key, "version": next, "rolledBackFrom": b.Version})
+}
+
+// folderPathOf 解析当前请求 folder 参数的物化路径（发布事件用）
+func folderPathOf(r *http.Request, s *Service, envID string) string {
+	fid, norm, err := s.folderRef(envID, q(r, "path", "/"), false)
+	_ = fid
+	if err != nil {
+		return "/"
+	}
+	return norm
+}
+
+// DELETE /secrets/{key}?env=dev —— 删除密钥（版本级联删除；事件驱动 webhook/sync 感知）
+func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
+	u := auth.From(r)
+	p := projectOf(r)
+	envSlug := q(r, "env", "dev")
+	if !auth.Can(s.DB, u, p.OrgID, p.ID, "write", envSlug) {
+		writeErr(w, apperr.Forbidden)
+		return
+	}
+	envID, err := s.envOf(p.ID, envSlug)
+	if err != nil {
+		writeErr(w, apperr.EnvNotFound)
+		return
+	}
+	key := chi.URLParam(r, "key")
+	folderID, normPath, ferr := s.folderRef(envID, q(r, "path", "/"), false)
+	if ferr != nil {
+		writeErr(w, apperr.SecretNotFound)
+		return
+	}
+	var secretID string
+	var latest int
+	if err := s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`,
+		envID, folderID, key).Scan(&secretID, &latest); err != nil {
+		writeErr(w, apperr.SecretNotFound)
+		return
+	}
+	if _, err := s.DB.Exec(`DELETE FROM secrets WHERE id = ?`, secretID); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	auth.Audit(s.DB, p.OrgID, u, "secrets.delete", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key,
+		map[string]any{"version": latest}, clientIP(r))
+	s.publish(r, p, envSlug, normPath, key, latest, "deleted")
+	writeJSON(w, 200, map[string]any{"key": key, "deleted": true})
 }
 
 // ---------- helpers ----------

@@ -160,6 +160,103 @@ CREATE TABLE IF NOT EXISTS recovery_codes (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Secret Sync（M5 #11）：同步目标，平台凭证 config 经 Master Key 信封加密
+CREATE TABLE IF NOT EXISTS sync_targets (
+  id           TEXT PRIMARY KEY,
+  org_id       TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  platform     TEXT NOT NULL CHECK (platform IN ('github','vercel','cloudflare')),
+  project_id   TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  env_slug     TEXT NOT NULL DEFAULT '*',
+  config_enc   TEXT NOT NULL,
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sync_targets_org ON sync_targets(org_id);
+
+-- 同步运行记录（推送内容指纹 sha256，不记明文）
+CREATE TABLE IF NOT EXISTS sync_runs (
+  id           TEXT PRIMARY KEY,
+  target_id    TEXT NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
+  org_id       TEXT NOT NULL,
+  event_id     TEXT NOT NULL DEFAULT '',
+  secret_key   TEXT NOT NULL,
+  action       TEXT NOT NULL,
+  fingerprint  TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','success','failed','dead')),
+  trigger_type TEXT NOT NULL DEFAULT 'event',
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  error        TEXT NOT NULL DEFAULT '',
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sync_runs_target ON sync_runs(target_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sync_due ON sync_runs(status, next_attempt_at);
+
+-- Webhooks（M5 #12）：订阅；签名密钥 secret 经 Master Key 加密
+CREATE TABLE IF NOT EXISTS webhooks (
+  id          TEXT PRIMARY KEY,
+  org_id      TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  url         TEXT NOT NULL,
+  secret_enc  TEXT NOT NULL,
+  events      TEXT NOT NULL DEFAULT '[]',
+  active      INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_webhooks_org ON webhooks(org_id);
+
+-- Webhook 投递记录（至少一次 + 指数退避，payload 不含明文）
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id             TEXT PRIMARY KEY,
+  webhook_id     TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+  org_id         TEXT NOT NULL,
+  event_id       TEXT NOT NULL DEFAULT '',
+  event          TEXT NOT NULL,
+  payload        TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','success','failed','dead')),
+  http_code      INTEGER NOT NULL DEFAULT 0,
+  error          TEXT NOT NULL DEFAULT '',
+  attempts       INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  delivered_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_whd_due ON webhook_deliveries(status, next_attempt_at);
+
+-- OIDC SSO（M5 #13）：组织级 IdP 配置；client_secret 经 Master Key 加密
+CREATE TABLE IF NOT EXISTS oidc_providers (
+  id                TEXT PRIMARY KEY,
+  org_id            TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,
+  issuer            TEXT NOT NULL,
+  client_id         TEXT NOT NULL,
+  client_secret_enc TEXT NOT NULL,
+  scopes            TEXT NOT NULL DEFAULT 'openid,email,profile',
+  role_claim        TEXT NOT NULL DEFAULT 'groups',
+  role_map          TEXT NOT NULL DEFAULT '{}',
+  default_role      TEXT NOT NULL DEFAULT 'viewer',
+  enabled           INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_oidc_org ON oidc_providers(org_id);
+
+-- 审计导出任务（M5 #14）：大结果集异步生成 + 下载链接
+CREATE TABLE IF NOT EXISTS audit_exports (
+  id          TEXT PRIMARY KEY,
+  org_id      TEXT NOT NULL,
+  actor_id    TEXT NOT NULL,
+  format      TEXT NOT NULL CHECK (format IN ('csv','jsonl')),
+  filters     TEXT NOT NULL DEFAULT '{}',
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','failed')),
+  file_path   TEXT NOT NULL DEFAULT '',
+  row_count   INTEGER NOT NULL DEFAULT 0,
+  error       TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_exports_org ON audit_exports(org_id);
+
 -- 动态密钥（M4 #9）：高权限连接串 Master Key 加密自举；lease 绑定机器身份
 CREATE TABLE IF NOT EXISTS dynamic_engines (
   id             TEXT PRIMARY KEY,
@@ -199,8 +296,19 @@ CREATE TABLE IF NOT EXISTS dynamic_leases (
 	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0`)
 	// 存量迁移：每环境补根文件夹，folder 字符串回填 folder_id（幂等）
-	return migrateFolders(db)
+	if err := migrateFolders(db); err != nil {
+		return err
+	}
+	// schema 版本标记：启动自检 --check 校验迁移是否完整（设计文档 §8）
+	// PRAGMA 不支持参数绑定，整数直接内插（值来自本文件常量，无注入面）
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
+		return err
+	}
+	return nil
 }
+
+// SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
+const SchemaVersion = 5
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录

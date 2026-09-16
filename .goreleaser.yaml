@@ -1,0 +1,71 @@
+# GoReleaser：二进制 + 容器镜像发布，cosign 签名 + SBOM（设计文档 §8 供应链）
+version: 2
+
+project_name: taboo
+
+before:
+  hooks:
+    # 前端构建 + embed 产物（等价 Makefile 的 web 目标）
+    - sh -c 'cd apps/web && npm ci --no-audit --no-fund && npm run build'
+    - sh -c 'rm -rf apps/server-go/cmd/server/web && mkdir -p apps/server-go/cmd/server/web && cp -r apps/web/dist/* apps/server-go/cmd/server/web/ && cp api/openapi.yaml apps/server-go/cmd/server/web/'
+
+builds:
+  - id: taboo-server
+    dir: apps/server-go
+    main: ./cmd/server
+    binary: taboo-server
+    env: [CGO_ENABLED=0]
+    ldflags: ["-s", "-w", "-X main.version={{.Version}}"]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: taboo
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README.md
+      - src: docs/*
+        dst: docs
+
+checksum:
+  name_template: "checksums.txt"
+
+sboms:
+  - id: taboo
+    artifacts: [archive, binary]
+    args: ["$@"] # syft 默认参数
+
+dockers:
+  - id: taboo
+    dockerfile: apps/server-go/Dockerfile
+    use: docker
+    build_flag_templates:
+      - "--label=org.opencontainers.image.title=taboo"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/zhouyunchang/taboo"
+    image_templates:
+      - "ghcr.io/zhouyunchang/taboo:{{ .Version }}"
+      - "ghcr.io/zhouyunchang/taboo:latest"
+
+signs:
+  - id: cosign
+    cmd: cosign
+    args: ["sign", "--yes", "--recursive", "${artifact}"]
+    artifacts: [all]
+    output: true
+
+release:
+  github:
+    owner: zhouyunchang
+    name: taboo
+  draft: true
+  prerelease: auto
+  name_template: "taboo {{ .Version }}"
+  footer: |
+    ## 验证
+
+    ```bash
+    cosign verify ghcr.io/zhouyunchang/taboo:{{ .Version }}
+    ```

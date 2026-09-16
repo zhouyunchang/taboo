@@ -5,8 +5,8 @@
 openapi: 3.1.0
 info:
   title: taboo · 禁制 — 密钥管理平台 API
-  version: 0.3.0
-  description: 开源自部署密钥管理平台。高价值数据 + 严格访问控制 + 全程留痕。
+  version: 0.6.0
+  description: 开源自部署密钥管理平台。高价值数据 + 严格访问控制 + 全程留痕。M5：Secret Sync / Webhooks / OIDC SSO / 审计导出。
 servers:
   - url: http://localhost:7100
     description: 本地开发
@@ -16,6 +16,9 @@ tags:
   - { name: secrets, description: 密钥 CRUD / 版本 / 回滚 / 导出 }
   - { name: folders, description: 多级文件夹（物化路径 /a/b/） }
   - { name: identities, description: 机器身份（client_credentials + 显式 scope） }
+  - { name: sync, description: Secret Sync 外部平台推送（GitHub Actions / Vercel / Cloudflare） }
+  - { name: webhooks, description: 密钥变更事件 Webhook（HMAC-SHA256 签名） }
+  - { name: sso, description: OIDC 单点登录（JIT 入组 + 角色映射） }
 
 paths:
   /api/v1/auth/register:
@@ -554,6 +557,301 @@ paths:
       responses:
         '200': { description: 已回收（或原本非活跃）, content: { application/json: { schema: { type: object, properties: { id: { type: string }, status: { type: string } } } } } }
 
+  # ---------- Secret Sync（M5 #11） ----------
+  /api/v1/orgs/{slug}/sync/targets:
+    get:
+      tags: [sync]
+      summary: 同步目标列表（成员可见；config 只回显已配置的键名）
+      operationId: listSyncTargets
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200':
+          description: 目标列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  targets: { type: array, items: { $ref: '#/components/schemas/SyncTarget' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [sync]
+      summary: 创建同步目标（owner；平台凭证 Master Key 加密落库；?ping=1 先自检连通性）
+      operationId: createSyncTarget
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SyncTargetInput' }
+      responses:
+        '201': { description: 已创建, content: { application/json: { schema: { type: object, properties: { id: { type: string }, name: { type: string }, platform: { type: string } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/orgs/{slug}/sync/targets/{id}:
+    delete:
+      tags: [sync]
+      summary: 删除同步目标（owner）
+      operationId: deleteSyncTarget
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已删除, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/orgs/{slug}/sync/targets/{id}/retry:
+    post:
+      tags: [sync]
+      summary: 手动全量重推（owner；绑定范围内所有密钥入队）
+      operationId: retrySyncTarget
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已入队, content: { application/json: { schema: { type: object, properties: { target_id: { type: string }, enqueued: { type: integer } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/orgs/{slug}/sync/runs:
+    get:
+      tags: [sync]
+      summary: 同步记录（指纹审计，不含明文；可按目标/状态筛选）
+      operationId: listSyncRuns
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: target_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, success, failed, dead] } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+      responses:
+        '200':
+          description: 同步记录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs: { type: array, items: { $ref: '#/components/schemas/SyncRun' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------- Webhooks（M5 #12） ----------
+  /api/v1/orgs/{slug}/webhooks:
+    get:
+      tags: [webhooks]
+      summary: Webhook 订阅列表（不含签名密钥）
+      operationId: listWebhooks
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200':
+          description: 订阅列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks: { type: array, items: { $ref: '#/components/schemas/Webhook' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [webhooks]
+      summary: 创建订阅（owner；secret 缺省自动生成，仅本次响应返回）
+      operationId: createWebhook
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+                secret: { type: string, description: HMAC 签名密钥（缺省自动生成） }
+                events: { type: array, items: { type: string, enum: [secret.created, secret.updated, secret.rolled_back, secret.deleted, '*'] }, description: 空 = 全部事件 }
+      responses:
+        '201': { description: 已创建（secret 仅此一次返回）, content: { application/json: { schema: { $ref: '#/components/schemas/Webhook' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/orgs/{slug}/webhooks/{id}:
+    delete:
+      tags: [webhooks]
+      summary: 删除订阅（owner）
+      operationId: deleteWebhook
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已删除, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/orgs/{slug}/webhooks/{id}/deliveries:
+    get:
+      tags: [webhooks]
+      summary: 投递日志（至少一次 + 指数退避；payload 不含明文）
+      operationId: listWebhookDeliveries
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200':
+          description: 投递记录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        event: { type: string }
+                        status: { type: string, enum: [pending, success, failed, dead] }
+                        http_code: { type: integer }
+                        attempts: { type: integer }
+                        error: { type: string }
+                        created_at: { type: string }
+                        delivered_at: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------- OIDC SSO（M5 #13） ----------
+  /api/v1/auth/oidc/{slug}/login:
+    get:
+      tags: [sso]
+      summary: OIDC 登录入口（302 跳转 IdP 授权端点；公开，限流保护）
+      operationId: oidcLogin
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '302': { description: 重定向到 IdP }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/oidc/{slug}/callback:
+    get:
+      tags: [sso]
+      summary: OIDC callback（code 换 id_token，验签 + JIT 入组 + 发本地会话）
+      operationId: oidcCallback
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: HTML 中间页：token 写入 localStorage 后跳转 / }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502': { description: IdP 不可达/换 token 失败, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /api/v1/orgs/{slug}/oidc:
+    get:
+      tags: [sso]
+      summary: IdP 配置列表（成员可见；不含 client_secret）
+      operationId: listOIDCProviders
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200':
+          description: 配置列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers: { type: array, items: { $ref: '#/components/schemas/OIDCProvider' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [sso]
+      summary: 接入 IdP（owner；创建前做 discovery 连通性自检；client_secret 加密落库）
+      operationId: createOIDCProvider
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OIDCProviderInput' }
+      responses:
+        '201': { description: 已接入, content: { application/json: { schema: { type: object, properties: { id: { type: string }, name: { type: string } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/orgs/{slug}/oidc/{id}:
+    delete:
+      tags: [sso]
+      summary: 删除 IdP 配置（owner）
+      operationId: deleteOIDCProvider
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已删除, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------- 审计导出（M5 #14） ----------
+  /api/v1/orgs/{slug}/audit/export:
+    get:
+      tags: [orgs]
+      summary: 审计导出 CSV/JSONL（筛选同审计查询；async=1 走异步任务 + 下载链接）
+      operationId: auditExport
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: format, in: query, schema: { type: string, enum: [csv, jsonl], default: csv } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: resource, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: async, in: query, schema: { type: string, enum: ['1'] }, description: 强制异步：返回 202 + download_url }
+      responses:
+        '200': { description: 导出文件流（CSV/JSONL） }
+        '202': { description: 异步任务已创建, content: { application/json: { schema: { type: object, properties: { id: { type: string }, status: { type: string }, download_url: { type: string } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/orgs/{slug}/audit/exports:
+    get:
+      tags: [orgs]
+      summary: 导出任务列表
+      operationId: listAuditExports
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200':
+          description: 任务列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exports: { type: array, items: { $ref: '#/components/schemas/AuditExport' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/orgs/{slug}/audit/exports/{id}:
+    get:
+      tags: [orgs]
+      summary: 下载导出文件（未完成时返回任务状态）
+      operationId: downloadAuditExport
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 文件内容或任务状态 JSON }
+        '404': { $ref: '#/components/responses/NotFound' }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -649,6 +947,91 @@ components:
         metadata: { type: string }
         ip: { type: string }
         created_at: { type: string }
+    SyncTarget:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        platform: { type: string, enum: [github, vercel, cloudflare] }
+        project_id: { type: string }
+        env_slug: { type: string, description: "'*' 为全部环境" }
+        enabled: { type: boolean }
+        created_at: { type: string }
+        config_keys: { type: array, items: { type: string }, description: 已配置键名（不含值） }
+    SyncTargetInput:
+      type: object
+      required: [name, platform, config]
+      properties:
+        name: { type: string }
+        platform: { type: string, enum: [github, vercel, cloudflare] }
+        project_id: { type: string, description: 缺省 = 组织内全部项目 }
+        env_slug: { type: string, default: '*' }
+        config:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            github: token/owner/repo/environment?(repo 级留空)；
+            vercel: token/project_id/team_id?/targets?(逗号分隔，默认 production)；
+            cloudflare: token/account_id/script_name
+    SyncRun:
+      type: object
+      properties:
+        id: { type: string }
+        target_id: { type: string }
+        secret_key: { type: string }
+        action: { type: string }
+        fingerprint: { type: string, description: 推送内容 sha256 前 16 hex（不含明文） }
+        status: { type: string, enum: [pending, success, failed, dead] }
+        trigger_type: { type: string, enum: [event, manual] }
+        attempts: { type: integer }
+        error: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+    Webhook:
+      type: object
+      properties:
+        id: { type: string }
+        url: { type: string }
+        secret: { type: string, description: 仅创建响应返回一次 }
+        events: { type: array, items: { type: string } }
+        active: { type: boolean }
+        created_at: { type: string }
+    OIDCProvider:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        issuer: { type: string }
+        client_id: { type: string }
+        scopes: { type: string }
+        role_claim: { type: string }
+        role_map: { type: object, additionalProperties: { type: string } }
+        default_role: { type: string, enum: [viewer, developer, admin, owner] }
+        enabled: { type: boolean }
+        created_at: { type: string }
+        login_url: { type: string }
+    OIDCProviderInput:
+      type: object
+      required: [name, issuer, client_id, client_secret]
+      properties:
+        name: { type: string }
+        issuer: { type: string, example: https://idp.example.com/realms/team }
+        client_id: { type: string }
+        client_secret: { type: string, description: Master Key 加密落库，不回显 }
+        scopes: { type: string, default: openid,email,profile }
+        role_claim: { type: string, default: groups }
+        role_map: { type: object, additionalProperties: { type: string }, description: claim 值 → 角色（viewer/developer/admin/owner） }
+        default_role: { type: string, default: viewer }
+    AuditExport:
+      type: object
+      properties:
+        id: { type: string }
+        format: { type: string, enum: [csv, jsonl] }
+        status: { type: string, enum: [pending, done, failed] }
+        row_count: { type: integer }
+        error: { type: string }
+        created_at: { type: string }
+        completed_at: { type: string }
     IdentityScope:
       type: object
       properties:

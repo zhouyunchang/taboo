@@ -436,6 +436,247 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/sync/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 同步目标列表（成员可见；config 只回显已配置的键名） */
+        get: operations["listSyncTargets"];
+        put?: never;
+        /** 创建同步目标（owner；平台凭证 Master Key 加密落库；?ping=1 先自检连通性） */
+        post: operations["createSyncTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/sync/targets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** 删除同步目标（owner） */
+        delete: operations["deleteSyncTarget"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/sync/targets/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 手动全量重推（owner；绑定范围内所有密钥入队） */
+        post: operations["retrySyncTarget"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/sync/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 同步记录（指纹审计，不含明文；可按目标/状态筛选） */
+        get: operations["listSyncRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Webhook 订阅列表（不含签名密钥） */
+        get: operations["listWebhooks"];
+        put?: never;
+        /** 创建订阅（owner；secret 缺省自动生成，仅本次响应返回） */
+        post: operations["createWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/webhooks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** 删除订阅（owner） */
+        delete: operations["deleteWebhook"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/webhooks/{id}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 投递日志（至少一次 + 指数退避；payload 不含明文） */
+        get: operations["listWebhookDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/{slug}/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** OIDC 登录入口（302 跳转 IdP 授权端点；公开，限流保护） */
+        get: operations["oidcLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/{slug}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** OIDC callback（code 换 id_token，验签 + JIT 入组 + 发本地会话） */
+        get: operations["oidcCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/oidc": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** IdP 配置列表（成员可见；不含 client_secret） */
+        get: operations["listOIDCProviders"];
+        put?: never;
+        /** 接入 IdP（owner；创建前做 discovery 连通性自检；client_secret 加密落库） */
+        post: operations["createOIDCProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/oidc/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** 删除 IdP 配置（owner） */
+        delete: operations["deleteOIDCProvider"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 审计导出 CSV/JSONL（筛选同审计查询；async=1 或大结果集走异步任务） */
+        get: operations["auditExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/audit/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 导出任务列表 */
+        get: operations["listAuditExports"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/audit/exports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 下载导出文件（未完成时返回任务状态） */
+        get: operations["downloadAuditExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -501,6 +742,7 @@ export interface components {
             created_at?: string;
         };
         SecretUpsertRequest: {
+            /** @description 单段 key，禁止包含 /（folder 与 key 分离，#16） */
             key: string;
             value: string;
             comment?: string;
@@ -515,6 +757,106 @@ export interface components {
             metadata?: string;
             ip?: string;
             created_at?: string;
+        };
+        SyncTarget: {
+            id?: string;
+            name?: string;
+            /** @enum {string} */
+            platform?: "github" | "vercel" | "cloudflare";
+            project_id?: string;
+            /** @description '*' 为全部环境 */
+            env_slug?: string;
+            enabled?: boolean;
+            created_at?: string;
+            /** @description 已配置键名（不含值） */
+            config_keys?: string[];
+        };
+        SyncTargetInput: {
+            name: string;
+            /** @enum {string} */
+            platform: "github" | "vercel" | "cloudflare";
+            /** @description 缺省 = 组织内全部项目 */
+            project_id?: string;
+            /** @default * */
+            env_slug: string;
+            /**
+             * @description github: token/owner/repo/environment?(repo 级留空)；
+             *     vercel: token/project_id/team_id?/targets?(逗号分隔，默认 production)；
+             *     cloudflare: token/account_id/script_name
+             */
+            config: {
+                [key: string]: string;
+            };
+        };
+        SyncRun: {
+            id?: string;
+            target_id?: string;
+            secret_key?: string;
+            action?: string;
+            /** @description 推送内容 sha256 前 16 hex（不含明文） */
+            fingerprint?: string;
+            /** @enum {string} */
+            status?: "pending" | "success" | "failed" | "dead";
+            /** @enum {string} */
+            trigger_type?: "event" | "manual";
+            attempts?: number;
+            error?: string;
+            created_at?: string;
+            updated_at?: string;
+        };
+        Webhook: {
+            id?: string;
+            url?: string;
+            /** @description 仅创建响应返回一次 */
+            secret?: string;
+            events?: string[];
+            active?: boolean;
+            created_at?: string;
+        };
+        OIDCProvider: {
+            id?: string;
+            name?: string;
+            issuer?: string;
+            client_id?: string;
+            scopes?: string;
+            role_claim?: string;
+            role_map?: {
+                [key: string]: string;
+            };
+            /** @enum {string} */
+            default_role?: "viewer" | "developer" | "admin" | "owner";
+            enabled?: boolean;
+            created_at?: string;
+            login_url?: string;
+        };
+        OIDCProviderInput: {
+            name: string;
+            /** @example https://idp.example.com/realms/team */
+            issuer: string;
+            client_id: string;
+            /** @description Master Key 加密落库，不回显 */
+            client_secret: string;
+            /** @default openid */
+            scopes: string;
+            /** @default groups */
+            role_claim: string;
+            /** @description claim 值 → 角色（viewer/developer/admin/owner） */
+            role_map?: {
+                [key: string]: string;
+            };
+            /** @default viewer */
+            default_role: string;
+        };
+        AuditExport: {
+            id?: string;
+            /** @enum {string} */
+            format?: "csv" | "jsonl";
+            /** @enum {string} */
+            status?: "pending" | "done" | "failed";
+            row_count?: number;
+            error?: string;
+            created_at?: string;
+            completed_at?: string;
         };
         IdentityScope: {
             project_id?: string;
@@ -1623,6 +1965,504 @@ export interface operations {
                     };
                 };
             };
+        };
+    };
+    listSyncTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 目标列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        targets?: components["schemas"]["SyncTarget"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createSyncTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncTargetInput"];
+            };
+        };
+        responses: {
+            /** @description 已创建 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        name?: string;
+                        platform?: string;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    deleteSyncTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    retrySyncTarget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已入队 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        target_id?: string;
+                        enqueued?: number;
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listSyncRuns: {
+        parameters: {
+            query?: {
+                target_id?: string;
+                status?: "pending" | "success" | "failed" | "dead";
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 同步记录 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        runs?: components["schemas"]["SyncRun"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listWebhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 订阅列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        webhooks?: components["schemas"]["Webhook"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uri */
+                    url: string;
+                    /** @description HMAC 签名密钥（缺省自动生成） */
+                    secret?: string;
+                    /** @description 空 = 全部事件 */
+                    events?: ("secret.created" | "secret.updated" | "secret.rolled_back" | "secret.deleted" | "*")[];
+                };
+            };
+        };
+        responses: {
+            /** @description 已创建（secret 仅此一次返回） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Webhook"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    deleteWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listWebhookDeliveries: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 投递记录 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        deliveries?: {
+                            id?: string;
+                            event?: string;
+                            /** @enum {string} */
+                            status?: "pending" | "success" | "failed" | "dead";
+                            http_code?: number;
+                            attempts?: number;
+                            error?: string;
+                            created_at?: string;
+                            delivered_at?: string;
+                        }[];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    oidcLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 重定向到 IdP */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    oidcCallback: {
+        parameters: {
+            query: {
+                code: string;
+                state: string;
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description HTML 中间页：token 写入 localStorage 后跳转 / */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description IdP 不可达/换 token 失败 */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listOIDCProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 配置列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providers?: components["schemas"]["OIDCProvider"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createOIDCProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OIDCProviderInput"];
+            };
+        };
+        responses: {
+            /** @description 已接入 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        name?: string;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    deleteOIDCProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    auditExport: {
+        parameters: {
+            query?: {
+                format?: "csv" | "jsonl";
+                action?: string;
+                actor?: string;
+                resource?: string;
+                from?: string;
+                to?: string;
+                /** @description 强制异步：返回 202 + download_url */
+                async?: "1";
+            };
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 导出文件流（CSV/JSONL） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 异步任务已创建 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        status?: string;
+                        download_url?: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listAuditExports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 任务列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        exports?: components["schemas"]["AuditExport"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    downloadAuditExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 文件内容或任务状态 JSON */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
         };
     };
 }

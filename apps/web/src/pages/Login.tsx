@@ -12,6 +12,7 @@ export default function Login({ onSuccess }: Props) {
   const [password, setPassword] = useState('');
   const [challenge, setChallenge] = useState(''); // 非空 = 进入 2FA 第二步
   const [code, setCode] = useState('');
+  const [orgSlug, setOrgSlug] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -101,6 +102,19 @@ export default function Login({ onSuccess }: Props) {
         </label>
         {error && <div className="error">{error}</div>}
         <button type="submit" disabled={busy}>{busy ? '处理中…' : mode === 'login' ? '登录' : '注册'}</button>
+        {mode === 'login' && (
+          <>
+            <hr className="divider" />
+            <label>
+              组织 Slug（SSO）
+              <input value={orgSlug} onChange={(e) => setOrgSlug(e.target.value)} placeholder="my-org" />
+            </label>
+            <button type="button" className="ghost" disabled={!orgSlug}
+              onClick={() => { window.location.href = `/api/v1/auth/oidc/${encodeURIComponent(orgSlug)}/login`; }}>
+              使用组织 SSO 登录
+            </button>
+          </>
+        )}
         <p className="muted switch" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
           {mode === 'login' ? '没有账号？注册（自动创建个人组织）' : '已有账号？去登录'}
         </p>

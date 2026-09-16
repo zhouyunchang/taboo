@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
+import SettingsPanel from './Settings';
 
 interface Props {
   user: User;
@@ -15,7 +16,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
   const [project, setProject] = useState<Project | null>(null);
   const [envs, setEnvs] = useState<Env[]>([]);
   const [env, setEnv] = useState('dev');
-  const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic'>('secrets');
+  const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings'>('secrets');
   const [show2FA, setShow2FA] = useState(false);
   const [error, setError] = useState('');
 
@@ -85,6 +86,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
             <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>
             <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>
             <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>
+            <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>组织设置</button>
           </div>
           {tab === 'secrets'
             ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} />
@@ -92,7 +94,9 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
               ? <IdentitiesPanel orgSlug={org.slug} project={project} envs={envs} />
               : tab === 'dynamic'
                 ? project && <DynamicPanel key={project.id} projectId={project.id} projectSlug={project.slug} />
-                : <AuditPanel orgSlug={org.slug} />}
+                : tab === 'settings'
+                  ? <SettingsPanel orgSlug={org.slug} role={org.role} />
+                  : <AuditPanel orgSlug={org.slug} />}
         </main>
       </div>
       {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
@@ -360,6 +364,14 @@ function SecretRow({ s, projectId, env, onChanged, onEdit, onDetail }: {
     } catch { setErr('复制失败'); }
   }
 
+  async function remove() {
+    if (!window.confirm(`删除密钥 ${s.key}？（版本历史一并删除，不可恢复）`)) return;
+    try {
+      await api.del(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`);
+      onChanged();
+    } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
+  }
+
   return (
     <tr>
       <td className="mono key" onClick={onDetail} title="查看详情/版本">{s.key}</td>
@@ -374,6 +386,7 @@ function SecretRow({ s, projectId, env, onChanged, onEdit, onDetail }: {
         {s.canReveal && <button className="ghost" onClick={reveal}>{value === null ? '显示' : '隐藏'}</button>}
         {s.canReveal && <button className="ghost" onClick={copy}>复制</button>}
         <button className="ghost" onClick={onEdit}>编辑</button>
+        <button className="ghost" onClick={remove}>删除</button>
       </td>
     </tr>
   );
@@ -487,11 +500,27 @@ function AuditPanel({ orgSlug }: { orgSlug: string }) {
   const shown = logs.filter((l) =>
     !filter || l.action.includes(filter) || l.resource.includes(filter) || l.actor_name.includes(filter));
 
+  // 导出带鉴权：fetch blob → 触发浏览器下载（window.open 不带 Authorization）
+  async function download(format: string) {
+    const res = await fetch(`/api/v1/orgs/${orgSlug}/audit/export?format=${format}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('taboo.access') ?? ''}` },
+    });
+    if (!res.ok) { alert('导出失败'); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `taboo-audit.${format}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   return (
     <div className="panel">
       <div className="panel-head">
         <h2>审计日志</h2>
         <input placeholder="筛选 actor / action / resource" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <button className="ghost" onClick={() => download('csv')}>导出 CSV</button>
+        <button className="ghost" onClick={() => download('jsonl')}>导出 JSONL</button>
       </div>
       <table className="table">
         <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>资源</th><th>IP</th></tr></thead>

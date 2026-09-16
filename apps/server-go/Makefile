@@ -20,3 +20,6 @@ tidy:
 # 契约回归：Node 版同一套 14 项冒烟检查
 smoke:
 	cd ../../server && node scripts/smoke.js
+# M5 冒烟：Webhooks（HMAC 验签）/ Secret Sync / 审计导出 / OIDC 端点
+smoke-m5:
+	node scripts/smoke-m5.js
