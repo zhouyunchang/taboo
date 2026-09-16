@@ -204,42 +204,51 @@ func CheckPassword(password, stored string) (ok bool, needsRehash bool, err erro
 
 func b64u(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
+// SignJWT 兼容封装：用户主体 token
 func SignJWT(subject, email, secret string, ttl time.Duration) (string, error) {
+	return SignJWTClaims(map[string]any{"sub": subject, "email": email, "typ": "user"}, secret, ttl)
+}
+
+// SignJWTClaims 通用签名：注入 iat/exp；typ 区分 user / identity 主体
+func SignJWTClaims(claims map[string]any, secret string, ttl time.Duration) (string, error) {
 	header := b64u([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	now := time.Now()
-	body := b64u([]byte(fmt.Sprintf(`{"sub":%q,"email":%q,"iat":%d,"exp":%d}`,
-		subject, email, now.Unix(), now.Add(ttl).Unix())))
+	claims["iat"] = now.Unix()
+	claims["exp"] = now.Add(ttl).Unix()
+	bodyJSON, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	body := b64u(bodyJSON)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(header + "." + body))
 	return header + "." + body + "." + b64u(mac.Sum(nil)), nil
 }
 
-func VerifyJWT(token, secret string) (sub string, err error) {
+// VerifyJWT 校验签名与过期，返回完整 claims
+func VerifyJWT(token, secret string) (map[string]any, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return "", errors.New("malformed token")
+		return nil, errors.New("malformed token")
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(parts[0] + "." + parts[1]))
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || subtle.ConstantTimeCompare(mac.Sum(nil), sig) != 1 {
-		return "", errors.New("bad signature")
+		return nil, errors.New("bad signature")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	var claims struct {
-		Sub string `json:"sub"`
-		Exp int64  `json:"exp"`
-	}
+	var claims map[string]any
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", err
+		return nil, err
 	}
-	if claims.Exp < time.Now().Unix() {
-		return "", errors.New("token expired")
+	if exp, ok := claims["exp"].(float64); !ok || int64(exp) < time.Now().Unix() {
+		return nil, errors.New("token expired")
 	}
-	return claims.Sub, nil
+	return claims, nil
 }
 
 func SHA256(s string) string {

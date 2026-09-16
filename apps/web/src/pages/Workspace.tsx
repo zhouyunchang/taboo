@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
-import type { User, Org, Project, Env, SecretMeta, SecretValue, Version, AuditLog } from '../api';
+import type { User, Org, Project, Env, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope } from '../api';
 
 interface Props {
   user: User;
@@ -15,7 +15,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
   const [project, setProject] = useState<Project | null>(null);
   const [envs, setEnvs] = useState<Env[]>([]);
   const [env, setEnv] = useState('dev');
-  const [tab, setTab] = useState<'secrets' | 'audit'>('secrets');
+  const [tab, setTab] = useState<'secrets' | 'audit' | 'identities'>('secrets');
   const [error, setError] = useState('');
 
   const loadProjects = useCallback(async () => {
@@ -80,11 +80,14 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
               </button>
             ))}
             <div className="spacer" />
+            <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>
             <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>
           </div>
           {tab === 'secrets'
             ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} />
-            : <AuditPanel orgSlug={org.slug} />}
+            : tab === 'identities'
+              ? <IdentitiesPanel orgSlug={org.slug} project={project} envs={envs} />
+              : <AuditPanel orgSlug={org.slug} />}
         </main>
       </div>
     </div>
@@ -300,6 +303,133 @@ function AuditPanel({ orgSlug }: { orgSlug: string }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+
+function IdentitiesPanel({ orgSlug, project, envs }: { orgSlug: string; project: Project | null; envs: Env[] }) {
+  const [identities, setIdentities] = useState<Identity[]>([]);
+  const [error, setError] = useState('');
+  const [showNew, setShowNew] = useState(false);
+  const [once, setOnce] = useState<CreatedIdentity | null>(null);
+
+  const load = useCallback(() => {
+    api.get<{ identities: Identity[] }>(`/api/v1/orgs/${orgSlug}/identities`)
+      .then((d) => setIdentities(d.identities))
+      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+  }, [orgSlug]);
+  useEffect(load, [load]);
+
+  async function revoke(id: string, name: string) {
+    if (!window.confirm(`吊销机器身份「${name}」？其 token 将立即失效。`)) return;
+    try {
+      await api.post(`/api/v1/orgs/${orgSlug}/identities/${id}/revoke`);
+      load();
+    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>机器身份</h2>
+        <button onClick={() => setShowNew(true)}>＋ 创建机器身份</button>
+      </div>
+      <p className="muted">为 CI/CD、AI Agent 颁发 client_id + client_secret，作用域显式限定到 项目 + 环境 + 读写，禁止通配。</p>
+      {error && <div className="error">{error}</div>}
+      {once && (
+        <div className="card once-secret">
+          <h3>「{once.name}」已创建 — client_secret 仅此一次展示，请立即保存</h3>
+          <label>Client ID<input readOnly value={once.client_id} onFocus={(e) => e.target.select()} /></label>
+          <label>Client Secret<input readOnly value={once.client_secret} onFocus={(e) => e.target.select()} /></label>
+          <p className="muted">换 token：<code>POST /api/v1/identities/token</code>，TTL {once.token_ttl}s</p>
+          <button className="ghost" onClick={() => setOnce(null)}>我已保存，关闭</button>
+        </div>
+      )}
+      <table className="table">
+        <thead><tr><th>名称</th><th>Client ID</th><th>Scope（项目 / 环境 / 权限）</th><th>状态</th><th>TTL</th><th /></tr></thead>
+        <tbody>
+          {identities.map((i) => (
+            <tr key={i.id}>
+              <td className="mono">{i.name}</td>
+              <td className="mono muted">{i.client_id}</td>
+              <td>{i.scopes.map((s, idx) => (
+                <div key={idx}><span className="tag">{s.project_slug}</span><span className="tag">{s.env}</span><span className="tag">{s.permission}</span></div>
+              ))}</td>
+              <td><span className={`tag ${i.status === 'active' ? 'ok' : 'bad'}`}>{i.status}</span></td>
+              <td className="muted">{i.token_ttl}s</td>
+              <td>{i.status === 'active' && <button className="ghost" onClick={() => revoke(i.id, i.name)}>吊销</button>}</td>
+            </tr>
+          ))}
+          {identities.length === 0 && <tr><td colSpan={6} className="muted center">还没有机器身份</td></tr>}
+        </tbody>
+      </table>
+      {showNew && project && (
+        <IdentityCreator
+          orgSlug={orgSlug}
+          project={project}
+          envs={envs}
+          onClose={() => setShowNew(false)}
+          onCreated={(d) => { setShowNew(false); setOnce(d); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
+  orgSlug: string; project: Project; envs: Env[];
+  onClose: () => void; onCreated: (d: CreatedIdentity) => void;
+}) {
+  const [name, setName] = useState('');
+  const [ttl, setTtl] = useState(900);
+  const [scopes, setScopes] = useState<IdentityScope[]>([{ project_id: project.id, project_slug: project.slug, env: 'dev', permission: 'read' }]);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      const d = await api.post<CreatedIdentity>(`/api/v1/orgs/${orgSlug}/identities`, {
+        name, token_ttl: ttl,
+        scopes: scopes.map((s) => ({ project_id: s.project_id, env: s.env, permission: s.permission })),
+      });
+      onCreated(d);
+    } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : String(e2)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="drawer" onClick={onClose}>
+      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+        <h3>创建机器身份</h3>
+        <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="ci-runner" /></label>
+        <label>Token TTL（秒，≤3600）<input type="number" value={ttl} onChange={(e) => setTtl(Number(e.target.value))} min={60} max={3600} /></label>
+        <div className="scope-editor">
+          <div className="sidebar-title">Scopes（至少一项，禁止通配）</div>
+          {scopes.map((s, idx) => (
+            <div key={idx} className="scope-row">
+              <span className="tag">{project.slug}</span>
+              <select value={s.env} onChange={(e) => setScopes(scopes.map((x, i) => i === idx ? { ...x, env: e.target.value } : x))}>
+                {envs.map((en) => <option key={en.id} value={en.slug}>{en.name}</option>)}
+              </select>
+              <select value={s.permission} onChange={(e) => setScopes(scopes.map((x, i) => i === idx ? { ...x, permission: e.target.value } : x))}>
+                <option value="read">read</option>
+                <option value="write">write</option>
+              </select>
+              <button type="button" className="ghost" disabled={scopes.length === 1} onClick={() => setScopes(scopes.filter((_, i) => i !== idx))}>✕</button>
+            </div>
+          ))}
+          <button type="button" className="ghost" onClick={() => setScopes([...scopes, { project_id: project.id, project_slug: project.slug, env: envs[0]?.slug || 'dev', permission: 'read' }])}>＋ 添加 scope</button>
+        </div>
+        {err && <div className="error">{err}</div>}
+        <div className="drawer-actions">
+          <button type="button" className="ghost" onClick={onClose}>取消</button>
+          <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
+        </div>
+      </form>
     </div>
   );
 }

@@ -72,3 +72,11 @@ export interface AuditLog {
   id: string; actor_name: string; action: string; resource: string;
   metadata: string; ip: string; created_at: string;
 }
+export interface IdentityScope {
+  project_id: string; project_slug: string; env: string; permission: string;
+}
+export interface Identity {
+  id: string; name: string; client_id: string; status: string;
+  token_ttl: number; created_at: string; scopes: IdentityScope[];
+}
+export interface CreatedIdentity extends Identity { client_secret: string }

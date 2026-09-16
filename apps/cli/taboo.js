@@ -29,8 +29,33 @@ function saveSession(d) {
 function loadSession() {
   try { return JSON.parse(fs.readFileSync(SESSION, 'utf8')); } catch { return null; }
 }
+async function identityToken(clientId, clientSecret) {
+  const res = await fetch(BASE + '/api/v1/identities/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { console.error(`error ${res.status}: ${data.code} ${data.message}`); process.exit(1); }
+  return {
+    kind: 'identity',
+    client_id: clientId,
+    client_secret: clientSecret,
+    access: data.access_token,
+    expires_at: Date.now() + data.expires_in * 1000,
+  };
+}
+async function ensureToken(s) {
+  // 机器身份 token 短 TTL：临期自动用 client_credentials 重换（设计文档 §7.1 流程）
+  if (s?.kind === 'identity' && s.expires_at < Date.now() + 30_000) {
+    const next = await identityToken(s.client_id, s.client_secret);
+    saveSession(next);
+    return next;
+  }
+  return s;
+}
 async function call(method, p, body, raw = false) {
-  const s = loadSession();
+  const s = await ensureToken(loadSession());
   const res = await fetch(BASE + p, {
     method,
     headers: {
@@ -46,6 +71,13 @@ async function call(method, p, body, raw = false) {
 }
 
 async function projectId() {
+  const explicit = flag('project', null);
+  if (explicit) return explicit;
+  const s = loadSession();
+  if (s?.kind === 'identity') {
+    console.error('机器身份会话请显式指定 --project <project_id>（scope 内项目）');
+    process.exit(1);
+  }
   const me = await call('GET', '/api/v1/me');
   const slug = me.orgs[0].slug;
   const projects = await call('GET', `/api/v1/orgs/${slug}/projects`);
@@ -55,8 +87,18 @@ async function projectId() {
 
 switch (cmd) {
   case 'login': {
+    const clientId = flag('client-id', null);
+    const clientSecret = flag('client-secret', null);
+    if (clientId || clientSecret) {
+      // 机器身份登录（M2 #3）
+      if (!clientId || !clientSecret) { console.error('usage: taboo login --client-id <id> --client-secret <secret>'); process.exit(1); }
+      const d = await identityToken(clientId, clientSecret);
+      saveSession(d);
+      console.log(`logged in as machine identity (token ttl ${Math.round((d.expires_at - Date.now()) / 1000)}s, auto-refresh)`);
+      break;
+    }
     const [email, password] = args;
-    if (!email || !password) { console.error('usage: taboo login <email> <password>'); process.exit(1); }
+    if (!email || !password) { console.error('usage: taboo login <email> <password> | --client-id <id> --client-secret <secret>'); process.exit(1); }
     const d = await call('POST', '/api/v1/auth/login', { email, password });
     saveSession(d.tokens);
     console.log(`logged in as ${d.user.email}`);
@@ -103,11 +145,12 @@ switch (cmd) {
   default:
     console.log(`taboo CLI (MVP) — server: ${BASE}
 
-  taboo login <email> <password>     登录
-  taboo set <KEY> <VALUE> [--env]    写入/更新密钥
-  taboo get <KEY> [--env]            读取明文（审计）
-  taboo list [--env]                 列出密钥（无值）
-  taboo export [--env]               导出 .env 格式到 stdout
-  taboo run -- <cmd...>              注入环境变量执行命令
+  taboo login <email> <password>                用户登录
+  taboo login --client-id X --client-secret Y   机器身份登录（token 临期自动重换）
+  taboo set <KEY> <VALUE> [--env] [--project]   写入/更新密钥
+  taboo get <KEY> [--env] [--project]           读取明文（审计）
+  taboo list [--env] [--project]                列出密钥（无值）
+  taboo export [--env] [--project]              导出 .env 格式到 stdout
+  taboo run -- <cmd...>                         注入环境变量执行命令
 `);
 }

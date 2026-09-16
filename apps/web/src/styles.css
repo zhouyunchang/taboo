@@ -94,6 +94,19 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); }
   display: inline-block; background: var(--bg2); border: 1px solid var(--border);
   border-radius: 20px; padding: 1px 8px; font-size: 11px; margin-right: 4px; color: var(--muted);
 }
+.tag.ok { color: #3fb950; border-color: #3fb95055; }
+.tag.bad { color: var(--danger); border-color: var(--danger); }
+
+.once-secret { margin-bottom: 14px; border-color: var(--accent); }
+.once-secret h3 { margin: 0 0 4px; font-size: 14px; }
+.once-secret code { color: var(--accent); }
+
+.scope-editor { display: flex; flex-direction: column; gap: 8px; }
+.scope-row { display: flex; align-items: center; gap: 8px; }
+.scope-row select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--fg); padding: 6px 10px; font-size: 13px;
+}
 
 .drawer {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);

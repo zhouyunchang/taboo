@@ -155,7 +155,7 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u := &auth.User{ID: userID, Email: email, Name: b.Name}
+	u := &auth.Actor{ID: userID, Email: email, Name: b.Name, Kind: auth.KindUser}
 	auth.Audit(s.DB, orgID, u, "auth.register", "user/"+email, nil, ipOf(r))
 	tk, err := auth.IssueTokens(s.DB, s.JWTSecret, u)
 	if err != nil {
@@ -193,7 +193,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.BadCredentials)
 		return
 	}
-	u := &auth.User{ID: userID, Email: email, Name: name}
+	u := &auth.Actor{ID: userID, Email: email, Name: name, Kind: auth.KindUser}
 	if needsRehash {
 		// 旧 scrypt 哈希透明迁移至 Argon2id（issue #2）
 		if newHash, err := tc.HashPassword(b.Password); err == nil {
@@ -226,7 +226,8 @@ func (s *Service) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = s.DB.Exec(`DELETE FROM refresh_tokens WHERE id = ?`, id) // 旋转
-	var u auth.User
+	var u auth.Actor
+	u.Kind = auth.KindUser
 	if err := s.DB.QueryRow(`SELECT id, email, name FROM users WHERE id = ?`, userID).
 		Scan(&u.ID, &u.Email, &u.Name); err != nil {
 		writeErr(w, apperr.InvalidRefresh)
@@ -351,7 +352,7 @@ func (s *Service) projectOf(w http.ResponseWriter, r *http.Request) (secret.Proj
 		return p, false
 	}
 	u := auth.From(r)
-	if !auth.Can(s.DB, u.ID, p.OrgID, "read", "") {
+	if !auth.Can(s.DB, u, p.OrgID, p.ID, "read", "") {
 		writeErr(w, apperr.Forbidden)
 		return p, false
 	}

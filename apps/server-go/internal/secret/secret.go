@@ -72,7 +72,7 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Can(s.DB, u.ID, p.OrgID, "reveal", envSlug) {
+	if !auth.Can(s.DB, u, p.OrgID, p.ID, "reveal", envSlug) {
 		writeErr(w, apperr.Forbidden)
 		return
 	}
@@ -120,7 +120,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Can(s.DB, u.ID, p.OrgID, "read", envSlug) {
+	if !auth.Can(s.DB, u, p.OrgID, p.ID, "read", envSlug) {
 		writeErr(w, apperr.Forbidden)
 		return
 	}
@@ -129,7 +129,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.EnvNotFound)
 		return
 	}
-	canRev := auth.Can(s.DB, u.ID, p.OrgID, "reveal", envSlug)
+	canRev := auth.Can(s.DB, u, p.OrgID, p.ID, "reveal", envSlug)
 	rows, err := s.DB.Query(`SELECT id, folder, key, comment, tags, latest_version, updated_at
 		FROM secrets WHERE env_id = ? ORDER BY folder, key`, envID)
 	if err != nil {
@@ -158,7 +158,7 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Can(s.DB, u.ID, p.OrgID, "write", envSlug) {
+	if !auth.Can(s.DB, u, p.OrgID, p.ID, "write", envSlug) {
 		writeErr(w, apperr.Forbidden)
 		return
 	}
@@ -247,7 +247,7 @@ func (s *Service) Reveal(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Can(s.DB, u.ID, p.OrgID, "reveal", envSlug) {
+	if !auth.Can(s.DB, u, p.OrgID, p.ID, "reveal", envSlug) {
 		writeErr(w, apperr.Forbidden)
 		return
 	}
@@ -297,7 +297,7 @@ func (s *Service) Versions(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Can(s.DB, u.ID, p.OrgID, "read", envSlug) {
+	if !auth.Can(s.DB, u, p.OrgID, p.ID, "read", envSlug) {
 		writeErr(w, apperr.Forbidden)
 		return
 	}
@@ -341,7 +341,7 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Can(s.DB, u.ID, p.OrgID, "write", envSlug) {
+	if !auth.Can(s.DB, u, p.OrgID, p.ID, "write", envSlug) {
 		writeErr(w, apperr.Forbidden)
 		return
 	}

@@ -27,7 +27,8 @@
 - [x] Web Dashboard：登录注册、项目/环境切换、密钥表（掩码/显示/复制 20s 自清除）、版本抽屉+回滚、审计筛选
 - [x] CLI：`login / set / get / list / export / run`（`run` 对齐设计文档 §7.1 注入流程）
 - [x] **Go 后端（apps/server-go，M1）**：Chi 路由、模块化单体（internal/{config,server,auth,secret,crypto,org,store,apperr}）、`embed.FS` 单二进制、同一套 14 项冒烟测试全过
-- [ ] 机器身份（Machine Identity）、动态密钥、MCP Server、Secret Sync、TOTP 2FA → 见路线图
+- [x] **机器身份（M2 #3，Go 版）**：client_credentials 换短期 JWT（TTL 可配 ≤1h，临期 CLI 自动重换）；scope 显式 (项目+环境+read|write) **禁止通配**；吊销立即生效；审计 actor 标识 `identity:xxx`；Web 管理页（创建向导/一次性 secret 展示/吊销）+ 22 项专项冒烟全过
+- [ ] 动态密钥、MCP Server、Secret Sync、TOTP 2FA → 见路线图
 
 ## 双后端说明
 
@@ -86,16 +87,10 @@ taboo/                       # 根 workspace（private）
 ├── package.json             # workspaces: ["apps/*"] + 统一脚本
 ├── doc/                     # 设计文档（OpenVault 功能与详细设计）
 ├── apps/
-│   ├── server/              # @taboo/server — API 服务（Node 零依赖）
-│   │   ├── src/
-│   │   │   ├── index.js     # HTTP 入口：API + 静态托管 + 安全头/CORS
-│   │   │   ├── api.js       # REST 路由
-│   │   │   ├── auth.js      # JWT 中间件 + RBAC 求值 + 审计写入
-│   │   │   ├── crypto.js    # 信封加密、scrypt、JWT 原语
-│   │   │   └── db.js        # SQLite schema（DDL 以 PG 语义设计）
-│   │   └── scripts/smoke.js
+│   ├── server/              # @taboo/server — API 服务（Node MVP，契约参考实现）
+│   ├── server-go/           # Go 后端（M1 起主推）：cmd/server + internal/*（含 identity 机器身份）
 │   ├── web/                 # @taboo/web — React 19 + TS + Vite Dashboard
-│   └── cli/                 # @taboo/cli — bin: taboo（login/set/get/list/export/run）
+│   └── cli/                 # @taboo/cli — bin: taboo（login/set/get/list/export/run，支持机器身份）
 └── README.md
 ```
 

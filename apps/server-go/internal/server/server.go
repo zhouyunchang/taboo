@@ -6,12 +6,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/identity"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 )
@@ -34,12 +36,21 @@ func New(d *Deps) *chi.Mux {
 
 	orgs := &orgsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs}
 	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
+	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		orgs.PublicRoutes(r)
+		// client_credentials 换 token（公开，登录同窗口限流）
+		r.With(auth.LoginRateLimit(time.Minute, 5)).Post("/identities/token", identities.Token)
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(d.DB, d.JWTSecret))
 			orgs.Routes(r)
+			// 机器身份管理（组织级，需 owner）
+			r.Route("/orgs/{slug}/identities", func(r chi.Router) {
+				r.Get("/", identities.List)
+				r.Post("/", identities.Create)
+				r.Post("/{id}/revoke", identities.Revoke)
+			})
 			// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥路由
 			r.Route("/projects/{pid}", func(r chi.Router) {
 				r.Use(projectCtx(d.DB))
@@ -94,7 +105,7 @@ func projectCtx(db *sql.DB) func(http.Handler) http.Handler {
 				writeErr(w, apperr.NotFound)
 				return
 			}
-			if !auth.Can(db, u.ID, p.OrgID, "read", "") {
+			if !auth.Can(db, u, p.OrgID, p.ID, "read", "") {
 				writeErr(w, apperr.Forbidden)
 				return
 			}

@@ -1,8 +1,13 @@
-// 认证中间件 + RBAC 求值 + 审计 —— 对齐设计文档 §6 / §8
+// 认证中间件 + RBAC 求值（用户角色 / 机器身份 scope 双主体）+ 审计 —— 设计文档 §6 / §8
+//
+// 策略四元组 (主体, 资源, 动作, 环境约束)：
+//   用户：org_members 角色 viewer/developer/admin/owner（reveal 与 read 分离）
+//   机器身份：identity_scopes 显式 (项目, 环境, read|write)，禁止通配（§6）
 package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -16,11 +21,18 @@ type ctxKey string
 
 const UserKey ctxKey = "taboo.user"
 
-type User struct {
+// Actor 统一主体：用户或机器身份
+type Actor struct {
 	ID    string `json:"id"`
-	Email string `json:"email"`
+	Email string `json:"email,omitempty"`
 	Name  string `json:"name"`
+	Kind  string `json:"kind"` // "user" | "identity"
 }
+
+const (
+	KindUser     = "user"
+	KindIdentity = "identity"
+)
 
 var roleRank = map[string]int{"viewer": 1, "developer": 2, "admin": 3, "owner": 4}
 
@@ -30,10 +42,17 @@ func Membership(db *sql.DB, orgID, userID string) (string, bool) {
 	return role, err == nil
 }
 
-// Can 策略求值（四元组 MVP 化）：action ∈ read | reveal | write | manage
-// reveal（取明文）与 read（看元数据）分离；developer 禁写/禁看 prod 明文。
-func Can(db *sql.DB, userID, orgID, action, envSlug string) bool {
-	role, ok := Membership(db, orgID, userID)
+// Can 策略求值：action ∈ read | reveal | write | manage
+//  - 用户：角色决定（reveal 与 read 分离；developer 禁 prod 明文/写入）
+//  - 机器身份：identity_scopes 命中 (projectID, envSlug)；read/reveal 需 read|write，write 需 write
+func Can(db *sql.DB, actor *Actor, orgID, projectID, action, envSlug string) bool {
+	if actor == nil {
+		return false
+	}
+	if actor.Kind == KindIdentity {
+		return identityCan(db, actor.ID, orgID, projectID, action, envSlug)
+	}
+	role, ok := Membership(db, orgID, actor.ID)
 	if !ok {
 		return false
 	}
@@ -52,29 +71,63 @@ func Can(db *sql.DB, userID, orgID, action, envSlug string) bool {
 	return false
 }
 
-// Audit append-only 写入（应用层强制只 INSERT）
-func Audit(db *sql.DB, orgID string, actor *User, action, resource string, metadata map[string]any, ip string) {
+func identityCan(db *sql.DB, identityID, orgID, projectID, action, envSlug string) bool {
+	// identity 必须属于该组织且未吊销
+	var status string
+	err := db.QueryRow(`SELECT status FROM machine_identities WHERE id = ? AND org_id = ?`, identityID, orgID).Scan(&status)
+	if err != nil || status != "active" {
+		return false
+	}
+	switch action {
+	case "read", "reveal":
+		// envSlug 为空 = 项目级读（如环境列表）：项目内任一 scope 即可
+		envCond, args := `AND e.slug = ?`, []any{identityID, projectID, envSlug}
+		if envSlug == "" {
+			envCond, args = ``, []any{identityID, projectID}
+		}
+		var n int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM identity_scopes s
+			JOIN environments e ON e.id = s.env_id
+			WHERE s.identity_id = ? AND s.project_id = ? `+envCond+` AND s.permission IN ('read','write')`,
+			args...).Scan(&n)
+		return n > 0
+	case "write":
+		var n int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM identity_scopes s
+			JOIN environments e ON e.id = s.env_id
+			WHERE s.identity_id = ? AND s.project_id = ? AND e.slug = ? AND s.permission = 'write'`,
+			identityID, projectID, envSlug).Scan(&n)
+		return n > 0
+	}
+	return false
+}
+
+// Audit append-only 写入（actor_type 区分 user / identity）
+func Audit(db *sql.DB, orgID string, actor *Actor, action, resource string, metadata map[string]any, ip string) {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
 	mb, _ := json.Marshal(metadata)
-	actorID, actorName := "system", ""
+	actorID, actorName, actorType := "system", "", KindUser
 	if actor != nil {
-		actorID, actorName = actor.ID, actor.Name
+		actorID, actorName, actorType = actor.ID, actor.Name, actor.Kind
+		if actor.Kind == KindIdentity {
+			actorName = "identity:" + actor.Name // 审计主体标识（§7.3）
+		}
 	}
-	_, _ = db.Exec(`INSERT INTO audit_logs (id, org_id, actor_id, actor_name, action, resource, metadata, ip)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		tc.NewID(), orgID, actorID, actorName, action, resource, string(mb), ip)
+	_, _ = db.Exec(`INSERT INTO audit_logs (id, org_id, actor_id, actor_name, actor_type, action, resource, metadata, ip)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tc.NewID(), orgID, actorID, actorName, actorType, action, resource, string(mb), ip)
 }
 
 type TokenPair struct {
 	Access    string `json:"access"`
-	Refresh   string `json:"refresh"`
+	Refresh   string `json:"refresh,omitempty"`
 	TokenType string `json:"tokenType"`
 	ExpiresIn int    `json:"expiresIn"`
 }
 
-func IssueTokens(db *sql.DB, secret string, u *User) (*TokenPair, error) {
+func IssueTokens(db *sql.DB, secret string, u *Actor) (*TokenPair, error) {
 	access, err := tc.SignJWT(u.ID, u.Email, secret, 15*time.Minute)
 	if err != nil {
 		return nil, err
@@ -88,7 +141,7 @@ func IssueTokens(db *sql.DB, secret string, u *User) (*TokenPair, error) {
 	return &TokenPair{Access: access, Refresh: refresh, TokenType: "Bearer", ExpiresIn: 900}, nil
 }
 
-// Middleware 校验 Bearer JWT，注入 User 到 context
+// Middleware 校验 Bearer JWT（user / identity 双主体），注入 Actor 到 context
 func Middleware(db *sql.DB, jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -97,22 +150,56 @@ func Middleware(db *sql.DB, jwtSecret string) func(http.Handler) http.Handler {
 				writeErr(w, apperr.Unauthorized)
 				return
 			}
-			sub, err := tc.VerifyJWT(token, jwtSecret)
+			claims, err := tc.VerifyJWT(token, jwtSecret)
 			if err != nil {
 				writeErr(w, apperr.Unauthorized)
 				return
 			}
-			var u User
-			var status string
-			err = db.QueryRow(`SELECT id, email, name, status FROM users WHERE id = ?`, sub).
-				Scan(&u.ID, &u.Email, &u.Name, &status)
-			if err != nil || status != "active" {
+			sub, _ := claims["sub"].(string)
+			typ, _ := claims["typ"].(string)
+			var actor *Actor
+			if typ == KindIdentity {
+				actor, err = loadIdentity(db, sub)
+			} else {
+				actor, err = loadUser(db, sub)
+			}
+			if err != nil {
 				writeErr(w, apperr.Unauthorized)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), UserKey, &u)))
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), UserKey, actor)))
 		})
 	}
+}
+
+func loadUser(db *sql.DB, id string) (*Actor, error) {
+	var a Actor
+	var status string
+	err := db.QueryRow(`SELECT id, email, name, status FROM users WHERE id = ?`, id).
+		Scan(&a.ID, &a.Email, &a.Name, &status)
+	if err != nil || status != "active" {
+		return nil, apperr.Unauthorized
+	}
+	a.Kind = KindUser
+	return &a, nil
+}
+
+func loadIdentity(db *sql.DB, id string) (*Actor, error) {
+	var a Actor
+	var status string
+	err := db.QueryRow(`SELECT id, name, status FROM machine_identities WHERE id = ?`, id).
+		Scan(&a.ID, &a.Name, &status)
+	if err != nil || status != "active" {
+		return nil, apperr.Unauthorized // 吊销即 401，立即生效
+	}
+	a.Kind = KindIdentity
+	return &a, nil
+}
+
+// CheckIdentitySecret 常时比较 secret（client_credentials 换 token 用）
+func CheckIdentitySecret(got, wantHash string) bool {
+	gotHash := tc.SHA256(got)
+	return subtle.ConstantTimeCompare([]byte(gotHash), []byte(wantHash)) == 1
 }
 
 func bearer(r *http.Request) string {
@@ -124,9 +211,9 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
-func From(r *http.Request) *User {
-	u, _ := r.Context().Value(UserKey).(*User)
-	return u
+func From(r *http.Request) *Actor {
+	a, _ := r.Context().Value(UserKey).(*Actor)
+	return a
 }
 
 func writeErr(w http.ResponseWriter, e *apperr.Error) {

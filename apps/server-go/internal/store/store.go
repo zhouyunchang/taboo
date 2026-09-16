@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   org_id     TEXT NOT NULL,
   actor_id   TEXT NOT NULL,
   actor_name TEXT NOT NULL DEFAULT '',
+  actor_type TEXT NOT NULL DEFAULT 'user',
   action     TEXT NOT NULL,
   resource   TEXT NOT NULL,
   metadata   TEXT NOT NULL DEFAULT '{}',
@@ -112,6 +113,30 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   expires_at INTEGER NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 机器身份（M2 #3）：CI/CD、AI Agent 的受限凭据
+CREATE TABLE IF NOT EXISTS machine_identities (
+  id          TEXT PRIMARY KEY,
+  org_id      TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  auth_type   TEXT NOT NULL DEFAULT 'client_credentials',
+  client_id   TEXT NOT NULL UNIQUE,
+  secret_hash TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+  token_ttl   INTEGER NOT NULL DEFAULT 900,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 作用域：显式 (项目, 环境, 权限) 三元组，禁止通配（设计文档 §6）
+CREATE TABLE IF NOT EXISTS identity_scopes (
+  identity_id TEXT NOT NULL REFERENCES machine_identities(id) ON DELETE CASCADE,
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  env_id      TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+  permission  TEXT NOT NULL CHECK (permission IN ('read','write')),
+  PRIMARY KEY (identity_id, project_id, env_id)
+);
 `)
+	// 既有库补齐 audit_logs.actor_type 列（区分 user / identity 主体）
+	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN actor_type TEXT NOT NULL DEFAULT 'user'`)
 	return err
 }
