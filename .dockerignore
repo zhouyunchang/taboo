@@ -1,0 +1,17 @@
+# 构建上下文瘦身（Dockerfile 只 COPY 明确路径，这里主要加速传输与缓存）
+.git/
+.gitignore
+**/node_modules/
+**/.venv/
+# 构建产物/运行时数据（镜像内会重新生成）
+apps/web/dist/
+apps/server-go/bin/
+apps/server-go/data/
+apps/server-go/cmd/server/web/assets/
+apps/server-go/cmd/server/web/index.html
+apps/server-go/cmd/server/web/openapi.yaml
+**/*.exe
+**/*.db
+**/*.db-wal
+**/*.db-shm
+doc/

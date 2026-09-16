@@ -1,0 +1,41 @@
+# taboo（禁制）一体化部署编排
+#
+#   docker compose up -d --build          # 仅 taboo（SQLite 内嵌，单容器即可跑）
+#   docker compose --profile pg up -d     # 附带 PostgreSQL 16（动态密钥引擎联调用）
+#
+# 数据持久化：taboo-data 卷（/data：SQLite + master.key，务必备份 master.key）
+# 生产注意：务必设置 TABOO_JWT_SECRET（否则重启后会话全部失效）
+
+name: taboo
+
+services:
+  taboo:
+    build:
+      context: .
+      dockerfile: apps/server-go/Dockerfile
+    image: taboo:latest
+    ports:
+      - "7100:7100"
+    environment:
+      TABOO_DATA_DIR: /data
+      # TABOO_JWT_SECRET: ${TABOO_JWT_SECRET:-}   # 例：openssl rand -hex 32
+    volumes:
+      - taboo-data:/data
+    restart: unless-stopped
+
+  # 动态密钥引擎的联调数据库（默认 profile 关闭，--profile pg 开启）
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["pg"]
+    environment:
+      POSTGRES_PASSWORD: ${TABOO_PG_PASSWORD:-taboo_test_pw}
+      POSTGRES_DB: mockdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - taboo-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  taboo-data:
+  taboo-pg:

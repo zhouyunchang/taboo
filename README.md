@@ -130,6 +130,24 @@ npm run cli -- login you@example.com your-password
 | M4 | 动态密钥（✅ #9，PostgreSQL lease + worker 回收 + 身份联动）、MCP Server（✅ #10）—— **M4 全部完成** |
 | M5 | Secret Sync、Webhooks、OIDC SSO、审计导出、Docker/Helm 发布 |
 
+## 部署
+
+单镜像多阶段构建（前端 Vite 构建 → Go 编译，前端经 `embed.FS` 打进单二进制；SQLite 内嵌，无需外部依赖）：
+
+```bash
+docker build -f apps/server-go/Dockerfile -t taboo .          # 仓库根目录为上下文
+docker run -d --name taboo -p 7100:7100 -v taboo-data:/data \
+  -e TABOO_JWT_SECRET=$(openssl rand -hex 32) taboo
+```
+
+或 docker compose（`--profile pg` 附带动态密钥联调用 PostgreSQL 16）：
+
+```bash
+docker compose up -d --build
+```
+
+数据（SQLite + master.key）持久化在 `taboo-data` 卷，**master.key 即全部密钥的 KEK，务必备份**。生产环境务必设置 `TABOO_JWT_SECRET`（不设则重启后会话失效）。运行时以非 root 用户（uid 10001）执行，带 HEALTHCHECK。
+
 ## 许可
 
 MIT（v1.0 正式确定；当前代码以 MIT 精神完全开放，无付费墙）
