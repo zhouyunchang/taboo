@@ -32,6 +32,7 @@
 - [x] **TOTP 2FA（M2 #4，Go 版）**：RFC 6238（SHA1/30s/6 位，stdlib 实现）+ otpauth 二维码；登录 `totp_required` → 5min challenge 二次验证换 token；secret 加密落库、时间窗防重放（last_step 单调）；10 个恢复码（仅存哈希、用后即废）；disable 需密码确认；前端登录 2FA 步 + 设置抽屉（扫码/密钥/恢复码）；23 项专项冒烟全过
 - [x] **OpenAPI 3.1 契约（M3 #7）**：`api/openapi.yaml` 为 REST 唯一事实源（auth/TOTP/orgs/identities/folders/secrets 全量端点 + `{code,message,details}` 错误模型）；前端 TS 类型由契约生成（`npm run types -w @taboo/web`）；Go 契约漂移测试（chi 路由表 vs 契约，漂移即失败）；Scalar 文档页 `/api/docs`
 - [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export、folders；`examples/basic` 集成示例已对真实服务跑通
+- [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份 scope 限定（dev 身份访问 prod 即拒）、吊销立即断连；11 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档
 - [ ] 动态密钥、MCP Server、Secret Sync、TOTP 2FA → 见路线图
 
 ## 双后端说明
@@ -125,7 +126,7 @@ npm run cli -- login you@example.com your-password
 | **M1（进行中）** | Go 后端已落地（Chi + modernc.org/sqlite、Argon2id、embed.FS 单二进制，冒烟全过）；剩余：sqlc 代码生成、PostgreSQL 主模式 |
 | M2 | 机器身份（✅ #3）、文件夹多级路径（✅ #5）、TOTP 2FA（✅ #4）—— **M2 全部完成** |
 | M3 | CLI 全命令（scan ✅ #6，Dashboard 报告页遗留）、OpenAPI 契约（✅ #7）、Go SDK（✅ #8）；Python/Node SDK 待 OpenAPI 生成器接入 |
-| M4 | 动态密钥（PG/MySQL lease）、MCP Server（AI Agent 只读访问） |
+| M4 | 动态密钥（PG/MySQL lease，#9）、MCP Server（✅ #10） |
 | M5 | Secret Sync、Webhooks、OIDC SSO、审计导出、Docker/Helm 发布 |
 
 ## 许可

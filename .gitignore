@@ -3,6 +3,7 @@ dist/
 apps/server/data/
 apps/server-go/data/
 apps/server-go/bin/
+apps/mcp/taboo-mcp.exe
 # Go embed 前端产物由 `make web` 生成（apps/web/dist 拷贝而来）
 apps/server-go/cmd/server/web/
 data/
