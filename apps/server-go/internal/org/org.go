@@ -208,6 +208,18 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 			_, _ = s.DB.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, newHash, userID)
 		}
 	}
+	// TOTP 2FA（M2 #4）：已开启 → 不下发 token，改发 5min challenge，二次验证后换 token
+	var totpEnabled int
+	_ = s.DB.QueryRow(`SELECT totp_enabled FROM users WHERE id = ?`, userID).Scan(&totpEnabled)
+	if totpEnabled == 1 {
+		challenge, err := tc.SignJWTClaims(map[string]any{"sub": userID, "typ": "totp"}, s.JWTSecret, 5*time.Minute)
+		if err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"totp_required": true, "challenge": challenge})
+		return
+	}
 	var orgID string
 	if err := s.DB.QueryRow(`SELECT org_id FROM org_members WHERE user_id = ? LIMIT 1`, userID).Scan(&orgID); err == nil {
 		auth.Audit(s.DB, orgID, u, "auth.login", "user/"+email, nil, ipOf(r))
@@ -272,7 +284,13 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		_ = rows.Scan(&o.ID, &o.Name, &o.Slug, &o.Role)
 		orgs = append(orgs, o)
 	}
-	writeJSON(w, 200, map[string]any{"user": u, "orgs": orgs})
+	writeJSON(w, 200, map[string]any{"user": u, "orgs": orgs, "totp_enabled": totpEnabledOf(s.DB, u.ID)})
+}
+
+func totpEnabledOf(db *sql.DB, userID string) bool {
+	var n int
+	_ = db.QueryRow(`SELECT totp_enabled FROM users WHERE id = ?`, userID).Scan(&n)
+	return n == 1
 }
 
 func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (id, slug string, ok bool) {

@@ -10,6 +10,8 @@ export default function Login({ onSuccess }: Props) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+  const [challenge, setChallenge] = useState(''); // 非空 = 进入 2FA 第二步
+  const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -19,13 +21,58 @@ export default function Login({ onSuccess }: Props) {
     setBusy(true);
     try {
       const path = mode === 'login' ? '/api/v1/auth/login' : '/api/v1/auth/register';
-      const d = await api.post<{ user: User; tokens: Tokens }>(path, mode === 'login' ? { email, password } : { email, password, name });
+      const d = await api.post<{ user: User; tokens: Tokens; totp_required?: boolean; challenge?: string }>(
+        path, mode === 'login' ? { email, password } : { email, password, name });
+      if (d.totp_required && d.challenge) {
+        setChallenge(d.challenge); // 已开启 2FA：等待二次验证
+      } else if (d.tokens) {
+        onSuccess(d as { user: User; tokens: Tokens });
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit2FA(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const d = await api.post<{ user: User; tokens: Tokens }>('/api/v1/auth/totp/login', { challenge, code: code.trim() });
       onSuccess(d);
     } catch (err) {
       setError(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
     } finally {
       setBusy(false);
     }
+  }
+
+  if (challenge) {
+    return (
+      <div className="center-screen">
+        <form className="card auth-card" onSubmit={submit2FA}>
+          <div className="brand">
+            <span className="brand-mark">禁</span>
+            <div>
+              <h1>两步验证</h1>
+              <p className="muted">输入验证器上的 6 位动态码，或恢复码</p>
+            </div>
+          </div>
+          <label>
+            验证码 / 恢复码
+            <input value={code} onChange={(e) => setCode(e.target.value)} required autoFocus
+              placeholder="123456 或 abcd-efgh-ijkl" autoComplete="one-time-code" />
+          </label>
+          {error && <div className="error">{error}</div>}
+          <button type="submit" disabled={busy}>{busy ? '验证中…' : '验证并登录'}</button>
+          <p className="muted switch" onClick={() => { setChallenge(''); setCode(''); setError(''); }}>
+            返回重新登录
+          </p>
+        </form>
+      </div>
+    );
   }
 
   return (

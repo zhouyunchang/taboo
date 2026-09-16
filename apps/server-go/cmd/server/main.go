@@ -52,6 +52,7 @@ func main() {
 		JWTSecret: cfg.JWTSecret,
 		CORS:      cfg.CORS,
 		DEKs:      tc.NewDEKCache(),
+		LoginRate: cfg.LoginRate,
 	})
 
 	// 静态前端（embed）；SPA fallback 到 index.html

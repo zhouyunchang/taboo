@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 type Config struct {
@@ -16,13 +17,20 @@ type Config struct {
 	JWTSecret string // TABOO_JWT_SECRET；空则随机（重启会话失效，并打印告警）
 	CORS      string // TABOO_CORS_ORIGIN，默认 *
 	WebDist   string // TABOO_WEB_DIST，默认 <module>/web（embed 优先）
+	LoginRate int    // TABOO_LOGIN_RATE_LIMIT，每 IP 每窗口登录类请求上限，默认 5
 }
 
 func Load() *Config {
 	c := &Config{
-		Port:    getenv("TABOO_PORT", getenv("PORT", "7100")),
-		DataDir: getenv("TABOO_DATA_DIR", "data"),
-		CORS:    getenv("TABOO_CORS_ORIGIN", "*"),
+		Port:      getenv("TABOO_PORT", getenv("PORT", "7100")),
+		DataDir:   getenv("TABOO_DATA_DIR", "data"),
+		CORS:      getenv("TABOO_CORS_ORIGIN", "*"),
+		LoginRate: 5,
+	}
+	if v := os.Getenv("TABOO_LOGIN_RATE_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.LoginRate = n
+		}
 	}
 	if _, err := os.Stat(c.DataDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(c.DataDir, 0o700)

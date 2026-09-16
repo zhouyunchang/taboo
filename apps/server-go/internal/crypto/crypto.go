@@ -147,20 +147,20 @@ func CheckPassword(password, stored string) (ok bool, needsRehash bool, err erro
 	}
 	switch parts[0] {
 	case "argon2id":
-		// argon2id$v=19$m=65536,t=3,p=4$salt$hash
-		if len(parts) != 6 {
+		// argon2id$v=19$m=65536,t=3,p=4$salt$hash（5 段）
+		if len(parts) != 5 {
 			return false, false, errors.New("malformed argon2id hash")
 		}
 		var m, t uint32
 		var p uint8
-		if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &m, &t, &p); err != nil {
+		if _, err := fmt.Sscanf(parts[2], "m=%d,t=%d,p=%d", &m, &t, &p); err != nil {
 			return false, false, err
 		}
-		salt, err := hex.DecodeString(parts[4])
+		salt, err := hex.DecodeString(parts[3])
 		if err != nil {
 			return false, false, err
 		}
-		want, err := hex.DecodeString(parts[5])
+		want, err := hex.DecodeString(parts[4])
 		if err != nil {
 			return false, false, err
 		}

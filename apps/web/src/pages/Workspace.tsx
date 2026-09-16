@@ -16,6 +16,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
   const [envs, setEnvs] = useState<Env[]>([]);
   const [env, setEnv] = useState('dev');
   const [tab, setTab] = useState<'secrets' | 'audit' | 'identities'>('secrets');
+  const [show2FA, setShow2FA] = useState(false);
   const [error, setError] = useState('');
 
   const loadProjects = useCallback(async () => {
@@ -54,6 +55,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
         </div>
         <span className="muted">{org.name} <em>({org.role})</em></span>
         <div className="spacer" />
+        <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>
         <span>{user.name || user.email}</span>
         <button className="ghost" onClick={onLogout}>退出</button>
       </header>
@@ -89,6 +91,105 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
               ? <IdentitiesPanel orgSlug={org.slug} project={project} envs={envs} />
               : <AuditPanel orgSlug={org.slug} />}
         </main>
+      </div>
+      {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
+    </div>
+  );
+}
+
+// 两步验证（TOTP 2FA）自助管理：开启（扫码+激活）、恢复码、关闭
+function TotpPanel({ onClose }: { onClose: () => void }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [setup, setSetup] = useState<{ secret: string; otpauth_url: string; qr_png: string } | null>(null);
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get<{ totp_enabled: boolean }>('/api/v1/me')
+      .then((d) => setEnabled(d.totp_enabled))
+      .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
+  }, []);
+
+  async function startSetup() {
+    setErr(''); setBusy(true);
+    try {
+      const d = await api.post<{ secret: string; otpauth_url: string; qr_png: string }>('/api/v1/auth/totp/setup');
+      setSetup(d); setCodes(null);
+    } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }
+
+  async function verify(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(''); setBusy(true);
+    try {
+      const d = await api.post<{ enabled: boolean; recovery_codes: string[] }>('/api/v1/auth/totp/verify', { code: code.trim() });
+      setEnabled(d.enabled); setCodes(d.recovery_codes); setSetup(null); setCode('');
+    } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : String(e2)); }
+    finally { setBusy(false); }
+  }
+
+  async function disable(e: React.FormEvent) {
+    e.preventDefault();
+    if (!window.confirm('关闭两步验证？恢复码将一并作废。')) return;
+    setErr(''); setBusy(true);
+    try {
+      await api.post('/api/v1/auth/totp/disable', { password });
+      setEnabled(false); setPassword('');
+    } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : String(e2)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="drawer" onClick={onClose}>
+      <div className="drawer-inner" onClick={(e) => e.stopPropagation()}>
+        <h3>两步验证（TOTP）</h3>
+        {err && <div className="error">{err}</div>}
+        {enabled === null && <p className="muted">加载中…</p>}
+
+        {enabled === false && !setup && !codes && (
+          <>
+            <p className="muted">开启后，登录除密码外还需验证器动态码（兼容 Google Authenticator / 1Password 等）。</p>
+            <button onClick={startSetup} disabled={busy}>{busy ? '生成中…' : '开始设置'}</button>
+          </>
+        )}
+
+        {enabled === false && setup && (
+          <form onSubmit={verify} className="totp-setup">
+            <p>用验证器扫描下方二维码，或手动录入密钥：</p>
+            <img className="qr" src={setup.qr_png} alt="TOTP QR Code" />
+            <label>密钥（base32）<input readOnly value={setup.secret} onFocus={(e) => e.target.select()} /></label>
+            <label>验证器上的 6 位码<input value={code} onChange={(e) => setCode(e.target.value)} required pattern="\d{6}" placeholder="123456" autoFocus /></label>
+            <div className="drawer-actions">
+              <button type="button" className="ghost" onClick={() => setSetup(null)}>取消</button>
+              <button type="submit" disabled={busy}>{busy ? '激活中…' : '验证并开启'}</button>
+            </div>
+          </form>
+        )}
+
+        {codes && (
+          <div className="card once-secret">
+            <h3>已开启！恢复码仅此一次展示，请立即离线保存</h3>
+            <ol className="recovery-codes mono">
+              {codes.map((c) => <li key={c}>{c}</li>)}
+            </ol>
+            <button className="ghost" onClick={() => setCodes(null)}>我已保存</button>
+          </div>
+        )}
+
+        {enabled === true && !codes && (
+          <form onSubmit={disable}>
+            <p><span className="tag ok">已开启</span> <span className="muted">登录需密码 + 动态码。</span></p>
+            <label>输入密码确认关闭<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+            <div className="drawer-actions">
+              <button type="button" className="ghost" onClick={onClose}>关闭</button>
+              <button type="submit" disabled={busy}>关闭两步验证</button>
+            </div>
+          </form>
+        )}
       </div>
     </div>
   );

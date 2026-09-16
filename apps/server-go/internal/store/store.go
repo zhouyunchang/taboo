@@ -27,12 +27,16 @@ func Open(dataDir string) (*sql.DB, error) {
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`
 CREATE TABLE IF NOT EXISTS users (
-  id            TEXT PRIMARY KEY,
-  email         TEXT NOT NULL UNIQUE,
-  name          TEXT NOT NULL DEFAULT '',
-  password_hash TEXT NOT NULL,
-  status        TEXT NOT NULL DEFAULT 'active',
-  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  id               TEXT PRIMARY KEY,
+  email            TEXT NOT NULL UNIQUE,
+  name             TEXT NOT NULL DEFAULT '',
+  password_hash    TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'active',
+  totp_pending_enc TEXT,
+  totp_secret_enc  TEXT,
+  totp_enabled     INTEGER NOT NULL DEFAULT 0,
+  totp_last_step   INTEGER NOT NULL DEFAULT 0,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS orgs (
@@ -146,6 +150,15 @@ CREATE TABLE IF NOT EXISTS identity_scopes (
   permission  TEXT NOT NULL CHECK (permission IN ('read','write')),
   PRIMARY KEY (identity_id, project_id, env_id)
 );
+
+-- TOTP 2FA（M2 #4）：恢复码仅存 sha256 哈希，用后即废
+CREATE TABLE IF NOT EXISTS recovery_codes (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash  TEXT NOT NULL UNIQUE,
+  used_at    TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `)
 	if err != nil {
 		return err
@@ -154,6 +167,11 @@ CREATE TABLE IF NOT EXISTS identity_scopes (
 	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN actor_type TEXT NOT NULL DEFAULT 'user'`)
 	_, _ = db.Exec(`ALTER TABLE secrets ADD COLUMN folder_id TEXT REFERENCES folders(id)`)
 	_, _ = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_folder_key ON secrets(env_id, folder_id, key)`)
+	// TOTP 2FA（M2 #4）：users 补列 + recovery_codes 表
+	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_pending_enc TEXT`)
+	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_secret_enc TEXT`)
+	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0`)
 	// 存量迁移：每环境补根文件夹，folder 字符串回填 folder_id（幂等）
 	return migrateFolders(db)
 }

@@ -17,6 +17,7 @@ import (
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
+	totpsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/totp"
 )
 
 type Deps struct {
@@ -25,6 +26,7 @@ type Deps struct {
 	JWTSecret string
 	CORS      string
 	DEKs      *tc.DEKCache
+	LoginRate int // 登录类接口每 IP 每窗口限流（0 → 默认 5）
 }
 
 func New(d *Deps) *chi.Mux {
@@ -39,14 +41,22 @@ func New(d *Deps) *chi.Mux {
 	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
 	folders := &folder.Service{DB: d.DB}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
+	totps := &totpsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
+	loginRate := d.LoginRate
+	if loginRate <= 0 {
+		loginRate = 5
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		orgs.PublicRoutes(r)
 		// client_credentials 换 token（公开，登录同窗口限流）
-		r.With(auth.LoginRateLimit(time.Minute, 5)).Post("/identities/token", identities.Token)
+		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/identities/token", identities.Token)
+		// TOTP 2FA 第二步（公开，登录同窗口限流）
+		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/auth/totp/login", totps.Login2FA)
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(d.DB, d.JWTSecret))
 			orgs.Routes(r)
+			totps.Routes(r)
 			// 机器身份管理（组织级，需 owner）
 			r.Route("/orgs/{slug}/identities", func(r chi.Router) {
 				r.Get("/", identities.List)

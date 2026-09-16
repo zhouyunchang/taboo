@@ -137,3 +137,9 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); }
 .tree-item:hover { background: var(--bg); }
 .tree-item.active { background: rgba(88, 166, 255, 0.12); color: var(--accent); }
 .tree-toggle { width: 14px; color: var(--muted); font-size: 11px; }
+
+/* ---- TOTP 2FA（M2 #4） ---- */
+.qr { width: 200px; height: 200px; image-rendering: pixelated; border: 4px solid #fff; border-radius: 8px; align-self: center; }
+.totp-setup { display: flex; flex-direction: column; gap: 12px; }
+.recovery-codes { columns: 2; font-size: 13px; padding-left: 20px; }
+.recovery-codes li { margin: 2px 0; }
