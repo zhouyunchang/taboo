@@ -149,11 +149,13 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, env := range []string{"dev", "staging", "prod"} {
+		envID := tc.NewID()
 		if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order) VALUES (?, ?, ?, ?, ?)`,
-			tc.NewID(), projectID, env, env, i); err != nil {
+			envID, projectID, env, env, i); err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
 		}
+		ensureRootFolder(s.DB, envID)
 	}
 	u := &auth.Actor{ID: userID, Email: email, Name: b.Name, Kind: auth.KindUser}
 	auth.Audit(s.DB, orgID, u, "auth.register", "user/"+email, nil, ipOf(r))
@@ -169,6 +171,12 @@ func randomBytes(n int) []byte {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return b
+}
+
+// ensureRootFolder 为环境补建根文件夹（幂等，已存在则忽略冲突）
+func ensureRootFolder(db *sql.DB, envID string) {
+	_, _ = db.Exec(`INSERT OR IGNORE INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/')`,
+		tc.NewID(), envID)
 }
 
 func hexEncode(b []byte) string {
@@ -336,8 +344,10 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, env := range []string{"dev", "staging", "prod"} {
+		envID := tc.NewID()
 		_, _ = s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order) VALUES (?, ?, ?, ?, ?)`,
-			tc.NewID(), pid, env, env, i)
+			envID, pid, env, env, i)
+		ensureRootFolder(s.DB, envID)
 	}
 	auth.Audit(s.DB, orgID, auth.From(r), "project.create", "project/"+slug, nil, ipOf(r))
 	writeJSON(w, 201, map[string]any{"id": pid, "name": b.Name, "slug": slug})
@@ -406,6 +416,7 @@ func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
+	ensureRootFolder(s.DB, id)
 	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name})
 }
 

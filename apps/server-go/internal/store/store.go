@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS secrets (
   id             TEXT PRIMARY KEY,
   env_id         TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
   folder         TEXT NOT NULL DEFAULT '/',
+  folder_id      TEXT REFERENCES folders(id),
   key            TEXT NOT NULL,
   comment        TEXT NOT NULL DEFAULT '',
   tags           TEXT NOT NULL DEFAULT '[]',
@@ -80,6 +81,17 @@ CREATE TABLE IF NOT EXISTS secrets (
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (env_id, folder, key)
+);
+
+-- 多级文件夹（M2 #5）：物化路径 /a/b/
+CREATE TABLE IF NOT EXISTS folders (
+  id         TEXT PRIMARY KEY,
+  env_id     TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+  parent_id  TEXT REFERENCES folders(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  path       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (env_id, path)
 );
 
 CREATE TABLE IF NOT EXISTS secret_versions (
@@ -114,7 +126,6 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- 机器身份（M2 #3）：CI/CD、AI Agent 的受限凭据
 CREATE TABLE IF NOT EXISTS machine_identities (
   id          TEXT PRIMARY KEY,
   org_id      TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -136,7 +147,40 @@ CREATE TABLE IF NOT EXISTS identity_scopes (
   PRIMARY KEY (identity_id, project_id, env_id)
 );
 `)
-	// 既有库补齐 audit_logs.actor_type 列（区分 user / identity 主体）
+	if err != nil {
+		return err
+	}
+	// 既有库补齐列与约束
 	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN actor_type TEXT NOT NULL DEFAULT 'user'`)
+	_, _ = db.Exec(`ALTER TABLE secrets ADD COLUMN folder_id TEXT REFERENCES folders(id)`)
+	_, _ = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_folder_key ON secrets(env_id, folder_id, key)`)
+	// 存量迁移：每环境补根文件夹，folder 字符串回填 folder_id（幂等）
+	return migrateFolders(db)
+}
+
+// migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
+// 并将 secrets.folder（物化路径字符串）映射到 folders 记录
+func migrateFolders(db *sql.DB) error {
+	// 1. 根文件夹
+	if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path)
+		SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),
+		       e.id, NULL, '/', '/'
+		FROM environments e
+		WHERE NOT EXISTS (SELECT 1 FROM folders f WHERE f.env_id = e.id AND f.path = '/')`); err != nil {
+		return err
+	}
+	// 2. 非根 folder 字符串补建记录（挂到根下）
+	if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path)
+		SELECT lower(hex(randomblob(16))), s.env_id,
+		       (SELECT id FROM folders f WHERE f.env_id = s.env_id AND f.path = '/'),
+		       trim(s.folder, '/'), s.folder
+		FROM (SELECT DISTINCT env_id, folder FROM secrets WHERE folder <> '/') s
+		WHERE NOT EXISTS (SELECT 1 FROM folders f WHERE f.env_id = s.env_id AND f.path = s.folder)`); err != nil {
+		return err
+	}
+	// 3. 回填 secrets.folder_id
+	_, err := db.Exec(`UPDATE secrets SET folder_id =
+		(SELECT id FROM folders f WHERE f.env_id = secrets.env_id AND f.path = secrets.folder)
+		WHERE folder_id IS NULL`)
 	return err
 }

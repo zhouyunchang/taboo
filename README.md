@@ -28,6 +28,7 @@
 - [x] CLI：`login / set / get / list / export / run`（`run` 对齐设计文档 §7.1 注入流程）
 - [x] **Go 后端（apps/server-go，M1）**：Chi 路由、模块化单体（internal/{config,server,auth,secret,crypto,org,store,apperr}）、`embed.FS` 单二进制、同一套 14 项冒烟测试全过
 - [x] **机器身份（M2 #3，Go 版）**：client_credentials 换短期 JWT（TTL 可配 ≤1h，临期 CLI 自动重换）；scope 显式 (项目+环境+read|write) **禁止通配**；吊销立即生效；审计 actor 标识 `identity:xxx`；Web 管理页（创建向导/一次性 secret 展示/吊销）+ 22 项专项冒烟全过
+- [x] **多级文件夹（M2 #5，Go 版）**：物化路径 `/a/b/`、`folders` 表 + `secrets.folder_id`（存量幂等迁移）；创建自动补中间节点、移动/重命名级联子孙、仅空目录可删、根目录保护、路径穿越拒绝；密钥按目录隔离（同 key 不同目录互不冲突）；前端文件夹树 + 面包屑 + 目录过滤；24 项专项冒烟全过
 - [ ] 动态密钥、MCP Server、Secret Sync、TOTP 2FA → 见路线图
 
 ## 双后端说明
@@ -88,7 +89,7 @@ taboo/                       # 根 workspace（private）
 ├── doc/                     # 设计文档（OpenVault 功能与详细设计）
 ├── apps/
 │   ├── server/              # @taboo/server — API 服务（Node MVP，契约参考实现）
-│   ├── server-go/           # Go 后端（M1 起主推）：cmd/server + internal/*（含 identity 机器身份）
+│   ├── server-go/           # Go 后端（M1 起主推）：cmd/server + internal/*（auth/crypto/org/secret/identity/folder/store…）
 │   ├── web/                 # @taboo/web — React 19 + TS + Vite Dashboard
 │   └── cli/                 # @taboo/cli — bin: taboo（login/set/get/list/export/run，支持机器身份）
 └── README.md
@@ -113,7 +114,7 @@ npm run cli -- login you@example.com your-password
 |---|---|
 | **M0（已完成）** | Node.js MVP：验证加密架构、API 契约、RBAC、审计 |
 | **M1（进行中）** | Go 后端已落地（Chi + modernc.org/sqlite、Argon2id、embed.FS 单二进制，冒烟全过）；剩余：sqlc 代码生成、PostgreSQL 主模式 |
-| M2 | 机器身份（client_credentials + scope）、TOTP 2FA、文件夹多级路径 |
+| M2 | 机器身份（✅ #3）、文件夹多级路径（✅ #5）、TOTP 2FA（#4） |
 | M3 | CLI 全命令（scan 泄漏扫描）、OpenAPI 契约、SDK |
 | M4 | 动态密钥（PG/MySQL lease）、MCP Server（AI Agent 只读访问） |
 | M5 | Secret Sync、Webhooks、OIDC SSO、审计导出、Docker/Helm 发布 |

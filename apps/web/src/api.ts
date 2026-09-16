@@ -56,12 +56,14 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   get: <T,>(path: string) => request<T>('GET', path),
   post: <T,>(path: string, body?: unknown) => request<T>('POST', path, body),
+  del: <T,>(path: string) => request<T>('DELETE', path),
 };
 
 export interface User { id: string; email: string; name: string }
 export interface Org { id: string; name: string; slug: string; role: string }
 export interface Project { id: string; name: string; slug: string; created_at: string }
 export interface Env { id: string; name: string; slug: string; sort_order: number }
+export interface Folder { id: string; parent_id: string; name: string; path: string }
 export interface SecretMeta {
   id: string; folder: string; key: string; comment: string;
   tags: string[]; version: number; updated_at: string; canReveal: boolean;

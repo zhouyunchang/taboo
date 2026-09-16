@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
-import type { User, Org, Project, Env, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope } from '../api';
+import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope } from '../api';
 
 interface Props {
   user: User;
@@ -95,47 +95,141 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
 }
 
 function SecretsPanel({ projectId, env, projectSlug }: { projectId: string; env: string; projectSlug: string }) {
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
+  const [cur, setCur] = useState('/'); // 当前文件夹路径（物化路径 /a/b/）
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<string | null>(null); // key 或 '__new__'
-  const [detail, setDetail] = useState<string | null>(null);
+  const [detail, setDetail] = useState<SecretMeta | null>(null);
 
-  const load = useCallback(() => {
-    api.get<{ secrets: SecretMeta[] }>(`/api/v1/projects/${projectId}/secrets?env=${env}`)
-      .then((d) => setSecrets(d.secrets))
+  const loadFolders = useCallback(() => {
+    api.get<{ folders: Folder[] }>(`/api/v1/projects/${projectId}/folders?env=${env}`)
+      .then((d) => setFolders(d.folders))
       .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
   }, [projectId, env]);
 
+  const load = useCallback(() => {
+    api.get<{ secrets: SecretMeta[] }>(`/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(cur)}`)
+      .then((d) => setSecrets(d.secrets))
+      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+  }, [projectId, env, cur]);
+
   useEffect(load, [load]);
+  useEffect(loadFolders, [loadFolders]);
+
+  async function createFolder() {
+    const name = window.prompt(`在当前文件夹 ${cur} 下新建子文件夹名称？`);
+    if (!name) return;
+    const clean = name.trim().replace(/^\/+|\/+$/g, '');
+    if (!clean) return;
+    try {
+      await api.post(`/api/v1/projects/${projectId}/folders?env=${env}`, { path: cur + clean + '/' });
+      loadFolders();
+    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+  }
+
+  async function deleteFolder() {
+    if (cur === '/') return;
+    if (!window.confirm(`删除空文件夹 ${cur}？（仅空文件夹可删除）`)) return;
+    try {
+      await api.del(`/api/v1/projects/${projectId}/folders?env=${env}&path=${encodeURIComponent(cur)}`);
+      setCur(parentOf(cur));
+      loadFolders();
+    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+  }
+
+  const crumbs = cur === '/' ? [] : cur.replace(/^\/+|\/+$/g, '').split('/');
 
   return (
     <div className="panel">
       <div className="panel-head">
         <h2>{projectSlug} / {env}</h2>
+        <button className="ghost" onClick={createFolder}>＋ 新建文件夹</button>
+        {cur !== '/' && <button className="ghost" onClick={deleteFolder}>删除此空文件夹</button>}
         <button onClick={() => setEditing('__new__')}>＋ 新建密钥</button>
       </div>
+      <div className="crumbs mono">
+        <span className={`crumb ${cur === '/' ? 'active' : ''}`} onClick={() => setCur('/')}>根目录</span>
+        {crumbs.map((c, i) => {
+          const p = '/' + crumbs.slice(0, i + 1).join('/') + '/';
+          return <span key={p}><span className="muted"> / </span>
+            <span className={`crumb ${cur === p ? 'active' : ''}`} onClick={() => setCur(p)}>{c}</span></span>;
+        })}
+      </div>
       {error && <div className="error">{error}</div>}
-      <table className="table">
-        <thead>
-          <tr><th>Key</th><th>值</th><th>标签</th><th>版本</th><th>更新时间</th><th /></tr>
-        </thead>
-        <tbody>
-          {secrets.map((s) => (
-            <SecretRow key={s.id} s={s} projectId={projectId} env={env}
-              onChanged={load} onEdit={() => setEditing(s.key)} onDetail={() => setDetail(s.key)} />
-          ))}
-          {secrets.length === 0 && <tr><td colSpan={6} className="muted center">该环境还没有密钥</td></tr>}
-        </tbody>
-      </table>
+      <div className="split">
+        <aside className="folder-tree">
+          <FolderTree folders={folders} cur={cur} onSelect={setCur} />
+        </aside>
+        <div className="grow">
+          <table className="table">
+            <thead>
+              <tr><th>Key</th><th>值</th><th>标签</th><th>版本</th><th>更新时间</th><th /></tr>
+            </thead>
+            <tbody>
+              {secrets.map((s) => (
+                <SecretRow key={s.id} s={s} projectId={projectId} env={env}
+                  onChanged={load} onEdit={() => setEditing(s.key)} onDetail={() => setDetail(s)} />
+              ))}
+              {secrets.length === 0 && <tr><td colSpan={6} className="muted center">此文件夹还没有密钥</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
       {editing && (
-        <SecretEditor projectId={projectId} env={env} secretKey={editing === '__new__' ? '' : editing}
+        <SecretEditor projectId={projectId} env={env} path={cur} secretKey={editing === '__new__' ? '' : editing}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
       )}
       {detail && (
-        <DetailDrawer projectId={projectId} env={env} secretKey={detail}
+        <DetailDrawer projectId={projectId} env={env} meta={detail}
           onClose={() => setDetail(null)} />
       )}
     </div>
+  );
+}
+
+function parentOf(path: string) {
+  const t = path.replace(/^\/+|\/+$/g, '');
+  const i = t.lastIndexOf('/');
+  return i < 0 ? '/' : '/' + t.slice(0, i) + '/';
+}
+
+// 平铺 folders → 按 parent_id 嵌套的树（后端已保证根 '/' 存在）
+function FolderTree({ folders, cur, onSelect }: { folders: Folder[]; cur: string; onSelect: (p: string) => void }) {
+  const byParent = new Map<string, Folder[]>();
+  for (const f of folders) {
+    const list = byParent.get(f.parent_id) ?? [];
+    list.push(f);
+    byParent.set(f.parent_id, list);
+  }
+  const root = folders.find((f) => f.path === '/');
+  if (!root) return <div className="muted">无文件夹</div>;
+  return (
+    <ul className="tree">
+      <TreeNode f={root} byParent={byParent} cur={cur} onSelect={onSelect} />
+    </ul>
+  );
+}
+
+function TreeNode({ f, byParent, cur, onSelect }: {
+  f: Folder; byParent: Map<string, Folder[]>; cur: string; onSelect: (p: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const kids = byParent.get(f.id) ?? [];
+  return (
+    <li>
+      <div className={`tree-item ${cur === f.path ? 'active' : ''}`} onClick={() => onSelect(f.path)}>
+        {kids.length > 0
+          ? <span className="tree-toggle" onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>{open ? '▾' : '▸'}</span>
+          : <span className="tree-toggle" />}
+        📁 {f.name}
+      </div>
+      {open && kids.length > 0 && (
+        <ul className="tree">
+          {kids.map((k) => <TreeNode key={k.id} f={k} byParent={byParent} cur={cur} onSelect={onSelect} />)}
+        </ul>
+      )}
+    </li>
   );
 }
 
@@ -149,14 +243,14 @@ function SecretRow({ s, projectId, env, onChanged, onEdit, onDetail }: {
   async function reveal() {
     if (value !== null) { setValue(null); return; }
     try {
-      const d = await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}`);
+      const d = await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`);
       setValue(d.value);
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
 
   async function copy() {
     try {
-      const d = value ?? await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}`).then((x) => x.value);
+      const d = value ?? await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`).then((x) => x.value);
       await navigator.clipboard.writeText(d);
       setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 20_000); // 20s 自动清空剪贴板
     } catch { setErr('复制失败'); }
@@ -181,8 +275,8 @@ function SecretRow({ s, projectId, env, onChanged, onEdit, onDetail }: {
   );
 }
 
-function SecretEditor({ projectId, env, secretKey, onClose, onSaved }: {
-  projectId: string; env: string; secretKey: string; onClose: () => void; onSaved: () => void;
+function SecretEditor({ projectId, env, path, secretKey, onClose, onSaved }: {
+  projectId: string; env: string; path: string; secretKey: string; onClose: () => void; onSaved: () => void;
 }) {
   const [key, setKey] = useState(secretKey);
   const [value, setValue] = useState('');
@@ -196,7 +290,7 @@ function SecretEditor({ projectId, env, secretKey, onClose, onSaved }: {
     setBusy(true);
     setErr('');
     try {
-      await api.post(`/api/v1/projects/${projectId}/secrets?env=${env}`, {
+      await api.post(`/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(path)}`, {
         key, value, comment,
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
       });
@@ -208,7 +302,7 @@ function SecretEditor({ projectId, env, secretKey, onClose, onSaved }: {
   return (
     <div className="drawer" onClick={onClose}>
       <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
-        <h3>{secretKey ? `更新密钥 — ${secretKey}` : '新建密钥'}</h3>
+        <h3>{secretKey ? `更新密钥 — ${secretKey}` : `新建密钥 — ${path}`}</h3>
         <label>Key<input value={key} onChange={(e) => setKey(e.target.value)} required disabled={!!secretKey} /></label>
         <label>值<textarea value={value} onChange={(e) => setValue(e.target.value)} required rows={4} /></label>
         <label>备注<input value={comment} onChange={(e) => setComment(e.target.value)} /></label>
@@ -223,25 +317,27 @@ function SecretEditor({ projectId, env, secretKey, onClose, onSaved }: {
   );
 }
 
-function DetailDrawer({ projectId, env, secretKey, onClose }: {
-  projectId: string; env: string; secretKey: string; onClose: () => void;
+function DetailDrawer({ projectId, env, meta, onClose }: {
+  projectId: string; env: string; meta: SecretMeta; onClose: () => void;
 }) {
+  const secretKey = meta.key;
+  const folder = meta.folder;
   const [versions, setVersions] = useState<Version[]>([]);
   const [latest, setLatest] = useState(0);
   const [err, setErr] = useState('');
 
   const load = useCallback(() => {
     api.get<{ versions: Version[]; latest: number }>(
-      `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/versions?env=${env}`)
+      `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/versions?env=${env}&path=${encodeURIComponent(folder)}`)
       .then((d) => { setVersions(d.versions); setLatest(d.latest); })
       .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
-  }, [projectId, env, secretKey]);
+  }, [projectId, env, secretKey, folder]);
   useEffect(load, [load]);
 
   async function rollback(v: number) {
     if (!window.confirm(`回滚 ${secretKey} 到 v${v}？（将产生新版本）`)) return;
     try {
-      await api.post(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rollback?env=${env}`, { version: v });
+      await api.post(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rollback?env=${env}&path=${encodeURIComponent(folder)}`, { version: v });
       load();
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
@@ -249,7 +345,7 @@ function DetailDrawer({ projectId, env, secretKey, onClose }: {
   return (
     <div className="drawer" onClick={onClose}>
       <div className="drawer-inner" onClick={(e) => e.stopPropagation()}>
-        <h3>{secretKey} — 版本历史</h3>
+        <h3>{secretKey} — 版本历史 <span className="muted mono">{folder}</span></h3>
         {err && <div className="error">{err}</div>}
         <table className="table">
           <thead><tr><th>版本</th><th>创建人</th><th>时间</th><th /></tr></thead>

@@ -10,6 +10,8 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
 )
 
 type Service struct {
@@ -52,6 +54,16 @@ func (s *Service) orgDEK(orgID string) ([]byte, error) {
 func (s *Service) envOf(projectID, envSlug string) (envID string, err error) {
 	err = s.DB.QueryRow(`SELECT id FROM environments WHERE project_id = ? AND slug = ?`, projectID, envSlug).Scan(&envID)
 	return
+}
+
+// folderRef 解析物化路径 → folder_id（norm 为规范化路径）
+func (s *Service) folderRef(envID, path string, create bool) (folderID, norm string, err error) {
+	norm, err = folder.NormalizePath(path)
+	if err != nil {
+		return "", "", err
+	}
+	folderID, err = folder.ResolveID(s.DB, envID, norm, create)
+	return folderID, norm, err
 }
 
 // ---------- 路由挂载 ----------
@@ -130,8 +142,21 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	canRev := auth.Can(s.DB, u, p.OrgID, p.ID, "reveal", envSlug)
-	rows, err := s.DB.Query(`SELECT id, folder, key, comment, tags, latest_version, updated_at
-		FROM secrets WHERE env_id = ? ORDER BY folder, key`, envID)
+	// 支持 ?path=/a/b/ 按文件夹过滤；缺省列出整个环境
+	sql := `SELECT s.id, f.path, s.key, s.comment, s.tags, s.latest_version, s.updated_at
+		FROM secrets s JOIN folders f ON f.id = s.folder_id WHERE s.env_id = ?`
+	args := []any{envID}
+	if r.URL.Query().Get("path") != "" {
+		fid, _, ferr := s.folderRef(envID, r.URL.Query().Get("path"), false)
+		if ferr != nil {
+			writeJSON(w, 200, map[string]any{"secrets": []Meta{}})
+			return
+		}
+		sql += ` AND s.folder_id = ?`
+		args = append(args, fid)
+	}
+	sql += ` ORDER BY f.path, s.key`
+	rows, err := s.DB.Query(sql, args...)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -177,7 +202,11 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.InvalidInput)
 		return
 	}
-	folder := q(r, "path", "/")
+	folderID, normPath, err := s.folderRef(envID, q(r, "path", "/"), true)
+	if err != nil {
+		writeErr(w, apperr.New(400, "INVALID", "invalid folder path"))
+		return
+	}
 	dek, err := s.orgDEK(p.OrgID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "dek unwrap failed"))
@@ -198,8 +227,8 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	var secretID string
 	var latest int
 	var oldComment, oldTags string
-	err = tx.QueryRow(`SELECT id, latest_version, comment, tags FROM secrets WHERE env_id = ? AND folder = ? AND key = ?`,
-		envID, folder, b.Key).Scan(&secretID, &latest, &oldComment, &oldTags)
+	err = tx.QueryRow(`SELECT id, latest_version, comment, tags FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`,
+		envID, folderID, b.Key).Scan(&secretID, &latest, &oldComment, &oldTags)
 	isCreate := err == sql.ErrNoRows
 	if err != nil && !isCreate {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
@@ -207,8 +236,8 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	if isCreate {
 		secretID = tc.NewID()
-		if _, err := tx.Exec(`INSERT INTO secrets (id, env_id, folder, key, comment, tags) VALUES (?, ?, ?, ?, ?, ?)`,
-			secretID, envID, folder, b.Key, strOr(b.Comment, ""), tagsOr(b.Tags)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO secrets (id, env_id, folder, folder_id, key, comment, tags) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			secretID, envID, normPath, folderID, b.Key, strOr(b.Comment, ""), tagsOr(b.Tags)); err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
 		}
@@ -257,12 +286,16 @@ func (s *Service) Reveal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := chi.URLParam(r, "key")
-	folder := q(r, "path", "/")
+	folderID, _, ferr := s.folderRef(envID, q(r, "path", "/"), false)
+	if ferr != nil {
+		writeErr(w, apperr.SecretNotFound)
+		return
+	}
 	var secretID string
 	var comment, tags string
 	var latest int
-	err = s.DB.QueryRow(`SELECT id, comment, tags, latest_version FROM secrets WHERE env_id = ? AND folder = ? AND key = ?`,
-		envID, folder, key).Scan(&secretID, &comment, &tags, &latest)
+	err = s.DB.QueryRow(`SELECT id, comment, tags, latest_version FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`,
+		envID, folderID, key).Scan(&secretID, &comment, &tags, &latest)
 	if err != nil {
 		writeErr(w, apperr.SecretNotFound)
 		return
@@ -307,11 +340,15 @@ func (s *Service) Versions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := chi.URLParam(r, "key")
-	folder := q(r, "path", "/")
+	folderID, _, ferr := s.folderRef(envID, q(r, "path", "/"), false)
+	if ferr != nil {
+		writeErr(w, apperr.SecretNotFound)
+		return
+	}
 	var secretID string
 	var latest int
-	if err := s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE env_id = ? AND folder = ? AND key = ?`,
-		envID, folder, key).Scan(&secretID, &latest); err != nil {
+	if err := s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`,
+		envID, folderID, key).Scan(&secretID, &latest); err != nil {
 		writeErr(w, apperr.SecretNotFound)
 		return
 	}
@@ -358,11 +395,15 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := chi.URLParam(r, "key")
-	folder := q(r, "path", "/")
+	folderID, _, ferr := s.folderRef(envID, q(r, "path", "/"), false)
+	if ferr != nil {
+		writeErr(w, apperr.SecretNotFound)
+		return
+	}
 	var secretID string
 	var latest int
-	if err := s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE env_id = ? AND folder = ? AND key = ?`,
-		envID, folder, key).Scan(&secretID, &latest); err != nil {
+	if err := s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`,
+		envID, folderID, key).Scan(&secretID, &latest); err != nil {
 		writeErr(w, apperr.SecretNotFound)
 		return
 	}
@@ -400,20 +441,10 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 
 // ---------- helpers ----------
 
-type ctxKey string
+// ProjectCtx 保持对 org 等模块的兼容别名
+type ProjectCtx = project.Ctx
 
-const ProjectKey ctxKey = "taboo.project"
-
-type ProjectCtx struct {
-	ID    string
-	OrgID string
-	Slug  string
-}
-
-func projectOf(r *http.Request) ProjectCtx {
-	p, _ := r.Context().Value(ProjectKey).(ProjectCtx)
-	return p
-}
+func projectOf(r *http.Request) ProjectCtx { return project.Of(r) }
 
 func q(r *http.Request, k, def string) string {
 	if v := r.URL.Query().Get(k); v != "" {

@@ -2,7 +2,6 @@
 package server
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -13,8 +12,10 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/identity"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 )
 
@@ -36,6 +37,7 @@ func New(d *Deps) *chi.Mux {
 
 	orgs := &orgsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs}
 	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
+	folders := &folder.Service{DB: d.DB}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -51,11 +53,12 @@ func New(d *Deps) *chi.Mux {
 				r.Post("/", identities.Create)
 				r.Post("/{id}/revoke", identities.Revoke)
 			})
-			// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥路由
+			// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥 + 文件夹路由
 			r.Route("/projects/{pid}", func(r chi.Router) {
 				r.Use(projectCtx(d.DB))
 				r.Get("/environments", orgs.ListEnvs)
 				r.Post("/environments", orgs.CreateEnv)
+				folders.Routes(r)
 				secrets.Routes(r)
 			})
 		})
@@ -93,12 +96,12 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// projectCtx 校验项目存在 + read 权限，注入 secret.ProjectCtx
+// projectCtx 校验项目存在 + read 权限，注入 project.Ctx
 func projectCtx(db *sql.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			u := auth.From(r)
-			var p secretsvc.ProjectCtx
+			var p project.Ctx
 			err := db.QueryRow(`SELECT id, org_id, slug FROM projects WHERE id = ?`, chi.URLParam(r, "pid")).
 				Scan(&p.ID, &p.OrgID, &p.Slug)
 			if err != nil {
@@ -109,7 +112,7 @@ func projectCtx(db *sql.DB) func(http.Handler) http.Handler {
 				writeErr(w, apperr.Forbidden)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), secretsvc.ProjectKey, p)))
+			next.ServeHTTP(w, r.WithContext(project.With(r.Context(), p)))
 		})
 	}
 }
