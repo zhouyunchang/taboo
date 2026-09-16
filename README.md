@@ -25,7 +25,7 @@
 - [x] 审计日志：append-only，谁何时对哪个密钥做了什么（读/写/删/回滚/导出）
 - [x] REST API：`/api/v1/auth/*`、`/orgs/*`、`/projects/*/secrets`、`export`、`/audit`
 - [x] Web Dashboard：登录注册、项目/环境切换、密钥表（掩码/显示/复制 20s 自清除）、版本抽屉+回滚、审计筛选
-- [x] CLI：`login / set / get / list / export / run`（`run` 对齐设计文档 §7.1 注入流程）
+- [x] CLI：`login / set / get / list / export / run`（`run` 对齐设计文档 §7.1 注入流程）+ `scan` 泄漏扫描（151 条规则，含 .tabooignore / 行内 taboo:ignore / baseline 抑制、--staged、--json、pre-commit 钩子安装）
 - [x] **Go 后端（apps/server-go，M1）**：Chi 路由、模块化单体（internal/{config,server,auth,secret,crypto,org,store,apperr}）、`embed.FS` 单二进制、同一套 14 项冒烟测试全过
 - [x] **机器身份（M2 #3，Go 版）**：client_credentials 换短期 JWT（TTL 可配 ≤1h，临期 CLI 自动重换）；scope 显式 (项目+环境+read|write) **禁止通配**；吊销立即生效；审计 actor 标识 `identity:xxx`；Web 管理页（创建向导/一次性 secret 展示/吊销）+ 22 项专项冒烟全过
 - [x] **多级文件夹（M2 #5，Go 版）**：物化路径 `/a/b/`、`folders` 表 + `secrets.folder_id`（存量幂等迁移）；创建自动补中间节点、移动/重命名级联子孙、仅空目录可删、根目录保护、路径穿越拒绝；密钥按目录隔离（同 key 不同目录互不冲突）；前端文件夹树 + 面包屑 + 目录过滤；24 项专项冒烟全过

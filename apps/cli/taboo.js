@@ -6,11 +6,13 @@
 //   taboo list [--env dev]                  列密钥（无值）
 //   taboo export [--env dev]                导出 .env 到 stdout
 //   taboo run -- <cmd...>                   注入环境变量并执行子进程（设计文档 §7.1 流程）
+//   taboo scan [opts]                       密钥泄漏扫描（M3 #6，设计文档 §2）
 // 用法：node cli/taboo.js <command> [args]   （后续打包为独立二进制分发）
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { runScan } from './scan.js';
 
 const BASE = process.env.TABOO_SERVER || 'http://localhost:7100';
 const SESSION = path.join(os.homedir(), '.taboo', 'session.json');
@@ -127,8 +129,7 @@ switch (cmd) {
     process.stdout.write(await res.text());
     break;
   }
-  case 'run': {
-    // 密钥注入子进程；父进程退出前清理（设计文档 §7.1）
+  case 'run': {    // 密钥注入子进程；父进程退出前清理（设计文档 §7.1）
     const idx = args.indexOf('--');
     if (idx < 0 || idx === args.length - 1) { console.error('usage: taboo run -- <cmd...>'); process.exit(1); }
     const res = await call('GET', `/api/v1/projects/${await projectId()}/export?env=${env}`, null, true);
@@ -142,6 +143,9 @@ switch (cmd) {
     child.on('exit', (code) => process.exit(code ?? 0));
     break;
   }
+  case 'scan': {
+    process.exit(runScan(args));
+  }
   default:
     console.log(`taboo CLI (MVP) — server: ${BASE}
 
@@ -152,5 +156,8 @@ switch (cmd) {
   taboo list [--env] [--project]                列出密钥（无值）
   taboo export [--env] [--project]              导出 .env 格式到 stdout
   taboo run -- <cmd...>                         注入环境变量执行命令
+  taboo scan [--staged|--json|--list-rules]     密钥泄漏扫描（150+ 规则，命中即非零退出）
+  taboo scan --update-baseline                  将现存命中写入 baseline 抑制
+  taboo scan --install-hook                     安装 git pre-commit 钩子
 `);
 }
