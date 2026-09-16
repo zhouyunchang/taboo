@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
@@ -13,6 +14,14 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
 )
+
+// validKey：key 为单段标识（folder 与 key 分离，见 #16）—— 禁 '/'、'.'/'..'、首尾空白与控制字符
+func validKey(k string) bool {
+	if k == "" || k == "." || k == ".." || strings.TrimSpace(k) != k {
+		return false
+	}
+	return !strings.ContainsAny(k, "/\x00\r\n\t")
+}
 
 type Service struct {
 	DB        *sql.DB
@@ -200,6 +209,11 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil || b.Key == "" || b.Value == nil {
 		writeErr(w, apperr.InvalidInput)
+		return
+	}
+	// #16：key 与 folder 分离设计 —— 禁止路径分隔符，否则写入后无法经 {key} 路由读取
+	if !validKey(b.Key) {
+		writeErr(w, apperr.New(400, "INVALID_KEY", "key must not contain '/' or be '.'/'..'"))
 		return
 	}
 	folderID, normPath, err := s.folderRef(envID, q(r, "path", "/"), true)

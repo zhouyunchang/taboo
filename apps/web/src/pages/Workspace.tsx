@@ -391,6 +391,10 @@ function SecretEditor({ projectId, env, path, secretKey, onClose, onSaved }: {
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (key.includes('/') || key.trim() !== key || key === '.' || key === '..') {
+      setErr('Key 不能包含 /（用文件夹分层），且不能是 . / .. 或首尾空白');
+      return;
+    }
     setBusy(true);
     setErr('');
     try {

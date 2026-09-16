@@ -635,7 +635,7 @@ components:
       type: object
       required: [key, value]
       properties:
-        key: { type: string }
+        key: { type: string, pattern: '^[^/\s][^/]*[^/\s]$|^[^/\s]$', description: '单段 key，禁止包含 /（folder 与 key 分离，#16）' }
         value: { type: string }
         comment: { type: string }
         tags: { type: array, items: { type: string } }
