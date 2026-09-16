@@ -11,10 +11,16 @@
     "node": ">=22.5.0"
   },
   "scripts": {
-    "start": "npm run start -w @taboo/server",
-    "dev": "npm run dev -w @taboo/web --",
+    "start": "make -C apps/server-go build && ./apps/server-go/bin/taboo-server",
+    "start:node": "npm run start -w @taboo/server",
+    "dev": "node scripts/dev.js",
+    "dev:server": "make -C apps/server-go run",
+    "dev:server:node": "npm run dev -w @taboo/server",
+    "dev:web": "npm run dev -w @taboo/web",
     "build": "npm run build -w @taboo/web",
-    "smoke": "npm run smoke -w @taboo/server",
+    "types": "npm run types -w @taboo/web",
+    "smoke": "make -C apps/server-go smoke",
+    "smoke:node": "npm run smoke -w @taboo/server",
     "cli": "node apps/cli/taboo.js"
   }
 }

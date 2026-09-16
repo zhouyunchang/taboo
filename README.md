@@ -49,13 +49,13 @@
 | 存储 | `node:sqlite` | `modernc.org/sqlite`（纯 Go 免 CGO） |
 | 密码哈希 | scrypt | Argon2id（含 scrypt 透明迁移） |
 | 前端托管 | 运行时读 `apps/web/dist` | 构建期 `embed.FS` 进二进制 |
-| 启动 | `npm start` | `make -C apps/server-go build && ./apps/server-go/bin/taboo-server` |
+| 启动 | `npm run start:node` | `npm start`（默认） |
 
 两后端共用同一套 API 契约（`apps/server/scripts/smoke.js` 14 项端到端检查对两者均可运行）。
 
 ## 快速开始
 
-要求：Node.js ≥ 22.5（使用内置 `node:sqlite`，无需任何外部服务）
+要求：Node.js ≥ 22.5（前端/CLI/workspace 管理）；默认 server 为 Go 版，另需 Go ≥ 1.22（Node 版 server 仍可通过 `npm run start:node` 使用，无需 Go）
 
 ```bash
 npm install                       # 安装全部 workspace 依赖（一次即可）
@@ -84,7 +84,7 @@ npm run smoke
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `TABOO_PORT` | `7100` | 服务端口 |
-| `TABOO_DATA_DIR` | `apps/server/data` | SQLite + master key 目录 |
+| `TABOO_DATA_DIR` | `apps/server-go/data`（Go 默认）/ `apps/server/data`（Node 版） | SQLite + master key 目录 |
 | `TABOO_MASTER_KEY` | 自动生成文件 | 32B hex/base64；不设置则生成 `master.key`（0600） |
 | `TABOO_JWT_SECRET` | 随机（重启失效） | 生产必须显式设置 |
 | `TABOO_CORS_ORIGIN` | `*` | 开发跨域来源 |
@@ -115,10 +115,16 @@ taboo/                       # 根 workspace（private）
 
 ```bash
 npm install          # 一次安装全部 workspace 依赖（提升到根 node_modules）
-npm start            # = @taboo/server，起 API + 托管 web/dist（:7100）
-npm run dev          # = @taboo/web Vite 开发模式（/api 代理到 7100）；参数透传：npm run dev -- --port 7100
+npm start            # = Go server（默认）：make build（含前端 embed）后运行 bin/taboo-server，起 API + 托管 web/dist（:7100）
+npm run start:node   # Node 版 server 启动（apps/server）
+npm run dev          # 全栈开发模式：Go server（go run, :7100）+ web（Vite, :5173）同时启动，Ctrl-C 一起退出
+npm run dev:server   # 只起 Go server 开发模式（go run ./cmd/server）
+npm run dev:server:node  # 只起 Node 版 server 开发模式（--watch）
+npm run dev:web      # 只起 @taboo/web Vite 开发模式（/api 代理到 7100）；参数透传：npm run dev:web -- --port 7100
 npm run build        # 构建 @taboo/web → apps/web/dist
-npm run smoke        # 14 项端到端冒烟检查（需先 npm start）
+npm run types        # 由 api/openapi.yaml 重新生成前端 TS 类型（src/api-types.ts）
+npm run smoke        # 14 项端到端冒烟检查（对 Go server 运行，需先 npm start）
+npm run smoke:node   # 同一套冒烟检查对 Node 版 server 运行
 npm run cli -- login you@example.com your-password
 ```
 
