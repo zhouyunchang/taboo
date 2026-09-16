@@ -1,0 +1,84 @@
+name: ci
+
+# 每次 push / PR 的运行时检查：Go 契约漂移 + 前端构建 + 双后端冒烟回归
+# 发布流水线见 release.yml（tag 触发，GoReleaser）
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  TABOO_PORT: 7100
+
+jobs:
+  # Go 路由表 vs api/openapi.yaml 契约漂移测试 + 单元测试（apps/server-go/internal/server/contract_test.go）
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - name: go test
+        run: go test ./...
+        working-directory: apps/server-go
+
+  # 前端构建（含类型生成所需的依赖安装）
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+
+  # 默认链路：Go server 构建（前端 embed 进二进制）→ 启动 → 14 项端到端冒烟
+  smoke-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: build Go server (含前端 embed)
+        run: make -C apps/server-go build
+      - name: start server & smoke
+        run: |
+          ./apps/server-go/bin/taboo-server &
+          SRV=$!
+          trap "kill $SRV 2>/dev/null || true" EXIT
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:7100/ >/dev/null && break
+            sleep 1
+          done
+          npm run smoke
+
+  # Node 版 server 契约回归（同一套 14 项冒烟检查）
+  smoke-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: start server & smoke
+        run: |
+          npm run start:node &
+          SRV=$!
+          trap "kill $SRV 2>/dev/null || true" EXIT
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:7100/ >/dev/null && break
+            sleep 1
+          done
+          npm run smoke:node
