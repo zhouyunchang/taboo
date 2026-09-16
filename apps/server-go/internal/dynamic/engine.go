@@ -108,8 +108,14 @@ func (p *Postgres) Revoke(ctx context.Context, username string) error {
 		fmt.Sprintf(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM %s`, u),
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM %s`, u),
 	}
-	for _, s := range pre {
-		if _, err := p.db.ExecContext(ctx, s, username); err != nil && !strings.Contains(err.Error(), "does not exist") {
+	for i, s := range pre {
+		var err error
+		if i == 0 {
+			_, err = p.db.ExecContext(ctx, s, username) // 仅终止连接语句带 $1 占位
+		} else {
+			_, err = p.db.ExecContext(ctx, s)
+		}
+		if err != nil && !strings.Contains(err.Error(), "does not exist") {
 			return fmt.Errorf("revoke pre %q: %w", s, err)
 		}
 	}

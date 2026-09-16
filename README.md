@@ -33,7 +33,7 @@
 - [x] **OpenAPI 3.1 契约（M3 #7）**：`api/openapi.yaml` 为 REST 唯一事实源（auth/TOTP/orgs/identities/folders/secrets 全量端点 + `{code,message,details}` 错误模型）；前端 TS 类型由契约生成（`npm run types -w @taboo/web`）；Go 契约漂移测试（chi 路由表 vs 契约，漂移即失败）；Scalar 文档页 `/api/docs`
 - [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export、folders；`examples/basic` 集成示例已对真实服务跑通
 - [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份 scope 限定（dev 身份访问 prod 即拒）、吊销立即断连；11 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档
-- [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 动态引擎 —— 机器身份申请短期账号 lease（`taboo_` 前缀随机用户名，CREATE USER … VALID UNTIL + 最小只读授权），到期/吊销自动 DROP（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请；17 项专项冒烟全过（`TABOO_DYNAMIC_ENGINE=mock`，真实 PG 联调待补）
+- [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 动态引擎 —— 机器身份申请短期账号 lease（`taboo_` 前缀随机用户名，CREATE USER … VALID UNTIL + 最小只读授权），到期/吊销自动 DROP（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请；17 项 mock 冒烟 + **10 项真实 PostgreSQL 联调全过**（podman 容器 `taboo-pg-test`，pg_roles 侧验证创建/登录/续期/DROP；修复 lib/pq 无占位语句误传参导致回收失败的问题）
 - [ ] Secret Sync、Webhooks、OIDC → 见路线图
 
 ## 双后端说明
