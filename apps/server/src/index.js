@@ -12,7 +12,7 @@ import { makeApi } from './api.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.TABOO_PORT || process.env.PORT || 7100);
 const DATA_DIR = process.env.TABOO_DATA_DIR || path.join(__dirname, '..', 'data');
-const WEB_DIST = process.env.TABOO_WEB_DIST || path.resolve(__dirname, '../../web/dist');
+const WEB_DIST = process.env.TABOO_WEB_DIST || path.resolve(__dirname, '../../../apps/web/dist');
 
 const db = openDatabase(DATA_DIR);
 const masterKey = loadMasterKey(DATA_DIR);

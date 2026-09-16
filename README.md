@@ -33,22 +33,24 @@
 要求：Node.js ≥ 22.5（使用内置 `node:sqlite`，无需任何外部服务）
 
 ```bash
-# 1. 启动 API + Web（同一端口，前端已构建时自动托管 web/dist）
-cd server && npm start          # http://localhost:7100
+npm install                       # 安装全部 workspace 依赖（一次即可）
+
+# 1. 启动 API + Web（同一端口，前端已构建时自动托管 apps/web/dist）
+npm start                         # http://localhost:7100
 
 # 2. 前端开发模式（Vite，/api 自动代理到 7100）
-cd web && npm install && npm run dev
+npm run dev
 
 # 3. CLI
-node cli/taboo.js login you@example.com your-password
-node cli/taboo.js set DB_PASS s3cret --env dev
-node cli/taboo.js run -- npm run dev
+npm run cli -- login you@example.com your-password
+npm run cli -- set DB_PASS s3cret --env dev
+npm run cli -- run -- npm run dev
 ```
 
 冒烟测试（14 项端到端检查）：
 
 ```bash
-cd server && npm start &        # 先起服务
+npm start &        # 先起服务
 npm run smoke
 ```
 
@@ -57,28 +59,45 @@ npm run smoke
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `TABOO_PORT` | `7100` | 服务端口 |
-| `TABOO_DATA_DIR` | `server/data` | SQLite + master key 目录 |
-| `TABOO_MASTER_KEY` | 自动生成文件 | 32B hex/base64；不设置则生成 `data/master.key`（0600） |
+| `TABOO_DATA_DIR` | `apps/server/data` | SQLite + master key 目录 |
+| `TABOO_MASTER_KEY` | 自动生成文件 | 32B hex/base64；不设置则生成 `master.key`（0600） |
 | `TABOO_JWT_SECRET` | 随机（重启失效） | 生产必须显式设置 |
 | `TABOO_CORS_ORIGIN` | `*` | 开发跨域来源 |
 
-## 目录结构
+## Monorepo 结构
+
+本项目以 **npm workspaces** 管理单仓，根目录统一依赖与脚本：
 
 ```
-taboo/
-├── doc/            # 设计文档（OpenVault 功能与详细设计）
-├── server/
-│   ├── src/
-│   │   ├── index.js    # HTTP 入口：API + 静态托管 + 安全头/CORS
-│   │   ├── api.js      # REST 路由
-│   │   ├── auth.js     # JWT 中间件 + RBAC 求值 + 审计写入
-│   │   ├── crypto.js   # 信封加密、scrypt、JWT 原语
-│   │   └── db.js       # SQLite schema（DDL 以 PG 语义设计）
-│   └── scripts/smoke.js
-├── web/            # React 19 + TS + Vite Dashboard
-├── cli/taboo.js    # MVP CLI
+taboo/                       # 根 workspace（private）
+├── package.json             # workspaces: ["apps/*"] + 统一脚本
+├── doc/                     # 设计文档（OpenVault 功能与详细设计）
+├── apps/
+│   ├── server/              # @taboo/server — API 服务（Node 零依赖）
+│   │   ├── src/
+│   │   │   ├── index.js     # HTTP 入口：API + 静态托管 + 安全头/CORS
+│   │   │   ├── api.js       # REST 路由
+│   │   │   ├── auth.js      # JWT 中间件 + RBAC 求值 + 审计写入
+│   │   │   ├── crypto.js    # 信封加密、scrypt、JWT 原语
+│   │   │   └── db.js        # SQLite schema（DDL 以 PG 语义设计）
+│   │   └── scripts/smoke.js
+│   ├── web/                 # @taboo/web — React 19 + TS + Vite Dashboard
+│   └── cli/                 # @taboo/cli — bin: taboo（login/set/get/list/export/run）
 └── README.md
 ```
+
+### 根目录常用命令
+
+```bash
+npm install          # 一次安装全部 workspace 依赖（提升到根 node_modules）
+npm start            # = @taboo/server，起 API + 托管 web/dist（:7100）
+npm run dev          # = @taboo/web Vite 开发模式（/api 代理到 7100）；参数透传：npm run dev -- --port 7100
+npm run build        # 构建 @taboo/web → apps/web/dist
+npm run smoke        # 14 项端到端冒烟检查（需先 npm start）
+npm run cli -- login you@example.com your-password
+```
+
+单 workspace 命令形如 `npm run <script> -w @taboo/server`。未来共享代码（SDK、常量、OpenAPI 生成物）放 `packages/`，已预留 workspace 通配。
 
 ## 路线图（对齐设计文档 §10）
 

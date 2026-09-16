@@ -1,0 +1,13 @@
+{
+  "name": "@taboo/cli",
+  "version": "0.1.0",
+  "description": "taboo (禁制) CLI — login / set / get / list / export / run",
+  "type": "module",
+  "bin": {
+    "taboo": "./taboo.js"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

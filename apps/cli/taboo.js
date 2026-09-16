@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // taboo CLI（MVP）—— 对齐设计文档 §2 CLI 命令子集
 //   taboo login <email> <password>          登录，会话存 ~/.taboo/session.json
 //   taboo set <KEY> <VALUE> [--env dev]     写入/更新密钥（产生新版本）

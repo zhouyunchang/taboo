@@ -1,0 +1,20 @@
+{
+  "name": "taboo",
+  "version": "0.1.0",
+  "description": "taboo（禁制）— 开源自部署密钥管理平台。Monorepo 根包。",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "npm run start -w @taboo/server",
+    "dev": "npm run dev -w @taboo/web --",
+    "build": "npm run build -w @taboo/web",
+    "smoke": "npm run smoke -w @taboo/server",
+    "cli": "node apps/cli/taboo.js"
+  }
+}

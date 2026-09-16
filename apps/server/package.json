@@ -1,5 +1,5 @@
 {
-  "name": "taboo-server",
+  "name": "@taboo/server",
   "version": "0.1.0",
   "description": "taboo (禁制) — lightweight self-hosted secrets management platform. MVP API server.",
   "type": "module",
