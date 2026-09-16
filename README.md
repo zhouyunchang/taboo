@@ -20,13 +20,26 @@
 - [x] 信封加密三层结构：Root Key (KEK) → 组织 DEK → Secret Value（AES-256-GCM，nonce 12B 随机不复用）
 - [x] 注册即建个人组织 + 默认项目 + dev/staging/prod 三环境；组织/项目/环境模型
 - [x] 密钥 CRUD + 版本历史 + 回滚（`secret_versions` 只追加）
-- [x] 用户认证：scrypt 密码哈希（Go 版迁移 Argon2id）、JWT 15min + refresh 旋转
+- [x] 用户认证：**Argon2id**（m=64MB,t=3,p=4）密码哈希（旧 scrypt 登录透明迁移）+ JWT 15min + refresh 旋转 + 登录限流 5 次/分钟/IP
 - [x] RBAC-lite：owner / admin / developer / viewer；**reveal（取明文）与 read（看元数据）分离**；developer 禁写 prod
 - [x] 审计日志：append-only，谁何时对哪个密钥做了什么（读/写/删/回滚/导出）
 - [x] REST API：`/api/v1/auth/*`、`/orgs/*`、`/projects/*/secrets`、`export`、`/audit`
 - [x] Web Dashboard：登录注册、项目/环境切换、密钥表（掩码/显示/复制 20s 自清除）、版本抽屉+回滚、审计筛选
 - [x] CLI：`login / set / get / list / export / run`（`run` 对齐设计文档 §7.1 注入流程）
+- [x] **Go 后端（apps/server-go，M1）**：Chi 路由、模块化单体（internal/{config,server,auth,secret,crypto,org,store,apperr}）、`embed.FS` 单二进制、同一套 14 项冒烟测试全过
 - [ ] 机器身份（Machine Identity）、动态密钥、MCP Server、Secret Sync、TOTP 2FA → 见路线图
+
+## 双后端说明
+
+| | `apps/server`（Node MVP） | `apps/server-go`（Go，M1 起主推） |
+|---|---|---|
+| 定位 | 设计契约验证，功能参考实现 | 目标架构（设计文档 §3），持续演进 |
+| 存储 | `node:sqlite` | `modernc.org/sqlite`（纯 Go 免 CGO） |
+| 密码哈希 | scrypt | Argon2id（含 scrypt 透明迁移） |
+| 前端托管 | 运行时读 `apps/web/dist` | 构建期 `embed.FS` 进二进制 |
+| 启动 | `npm start` | `make -C apps/server-go build && ./apps/server-go/bin/taboo-server` |
+
+两后端共用同一套 API 契约（`apps/server/scripts/smoke.js` 14 项端到端检查对两者均可运行）。
 
 ## 快速开始
 
@@ -103,8 +116,8 @@ npm run cli -- login you@example.com your-password
 
 | 阶段 | 内容 |
 |---|---|
-| **M0（当前）** | Node.js MVP：验证加密架构、API 契约、RBAC、审计 |
-| M1 | Go 重写（Chi + sqlc + modernc.org/sqlite/PG）、Argon2id、embed.FS 单二进制 |
+| **M0（已完成）** | Node.js MVP：验证加密架构、API 契约、RBAC、审计 |
+| **M1（进行中）** | Go 后端已落地（Chi + modernc.org/sqlite、Argon2id、embed.FS 单二进制，冒烟全过）；剩余：sqlc 代码生成、PostgreSQL 主模式 |
 | M2 | 机器身份（client_credentials + scope）、TOTP 2FA、文件夹多级路径 |
 | M3 | CLI 全命令（scan 泄漏扫描）、OpenAPI 契约、SDK |
 | M4 | 动态密钥（PG/MySQL lease）、MCP Server（AI Agent 只读访问） |
