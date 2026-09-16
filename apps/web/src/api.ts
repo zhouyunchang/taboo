@@ -59,26 +59,20 @@ export const api = {
   del: <T,>(path: string) => request<T>('DELETE', path),
 };
 
-export interface User { id: string; email: string; name: string }
-export interface Org { id: string; name: string; slug: string; role: string }
-export interface Project { id: string; name: string; slug: string; created_at: string }
-export interface Env { id: string; name: string; slug: string; sort_order: number }
-export interface Folder { id: string; parent_id: string; name: string; path: string }
-export interface SecretMeta {
-  id: string; folder: string; key: string; comment: string;
-  tags: string[]; version: number; updated_at: string; canReveal: boolean;
-}
-export interface SecretValue extends SecretMeta { value: string }
-export interface Version { version: number; created_by: string; created_at: string }
-export interface AuditLog {
-  id: string; actor_name: string; action: string; resource: string;
-  metadata: string; ip: string; created_at: string;
-}
-export interface IdentityScope {
-  project_id: string; project_slug: string; env: string; permission: string;
-}
-export interface Identity {
-  id: string; name: string; client_id: string; status: string;
-  token_ttl: number; created_at: string; scopes: IdentityScope[];
-}
-export interface CreatedIdentity extends Identity { client_secret: string }
+// 实体类型由 api/openapi.yaml 生成（npm run types），此处仅做别名映射保持导入路径不变
+import type { components } from './api-types';
+
+type Schemas = components['schemas'];
+
+export type User = Schemas['User'];
+export type Org = Schemas['OrgMembership'];
+export type Project = Schemas['Project'];
+export type Env = Schemas['Environment'];
+export type Folder = Schemas['Folder'];
+export type SecretMeta = Schemas['SecretMeta'];
+export type SecretValue = Schemas['SecretValue'];
+export type Version = Schemas['SecretVersion'];
+export type AuditLog = Schemas['AuditLog'];
+export type IdentityScope = Schemas['IdentityScope'];
+export type Identity = Schemas['Identity'];
+export type CreatedIdentity = Schemas['IdentityWithSecret'];

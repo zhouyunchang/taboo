@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173 --strictPort",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "types": "openapi-typescript ../../api/openapi.yaml -o src/api-types.ts"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -16,6 +17,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.4.0",
+    "openapi-typescript": "^7.13.0",
     "typescript": "^5.8.0",
     "vite": "^6.3.0"
   }

@@ -74,6 +74,16 @@ func New(d *Deps) *chi.Mux {
 		})
 	})
 
+	// API 文档（Scalar，引用 CDN；契约本体为 api/openapi.yaml）
+	r.Get("/api/docs", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><title>taboo API 文档</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"></head><body>
+<script id="api-reference" data-url="/api/openapi.yaml"></script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body></html>`))
+	})
+
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(404)

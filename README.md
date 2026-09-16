@@ -30,6 +30,7 @@
 - [x] **机器身份（M2 #3，Go 版）**：client_credentials 换短期 JWT（TTL 可配 ≤1h，临期 CLI 自动重换）；scope 显式 (项目+环境+read|write) **禁止通配**；吊销立即生效；审计 actor 标识 `identity:xxx`；Web 管理页（创建向导/一次性 secret 展示/吊销）+ 22 项专项冒烟全过
 - [x] **多级文件夹（M2 #5，Go 版）**：物化路径 `/a/b/`、`folders` 表 + `secrets.folder_id`（存量幂等迁移）；创建自动补中间节点、移动/重命名级联子孙、仅空目录可删、根目录保护、路径穿越拒绝；密钥按目录隔离（同 key 不同目录互不冲突）；前端文件夹树 + 面包屑 + 目录过滤；24 项专项冒烟全过
 - [x] **TOTP 2FA（M2 #4，Go 版）**：RFC 6238（SHA1/30s/6 位，stdlib 实现）+ otpauth 二维码；登录 `totp_required` → 5min challenge 二次验证换 token；secret 加密落库、时间窗防重放（last_step 单调）；10 个恢复码（仅存哈希、用后即废）；disable 需密码确认；前端登录 2FA 步 + 设置抽屉（扫码/密钥/恢复码）；23 项专项冒烟全过
+- [x] **OpenAPI 3.1 契约（M3 #7）**：`api/openapi.yaml` 为 REST 唯一事实源（auth/TOTP/orgs/identities/folders/secrets 全量端点 + `{code,message,details}` 错误模型）；前端 TS 类型由契约生成（`npm run types -w @taboo/web`）；Go 契约漂移测试（chi 路由表 vs 契约，漂移即失败）；Scalar 文档页 `/api/docs`
 - [ ] 动态密钥、MCP Server、Secret Sync、TOTP 2FA → 见路线图
 
 ## 双后端说明
@@ -117,7 +118,7 @@ npm run cli -- login you@example.com your-password
 | **M0（已完成）** | Node.js MVP：验证加密架构、API 契约、RBAC、审计 |
 | **M1（进行中）** | Go 后端已落地（Chi + modernc.org/sqlite、Argon2id、embed.FS 单二进制，冒烟全过）；剩余：sqlc 代码生成、PostgreSQL 主模式 |
 | M2 | 机器身份（✅ #3）、文件夹多级路径（✅ #5）、TOTP 2FA（✅ #4）—— **M2 全部完成** |
-| M3 | CLI 全命令（scan 泄漏扫描）、OpenAPI 契约、SDK |
+| M3 | CLI 全命令（scan ✅ #6）、OpenAPI 契约（✅ #7）、SDK（#8） |
 | M4 | 动态密钥（PG/MySQL lease）、MCP Server（AI Agent 只读访问） |
 | M5 | Secret Sync、Webhooks、OIDC SSO、审计导出、Docker/Helm 发布 |
 

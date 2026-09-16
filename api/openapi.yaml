@@ -1,0 +1,638 @@
+# taboo（禁制）OpenAPI 3.1 契约 —— 前后端与 SDK 的唯一事实源（M3 #7）
+# 约定：
+#   - 错误统一 {code, message, details}；Bearer 鉴权；写路径支持 Idempotency-Key 头（幂等约定，v1.5 强制）
+#   - 审计类列表为 cursor 分页预留（当前 limit/offset 兼容实现）
+openapi: 3.1.0
+info:
+  title: taboo · 禁制 — 密钥管理平台 API
+  version: 0.3.0
+  description: 开源自部署密钥管理平台。高价值数据 + 严格访问控制 + 全程留痕。
+servers:
+  - url: http://localhost:7100
+    description: 本地开发
+tags:
+  - { name: auth, description: 认证（注册/登录/refresh/TOTP 2FA） }
+  - { name: orgs, description: 组织 / 项目 / 环境 / 审计 }
+  - { name: secrets, description: 密钥 CRUD / 版本 / 回滚 / 导出 }
+  - { name: folders, description: 多级文件夹（物化路径 /a/b/） }
+  - { name: identities, description: 机器身份（client_credentials + 显式 scope） }
+
+paths:
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      summary: 注册（自动创建个人组织 + 默认项目 + dev/staging/prod）
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201': { description: 注册成功, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: 登录（限流 5 次/分钟/IP）；已开 2FA 返回 totp_required + challenge
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: 登录成功（或需二次验证）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: 刷新 token（旋转：旧 refresh 立即失效）
+      operationId: refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh]
+              properties: { refresh: { type: string } }
+      responses:
+        '200': { description: 新 token 对, content: { application/json: { schema: { $ref: '#/components/schemas/TokenPair' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/totp/setup:
+    post:
+      tags: [auth]
+      summary: 生成 TOTP 待激活密钥（返回 secret / otpauth URL / 二维码 PNG）
+      operationId: totpSetup
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 待激活密钥（secret 明文仅此一次展示）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string, example: JBSWY3DPEHPK3PXP }
+                  otpauth_url: { type: string, format: uri }
+                  qr_png: { type: string, description: data:image/png;base64 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/totp/verify:
+    post:
+      tags: [auth]
+      summary: 校验动态码并激活 2FA（签发 10 个恢复码，仅展示一次）
+      operationId: totpVerify
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties: { code: { type: string, example: '123456' } }
+      responses:
+        '200':
+          description: 已开启
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean, example: true }
+                  recovery_codes: { type: array, items: { type: string, example: abcde-fghi-jklmn } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/totp/disable:
+    post:
+      tags: [auth]
+      summary: 关闭 2FA（需密码确认，恢复码一并作废）
+      operationId: totpDisable
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties: { password: { type: string, format: password } }
+      responses:
+        '200': { description: 已关闭, content: { application/json: { schema: { type: object, properties: { enabled: { type: boolean, example: false } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/auth/totp/login:
+    post:
+      tags: [auth]
+      summary: 2FA 第二步：challenge + 动态码/恢复码 → 换正式 token（限流）
+      operationId: totpLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge, code]
+              properties:
+                challenge: { type: string, description: login 返回的 5min JWT }
+                code: { type: string, description: 6 位动态码或 xxxx-xxx-xxxx 恢复码 }
+      responses:
+        '200': { description: 登录成功, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/me:
+    get:
+      tags: [orgs]
+      summary: 当前用户 + 组织列表 + 2FA 状态
+      operationId: me
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: 当前用户
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  orgs: { type: array, items: { $ref: '#/components/schemas/OrgMembership' } }
+                  totp_enabled: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/orgs/{slug}/projects:
+    get:
+      tags: [orgs]
+      summary: 组织项目列表
+      operationId: listProjects
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200': { description: 项目列表, content: { application/json: { schema: { type: object, properties: { projects: { type: array, items: { $ref: '#/components/schemas/Project' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [orgs]
+      summary: 新建项目（自动建 dev/staging/prod + 根文件夹）
+      operationId: createProject
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string } }
+      responses:
+        '201': { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/v1/orgs/{slug}/audit:
+    get:
+      tags: [orgs]
+      summary: 审计日志（append-only）
+      operationId: audit
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+        - { name: before, in: query, schema: { type: string }, description: cursor 分页预留（当前按时间倒序 limit） }
+      responses:
+        '200':
+          description: 审计记录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/orgs/{slug}/identities:
+    get:
+      tags: [identities]
+      summary: 机器身份列表（owner/admin）
+      operationId: listIdentities
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200': { description: 身份列表, content: { application/json: { schema: { type: object, properties: { identities: { type: array, items: { $ref: '#/components/schemas/Identity' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [identities]
+      summary: 创建机器身份（client_secret 仅此一次返回）
+      operationId: createIdentity
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IdentityCreateRequest' }
+      responses:
+        '201': { description: 已创建（含一次性 client_secret）, content: { application/json: { schema: { $ref: '#/components/schemas/IdentityWithSecret' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/v1/orgs/{slug}/identities/{id}/revoke:
+    post:
+      tags: [identities]
+      summary: 吊销机器身份（token 立即失效）
+      operationId: revokeIdentity
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已吊销 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/identities/token:
+    post:
+      tags: [identities]
+      summary: client_credentials 换短期 JWT（限流）
+      operationId: identityToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_id, client_secret]
+              properties:
+                client_id: { type: string }
+                client_secret: { type: string }
+      responses:
+        '200':
+          description: 短期 token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, example: Bearer }
+                  expires_in: { type: integer, example: 900 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/projects/{pid}/environments:
+    get:
+      tags: [orgs]
+      summary: 项目环境列表
+      operationId: listEnvs
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
+      responses:
+        '200': { description: 环境列表, content: { application/json: { schema: { type: object, properties: { environments: { type: array, items: { $ref: '#/components/schemas/Environment' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [orgs]
+      summary: 新建环境（自动建根文件夹）
+      operationId: createEnv
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string } }
+      responses:
+        '201': { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/Environment' } } } }
+  /api/v1/projects/{pid}/folders:
+    get:
+      tags: [folders]
+      summary: 平铺文件夹列表（前端按 parent_id 建树）
+      operationId: listFolders
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      responses:
+        '200': { description: 文件夹列表, content: { application/json: { schema: { type: object, properties: { folders: { type: array, items: { $ref: '#/components/schemas/Folder' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [folders]
+      summary: 创建文件夹（自动补中间节点，幂等）
+      operationId: createFolder
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties: { path: { type: string, example: /db/mysql/ } }
+      responses:
+        '201': { description: 已创建, content: { application/json: { schema: { type: object, properties: { id: { type: string }, path: { type: string } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    delete:
+      tags: [folders]
+      summary: 删除空文件夹（无子目录且无密钥；根目录拒绝）
+      operationId: deleteFolder
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已删除 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/folders/move:
+    post:
+      tags: [folders]
+      summary: 移动/重命名文件夹（级联更新子孙物化路径与密钥 folder 冗余列）
+      operationId: moveFolder
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to]
+              properties:
+                from: { type: string, example: /db/ }
+                to: { type: string, example: /database/ }
+      responses:
+        '200': { description: 已移动 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/secrets:
+    get:
+      tags: [secrets]
+      summary: 密钥列表（无值；?path= 按文件夹过滤，缺省全环境）
+      operationId: listSecrets
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: path, in: query, schema: { type: string, description: 物化路径 /a/b/，缺省列出整个环境 } }
+      responses:
+        '200': { description: 密钥元数据列表, content: { application/json: { schema: { type: object, properties: { secrets: { type: array, items: { $ref: '#/components/schemas/SecretMeta' } } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [secrets]
+      summary: 创建/更新密钥（AES-256-GCM 信封加密，产生新版本；同 key 不同目录互不冲突）
+      operationId: upsertSecret
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: path, in: query, schema: { type: string, default: / } }
+        - { name: Idempotency-Key, in: header, schema: { type: string }, description: 幂等约定（v1.5 强制） }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SecretUpsertRequest' }
+      responses:
+        '200': { description: 已保存（含新版本号）, content: { application/json: { schema: { type: object, properties: { version: { type: integer } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/projects/{pid}/secrets/{key}:
+    get:
+      tags: [secrets]
+      summary: 读取明文（reveal 权限，记审计；?path= 定位目录）
+      operationId: revealSecret
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: key, in: path, required: true, schema: { type: string } }
+        - { name: path, in: query, schema: { type: string, default: / } }
+      responses:
+        '200': { description: 明文, content: { application/json: { schema: { $ref: '#/components/schemas/SecretValue' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/secrets/{key}/versions:
+    get:
+      tags: [secrets]
+      summary: 版本历史（只追加）
+      operationId: secretVersions
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: key, in: path, required: true, schema: { type: string } }
+        - { name: path, in: query, schema: { type: string, default: / } }
+      responses:
+        '200':
+          description: 版本列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions: { type: array, items: { $ref: '#/components/schemas/SecretVersion' } }
+                  latest: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/secrets/{key}/rollback:
+    post:
+      tags: [secrets]
+      summary: 回滚到历史版本（以旧值产生新版本 v+1）
+      operationId: rollbackSecret
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: key, in: path, required: true, schema: { type: string } }
+        - { name: path, in: query, schema: { type: string, default: / } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties: { version: { type: integer } }
+      responses:
+        '200': { description: 已回滚, content: { application/json: { schema: { type: object, properties: { version: { type: integer } } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/export:
+    get:
+      tags: [secrets]
+      summary: 导出 .env 格式（reveal 权限；值仅出现在响应体）
+      operationId: exportSecrets
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      responses:
+        '200':
+          description: text/plain .env 内容
+          content:
+            text/plain: {}
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    OrgSlug: { name: slug, in: path, required: true, schema: { type: string } }
+    Pid: { name: pid, in: path, required: true, schema: { type: string } }
+    Env: { name: env, in: query, schema: { type: string, default: dev } }
+  responses:
+    BadRequest: { description: 参数错误, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unauthorized: { description: 未认证/凭证错误, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: 权限不足（RBAC），如 viewer 取明文、developer 写 prod, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: 资源不存在, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: 冲突（如邮箱已注册）, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    RateLimited: { description: 限流（5 次/分钟/IP，可用 TABOO_LOGIN_RATE_LIMIT 调整）, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        code: { type: string, example: BAD_CREDENTIALS }
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        name: { type: string }
+    OrgMembership:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        role: { type: string, enum: [owner, admin, developer, viewer] }
+    Project:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        created_at: { type: string, format: date-time }
+    Environment:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        sort_order: { type: integer }
+    Folder:
+      type: object
+      properties:
+        id: { type: string }
+        parent_id: { type: string, description: 根目录为空串 }
+        name: { type: string }
+        path: { type: string, example: /db/mysql/ }
+    SecretMeta:
+      type: object
+      properties:
+        id: { type: string }
+        folder: { type: string }
+        key: { type: string }
+        comment: { type: string }
+        tags: { type: array, items: { type: string } }
+        version: { type: integer }
+        updated_at: { type: string }
+        canReveal: { type: boolean }
+    SecretValue:
+      allOf:
+        - { $ref: '#/components/schemas/SecretMeta' }
+        - type: object
+          properties: { value: { type: string } }
+    SecretVersion:
+      type: object
+      properties:
+        version: { type: integer }
+        created_by: { type: string }
+        created_at: { type: string }
+    SecretUpsertRequest:
+      type: object
+      required: [key, value]
+      properties:
+        key: { type: string }
+        value: { type: string }
+        comment: { type: string }
+        tags: { type: array, items: { type: string } }
+    AuditLog:
+      type: object
+      properties:
+        id: { type: string }
+        actor_name: { type: string }
+        action: { type: string, example: secrets.reveal }
+        resource: { type: string }
+        metadata: { type: string }
+        ip: { type: string }
+        created_at: { type: string }
+    IdentityScope:
+      type: object
+      properties:
+        project_id: { type: string }
+        project_slug: { type: string }
+        env: { type: string, description: 显式环境，禁止通配 }
+        permission: { type: string, enum: [read, write] }
+    Identity:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        client_id: { type: string }
+        status: { type: string, enum: [active, revoked] }
+        token_ttl: { type: integer }
+        created_at: { type: string }
+        scopes: { type: array, items: { $ref: '#/components/schemas/IdentityScope' } }
+    IdentityWithSecret:
+      allOf:
+        - { $ref: '#/components/schemas/Identity' }
+        - type: object
+          properties: { client_secret: { type: string, description: 仅此一次展示 } }
+    IdentityCreateRequest:
+      type: object
+      required: [name, scopes]
+      properties:
+        name: { type: string }
+        token_ttl: { type: integer, default: 900, maximum: 3600 }
+        scopes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [project_id, env, permission]
+            properties:
+              project_id: { type: string }
+              env: { type: string }
+              permission: { type: string, enum: [read, write] }
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 8 }
+        name: { type: string }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+    TokenPair:
+      type: object
+      properties:
+        access: { type: string }
+        refresh: { type: string }
+        tokenType: { type: string, example: Bearer }
+        expiresIn: { type: integer, example: 900 }
+    AuthResponse:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        tokens: { $ref: '#/components/schemas/TokenPair' }
+    LoginResponse:
+      oneOf:
+        - title: 直接登录成功
+          allOf: [{ $ref: '#/components/schemas/AuthResponse' }]
+        - title: 需要 2FA 二次验证
+          type: object
+          properties:
+            totp_required: { type: boolean, const: true }
+            challenge: { type: string }
