@@ -8,16 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
-	Port      string // TABOO_PORT / PORT，默认 7100
-	DataDir   string // TABOO_DATA_DIR，默认 <exe>/../../data（开发期）或 cwd/data
-	MasterKey string // TABOO_MASTER_KEY（hex/base64 32B）；空则读/生成 data/master.key
-	JWTSecret string // TABOO_JWT_SECRET；空则随机（重启会话失效，并打印告警）
-	CORS      string // TABOO_CORS_ORIGIN，默认 *
-	WebDist   string // TABOO_WEB_DIST，默认 <module>/web（embed 优先）
-	LoginRate int    // TABOO_LOGIN_RATE_LIMIT，每 IP 每窗口登录类请求上限，默认 5
+	Port            string // TABOO_PORT / PORT，默认 7100
+	DataDir         string // TABOO_DATA_DIR，默认 <exe>/../../data（开发期）或 cwd/data
+	MasterKey       string // TABOO_MASTER_KEY（hex/base64 32B）；空则读/生成 data/master.key
+	JWTSecret       string // TABOO_JWT_SECRET；空则随机（重启会话失效，并打印告警）
+	CORS            string // TABOO_CORS_ORIGIN，默认 *
+	WebDist         string // TABOO_WEB_DIST，默认 <module>/web（embed 优先）
+	LoginRate       int    // TABOO_LOGIN_RATE_LIMIT，每 IP 每窗口登录类请求上限，默认 5
+	DisableRegister bool   // TABOO_DISABLE_REGISTER：关闭邮箱注册（Keycloak 等外部用户源）
+	DisablePassword bool   // TABOO_DISABLE_PASSWORD：关闭密码登录，仅外部 Realm
 }
 
 func Load() *Config {
@@ -32,6 +35,8 @@ func Load() *Config {
 			c.LoginRate = n
 		}
 	}
+	c.DisableRegister = envBool("TABOO_DISABLE_REGISTER")
+	c.DisablePassword = envBool("TABOO_DISABLE_PASSWORD")
 	if _, err := os.Stat(c.DataDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(c.DataDir, 0o700)
 	}
@@ -73,4 +78,13 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func envBool(k string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(k))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

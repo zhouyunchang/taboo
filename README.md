@@ -26,6 +26,7 @@
 - [x] 注册即建个人组织 + 默认项目 + dev/staging/prod 三环境；组织/项目/环境模型
 - [x] 密钥 CRUD + 版本历史 + 回滚（`secret_versions` 只追加）
 - [x] 用户认证：**Argon2id**（m=64MB,t=3,p=4）密码哈希（旧 scrypt 登录透明迁移）+ JWT 15min + refresh 旋转 + 登录限流 5 次/分钟/IP
+- [x] 外部用户源：OIDC Realm（Keycloak 等），登录页一键跳转、`sub` 绑定、组角色同步、PKCE
 - [x] RBAC-lite：owner / admin / developer / viewer；**reveal（取明文）与 read（看元数据）分离**；developer 禁写 prod
 - [x] 审计日志：append-only，谁何时对哪个密钥做了什么（读/写/删/回滚/导出）
 - [x] REST API：`/api/v1/auth/*`、`/orgs/*`、`/projects/*/secrets`、`export`、`/audit`
@@ -89,6 +90,13 @@ npm run smoke
 | `TABOO_JWT_SECRET` | 随机（重启失效） | 生产必须显式设置 |
 | `TABOO_CORS_ORIGIN` | `*` | 开发跨域来源 |
 | `TABOO_LOGIN_RATE_LIMIT` | `5` | 登录类接口（login / totp/login / identities/token）每 IP 每窗口上限 |
+| `TABOO_OIDC_ISSUER` | 空 | 启动时自动登记 OIDC Realm（须与 CLIENT_ID/SECRET/ORG 同时设置） |
+| `TABOO_OIDC_CLIENT_ID` | 空 | Keycloak Confidential Client ID |
+| `TABOO_OIDC_CLIENT_SECRET` | 空 | Client Secret（加密落库） |
+| `TABOO_OIDC_ORG` | 空 | 已有组织 slug（JIT 入组目标） |
+| `TABOO_OIDC_NAME` | `Keycloak` | 登录页按钮名称 |
+| `TABOO_DISABLE_REGISTER` | 关 | `1/true` 关闭邮箱注册 |
+| `TABOO_DISABLE_PASSWORD` | 关 | `1/true` 关闭密码登录，仅外部 Realm |
 
 ## Monorepo 结构
 

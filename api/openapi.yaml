@@ -18,9 +18,27 @@ tags:
   - { name: identities, description: 机器身份（client_credentials + 显式 scope） }
   - { name: sync, description: Secret Sync 外部平台推送（GitHub Actions / Vercel / Cloudflare） }
   - { name: webhooks, description: 密钥变更事件 Webhook（HMAC-SHA256 签名） }
-  - { name: sso, description: OIDC 单点登录（JIT 入组 + 角色映射） }
+  - { name: sso, description: 外部用户源 / OIDC Realm（Keycloak 等，JIT 入组 + 组角色映射） }
 
 paths:
+  /api/v1/auth/sources:
+    get:
+      tags: [sso]
+      summary: 登录页 Realm 列表（仅 public_login 的 IdP）以及本地注册/密码是否开放
+      operationId: listAuthSources
+      responses:
+        '200':
+          description: 登录选项
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  register_enabled: { type: boolean }
+                  password_enabled: { type: boolean }
+                  sources:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuthSource' }
   /api/v1/auth/register:
     post:
       tags: [auth]
@@ -34,6 +52,7 @@ paths:
       responses:
         '201': { description: 注册成功, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
   /api/v1/auth/login:
     post:
@@ -52,6 +71,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LoginResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/RateLimited' }
   /api/v1/auth/refresh:
     post:
@@ -731,10 +751,11 @@ paths:
   /api/v1/auth/oidc/{slug}/login:
     get:
       tags: [sso]
-      summary: OIDC 登录入口（302 跳转 IdP 授权端点；公开，限流保护）
+      summary: OIDC 登录入口（302 跳转 IdP；PKCE S256 + nonce；公开，限流保护）
       operationId: oidcLogin
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: pid, in: query, schema: { type: string }, description: 指定 IdP 配置 id；缺省取该组织第一个已启用配置 }
       responses:
         '302': { description: 重定向到 IdP }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -788,6 +809,24 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/orgs/{slug}/oidc/{id}:
+    patch:
+      tags: [sso]
+      summary: 更新 IdP 配置（owner；client_secret 可选轮换）
+      operationId: updateOIDCProvider
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OIDCProviderInput' }
+      responses:
+        '200': { description: 已更新, content: { application/json: { schema: { type: object, properties: { id: { type: string }, updated: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       tags: [sso]
       summary: 删除 IdP 配置（owner）
@@ -879,6 +918,13 @@ components:
         id: { type: string }
         email: { type: string, format: email }
         name: { type: string }
+        kind: { type: string, enum: [user, identity] }
+    AuthSource:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        login_url: { type: string }
     OrgMembership:
       type: object
       properties:
@@ -1005,23 +1051,31 @@ components:
         client_id: { type: string }
         scopes: { type: string }
         role_claim: { type: string }
+        username_claim: { type: string }
         role_map: { type: object, additionalProperties: { type: string } }
         default_role: { type: string, enum: [viewer, developer, admin, owner] }
+        public_login: { type: boolean, description: 在登录页展示为实例级 Realm }
+        autocreate: { type: boolean }
+        sync_role: { type: boolean, description: 每次 SSO 登录按组映射同步角色（不降级最后一名 owner） }
         enabled: { type: boolean }
         created_at: { type: string }
         login_url: { type: string }
     OIDCProviderInput:
       type: object
-      required: [name, issuer, client_id, client_secret]
       properties:
         name: { type: string }
-        issuer: { type: string, example: https://idp.example.com/realms/team }
+        issuer: { type: string, example: https://keycloak.example.com/realms/company }
         client_id: { type: string }
-        client_secret: { type: string, description: Master Key 加密落库，不回显 }
+        client_secret: { type: string, description: Master Key 加密落库，不回显；PATCH 时可省略 }
         scopes: { type: string, default: openid,email,profile }
-        role_claim: { type: string, default: groups }
-        role_map: { type: object, additionalProperties: { type: string }, description: claim 值 → 角色（viewer/developer/admin/owner） }
+        role_claim: { type: string, default: groups, description: 支持点分路径，如 realm_access.roles }
+        username_claim: { type: string, default: email }
+        role_map: { type: object, additionalProperties: { type: string }, description: claim 值 → 角色；Keycloak 组路径会匹配末段 }
         default_role: { type: string, default: viewer }
+        public_login: { type: boolean, default: true }
+        autocreate: { type: boolean, default: true }
+        sync_role: { type: boolean, default: true }
+        enabled: { type: boolean }
     AuditExport:
       type: object
       properties:

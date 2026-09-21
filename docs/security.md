@@ -19,6 +19,11 @@ Root Key (KEK, Master Key)        文件 / 环境变量 / K8s Secret
   （developer 禁止 prod 明文与写入）
 - 机器身份：显式 `(项目, 环境, read|write)` scope 三元组，**禁止通配**
 - 密钥值默认掩码；reveal 走独立接口（二次权限校验 + 审计 + IP 记录）
+- **外部用户源（OIDC Realm）**：Keycloak / Authentik 等按 Proxmox 方式接入。
+  用户以 IdP `sub` 绑定；登录页展示 `public_login` 的 Realm。组 claim
+  （`groups` 或 `realm_access.roles`）映射角色，可每次登录同步。
+  新用户不会被映射成 owner。PKCE S256 + nonce。可用
+  `TABOO_DISABLE_REGISTER` / `TABOO_DISABLE_PASSWORD` 关掉本地账号。
 
 ## 审计
 

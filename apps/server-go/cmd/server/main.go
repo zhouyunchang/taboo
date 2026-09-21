@@ -19,6 +19,7 @@ import (
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/server"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
@@ -71,6 +72,8 @@ func main() {
 		log.Println("[taboo] dynamic engine: MOCK (no real database touched)")
 	}
 
+	oidc.BootstrapFromEnv(db, masterKey)
+
 	dynSvc := dynamic.New(db, masterKey)
 
 	// Secret Sync（M5 #11）：事件订阅 + 后台 worker 同一实例
@@ -82,17 +85,19 @@ func main() {
 	webhooks.Subscribe(bus)
 
 	r := server.New(&server.Deps{
-		DB:        db,
-		MasterKey: masterKey,
-		JWTSecret: cfg.JWTSecret,
-		CORS:      cfg.CORS,
-		DEKs:      deks,
-		LoginRate: cfg.LoginRate,
-		Dynamic:   dynSvc,
-		DataDir:   cfg.DataDir,
-		Events:    bus,
-		Sync:      syncs,
-		Webhooks:  webhooks,
+		DB:              db,
+		MasterKey:       masterKey,
+		JWTSecret:       cfg.JWTSecret,
+		CORS:            cfg.CORS,
+		DEKs:            deks,
+		LoginRate:       cfg.LoginRate,
+		Dynamic:         dynSvc,
+		DataDir:         cfg.DataDir,
+		Events:          bus,
+		Sync:            syncs,
+		Webhooks:        webhooks,
+		DisableRegister: cfg.DisableRegister,
+		DisablePassword: cfg.DisablePassword,
 	})
 
 	// 动态密钥后台 worker：到期回收 + 身份吊销联动（M4 #9）

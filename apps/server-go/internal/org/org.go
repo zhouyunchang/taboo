@@ -19,11 +19,13 @@ import (
 )
 
 type Service struct {
-	DB        *sql.DB
-	MasterKey []byte
-	JWTSecret string
-	DEKs      *tc.DEKCache
-	DataDir   string // M5 #14：审计导出文件落盘目录（空 = 禁用异步导出）
+	DB              *sql.DB
+	MasterKey       []byte
+	JWTSecret       string
+	DEKs            *tc.DEKCache
+	DataDir         string // M5 #14：审计导出文件落盘目录（空 = 禁用异步导出）
+	DisableRegister bool
+	DisablePassword bool
 }
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
@@ -94,6 +96,10 @@ type tokens struct {
 }
 
 func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
+	if s.DisableRegister {
+		writeErr(w, apperr.New(403, "REGISTER_DISABLED", "registration is disabled; use the configured identity source"))
+		return
+	}
 	var b struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -120,7 +126,7 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)`,
+	if _, err := s.DB.Exec(`INSERT INTO users (id, email, name, password_hash, auth_source) VALUES (?, ?, ?, ?, 'local')`,
 		userID, email, b.Name, hash); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -187,6 +193,10 @@ func hexEncode(b []byte) string {
 }
 
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
+	if s.DisablePassword {
+		writeErr(w, apperr.New(403, "PASSWORD_DISABLED", "password login is disabled; use SSO"))
+		return
+	}
 	var b struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -269,10 +279,10 @@ func (s *Service) Refresh(w http.ResponseWriter, r *http.Request) {
 func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	type orgRow struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Slug  string `json:"slug"`
-		Role  string `json:"role"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+		Role string `json:"role"`
 	}
 	rows, err := s.DB.Query(`SELECT o.id, o.name, o.slug, m.role FROM orgs o
 		JOIN org_members m ON m.org_id = o.id WHERE m.user_id = ?`, u.ID)
@@ -323,9 +333,9 @@ func (s *Service) ListProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type proj struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Slug  string `json:"slug"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Slug    string `json:"slug"`
 		Created string `json:"created_at"`
 	}
 	out := []proj{}
@@ -402,10 +412,10 @@ func (s *Service) ListEnvs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type env struct {
-		ID     string `json:"id"`
-		Name   string `json:"name"`
-		Slug   string `json:"slug"`
-		Sort   int    `json:"sort_order"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+		Sort int    `json:"sort_order"`
 	}
 	out := []env{}
 	for rows.Next() {

@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS users (
   name             TEXT NOT NULL DEFAULT '',
   password_hash    TEXT NOT NULL,
   status           TEXT NOT NULL DEFAULT 'active',
+  auth_source      TEXT NOT NULL DEFAULT 'local',
+  external_sub     TEXT NOT NULL DEFAULT '',
   totp_pending_enc TEXT,
   totp_secret_enc  TEXT,
   totp_enabled     INTEGER NOT NULL DEFAULT 0,
@@ -236,6 +238,10 @@ CREATE TABLE IF NOT EXISTS oidc_providers (
   role_claim        TEXT NOT NULL DEFAULT 'groups',
   role_map          TEXT NOT NULL DEFAULT '{}',
   default_role      TEXT NOT NULL DEFAULT 'viewer',
+  username_claim    TEXT NOT NULL DEFAULT 'email',
+  public_login      INTEGER NOT NULL DEFAULT 0,
+  autocreate        INTEGER NOT NULL DEFAULT 1,
+  sync_role         INTEGER NOT NULL DEFAULT 1,
   enabled           INTEGER NOT NULL DEFAULT 1,
   created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -295,6 +301,13 @@ CREATE TABLE IF NOT EXISTS dynamic_leases (
 	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_secret_enc TEXT`)
 	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'`)
+	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN external_sub TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external ON users(auth_source, external_sub) WHERE external_sub != ''`)
+	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN username_claim TEXT NOT NULL DEFAULT 'email'`)
+	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN public_login INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN autocreate INTEGER NOT NULL DEFAULT 1`)
+	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN sync_role INTEGER NOT NULL DEFAULT 1`)
 	// 存量迁移：每环境补根文件夹，folder 字符串回填 folder_id（幂等）
 	if err := migrateFolders(db); err != nil {
 		return err
@@ -308,7 +321,7 @@ CREATE TABLE IF NOT EXISTS dynamic_leases (
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录

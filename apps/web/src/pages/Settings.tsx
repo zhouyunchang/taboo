@@ -14,7 +14,7 @@ export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role
         <div className="spacer" />
         <button className={`tab ${sub === 'sync' ? 'active' : ''}`} onClick={() => setSub('sync')}>Secret Sync</button>
         <button className={`tab ${sub === 'webhooks' ? 'active' : ''}`} onClick={() => setSub('webhooks')}>Webhooks</button>
-        <button className={`tab ${sub === 'sso' ? 'active' : ''}`} onClick={() => setSub('sso')}>SSO 登录</button>
+        <button className={`tab ${sub === 'sso' ? 'active' : ''}`} onClick={() => setSub('sso')}>用户源 / SSO</button>
       </div>
       {!canManage && <p className="muted">当前角色为 {role}，仅 owner 可增删配置；以下列表所有成员可见。</p>}
       {sub === 'sync' && <SyncTab orgSlug={orgSlug} canManage={canManage} />}
@@ -309,31 +309,48 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
     catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
   }
 
+  async function toggle(p: OIDCProvider, field: 'public_login' | 'sync_role', value: boolean) {
+    if (!p.id) return;
+    try {
+      await api.patch(`/api/v1/orgs/${orgSlug}/oidc/${p.id}`, { [field]: value });
+      load();
+    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+  }
+
   return (
     <>
       <div className="panel-head">
-        <h3>OIDC 身份提供商</h3>
+        <h3>外部用户源（OIDC Realm）</h3>
         <div className="spacer" />
-        {canManage && <button onClick={() => setShowNew(true)}>＋ 接入 IdP</button>}
+        {canManage && <button onClick={() => setShowNew(true)}>＋ 接入 Keycloak / OIDC</button>}
       </div>
-      <p className="muted">首次登录按 claim 自动入组（默认 viewer），角色映射命中取最高角色。IdP 登录视为已完成二次校验，不再要求本地 TOTP。</p>
+      <p className="muted">
+        对标 Proxmox Realm：把 Keycloak（或 Authentik、Google）当作用户目录。勾选「登录页显示」后，无需输入组织 slug 即可一键跳转。
+        组 claim 默认 <code>groups</code>（也可用 <code>realm_access.roles</code>）；每次登录可同步角色。新用户不会被映射成 owner。
+      </p>
       {error && <div className="error">{error}</div>}
       <table className="table">
-        <thead><tr><th>名称</th><th>Issuer</th><th>默认角色</th><th>角色映射</th><th /></tr></thead>
+        <thead><tr><th>名称</th><th>Issuer</th><th>默认角色</th><th>登录页</th><th>同步角色</th><th /></tr></thead>
         <tbody>
           {providers.map((p) => (
             <tr key={p.id}>
               <td>{p.name}</td>
               <td className="mono muted">{p.issuer}</td>
-              <td><span className="tag">{p.default_role}</span></td>
-              <td className="muted">{Object.entries(p.role_map ?? {}).map(([g, r]) => <span key={g} className="tag">{g}→{r}</span>)}</td>
+              <td><span className="tag">{p.default_role}</span>{Object.entries(p.role_map ?? {}).map(([g, r]) => <span key={g} className="tag">{g}→{r}</span>)}</td>
+              <td>{p.public_login ? '是' : '否'}</td>
+              <td>{p.sync_role ? '是' : '否'}</td>
               <td className="actions">
-                <a className="btn ghost" href={p.login_url}>登录链接</a>
-                {canManage && <button className="ghost" onClick={() => p.id && remove(p.id, p.name)}>删除</button>}
+                {canManage && (
+                  <button className="ghost" onClick={() => p.id && toggle(p, 'public_login', !p.public_login)}>
+                    {p.public_login ? '从登录页隐藏' : '显示在登录页'}
+                  </button>
+                )}
+                <a className="btn ghost" href={p.login_url ?? '#'}>登录链接</a>
+                {canManage && <button className="ghost" onClick={() => p.id && remove(p.id, p.name ?? p.id)}>删除</button>}
               </td>
             </tr>
           ))}
-          {providers.length === 0 && <tr><td colSpan={5} className="muted center">尚未接入 IdP</td></tr>}
+          {providers.length === 0 && <tr><td colSpan={6} className="muted center">尚未接入外部用户源</td></tr>}
         </tbody>
       </table>
       {showNew && <OidcCreator orgSlug={orgSlug} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load(); }} />}
@@ -342,8 +359,19 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
 }
 
 function OidcCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onClose: () => void; onCreated: () => void }) {
-  const [form, setForm] = useState({ name: '', issuer: '', client_id: '', client_secret: '', role_claim: 'groups', default_role: 'viewer' });
-  const [roleMapText, setRoleMapText] = useState('');
+  const [form, setForm] = useState({
+    name: 'Keycloak',
+    issuer: '',
+    client_id: '',
+    client_secret: '',
+    role_claim: 'groups',
+    username_claim: 'email',
+    default_role: 'viewer',
+    public_login: true,
+    autocreate: true,
+    sync_role: true,
+  });
+  const [roleMapText, setRoleMapText] = useState('admins=admin\ndevelopers=developer');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
@@ -366,21 +394,30 @@ function OidcCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onClose
   return (
     <div className="drawer" onClick={onClose}>
       <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
-        <h3>接入 OIDC IdP</h3>
-        <label>名称<input value={form.name} onChange={set('name')} required placeholder="公司 Keycloak" /></label>
+        <h3>接入 Keycloak / OIDC</h3>
+        <p className="muted">
+          Keycloak：创建 Confidential Client，打开 Standard flow，Valid redirect URIs 填下方回调地址。
+          在 Client scopes 给 access token / ID token 加上 Group Membership（claim <code>groups</code>）或 realm roles。
+        </p>
+        <label>名称<input value={form.name} onChange={set('name')} required placeholder="Keycloak" /></label>
         <label>Issuer URL<input className="mono" value={form.issuer} onChange={set('issuer')} required
-          placeholder="https://idp.example.com/realms/team" /></label>
+          placeholder="https://keycloak.example.com/realms/company" /></label>
         <label>Client ID<input value={form.client_id} onChange={set('client_id')} required /></label>
         <label>Client Secret<input type="password" value={form.client_secret} onChange={set('client_secret')} required /></label>
-        <label>角色 Claim<input value={form.role_claim} onChange={set('role_claim')} /></label>
+        <label>角色 Claim<input value={form.role_claim} onChange={set('role_claim')} placeholder="groups 或 realm_access.roles" /></label>
+        <label>用户名 Claim<input value={form.username_claim} onChange={set('username_claim')} /></label>
         <label>默认角色
           <select value={form.default_role} onChange={set('default_role')}>
-            {['viewer', 'developer', 'admin', 'owner'].map((r) => <option key={r} value={r}>{r}</option>)}
+            {['viewer', 'developer', 'admin'].map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </label>
-        <label>角色映射（每行 claim值=角色，如 admins=admin）<textarea className="mono" rows={3} value={roleMapText} onChange={(e) => setRoleMapText(e.target.value)} /></label>
-        <p className="muted">创建时做 discovery 连通性自检；client_secret 经 Master Key 加密落库，不回显。
-          回调地址：<code>{`{部署域名}`}/api/v1/auth/oidc/{orgSlug}/callback</code></p>
+        <label>角色映射（每行 claim值=角色，如 admins=admin）
+          <textarea className="mono" rows={3} value={roleMapText} onChange={(e) => setRoleMapText(e.target.value)} />
+        </label>
+        <label className="check"><input type="checkbox" checked={form.public_login} onChange={(e) => setForm({ ...form, public_login: e.target.checked })} /> 显示在登录页（实例级 Realm）</label>
+        <label className="check"><input type="checkbox" checked={form.autocreate} onChange={(e) => setForm({ ...form, autocreate: e.target.checked })} /> 首次登录自动创建用户并入组</label>
+        <label className="check"><input type="checkbox" checked={form.sync_role} onChange={(e) => setForm({ ...form, sync_role: e.target.checked })} /> 每次登录按组同步角色</label>
+        <p className="muted">回调地址：<code>{typeof window !== 'undefined' ? window.location.origin : '{部署域名}'}/api/v1/auth/oidc/{orgSlug}/callback</code></p>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">
           <button type="button" className="ghost" onClick={onClose}>取消</button>

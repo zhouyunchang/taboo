@@ -1,20 +1,34 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import type { User } from '../api';
 
 interface Tokens { access: string; refresh: string }
 interface Props { onSuccess: (d: { user: User; tokens: Tokens }) => void }
+interface AuthSource { id: string; name: string; login_url: string }
 
 export default function Login({ onSuccess }: Props) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
-  const [challenge, setChallenge] = useState(''); // 非空 = 进入 2FA 第二步
+  const [challenge, setChallenge] = useState('');
   const [code, setCode] = useState('');
   const [orgSlug, setOrgSlug] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [sources, setSources] = useState<AuthSource[]>([]);
+  const [registerEnabled, setRegisterEnabled] = useState(true);
+  const [passwordEnabled, setPasswordEnabled] = useState(true);
+
+  useEffect(() => {
+    api.get<{ register_enabled?: boolean; password_enabled?: boolean; sources?: AuthSource[] }>('/api/v1/auth/sources')
+      .then((d) => {
+        setSources(d.sources ?? []);
+        setRegisterEnabled(d.register_enabled !== false);
+        setPasswordEnabled(d.password_enabled !== false);
+      })
+      .catch(() => {});
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -25,7 +39,7 @@ export default function Login({ onSuccess }: Props) {
       const d = await api.post<{ user: User; tokens: Tokens; totp_required?: boolean; challenge?: string }>(
         path, mode === 'login' ? { email, password } : { email, password, name });
       if (d.totp_required && d.challenge) {
-        setChallenge(d.challenge); // 已开启 2FA：等待二次验证
+        setChallenge(d.challenge);
       } else if (d.tokens) {
         onSuccess(d as { user: User; tokens: Tokens });
       }
@@ -76,6 +90,9 @@ export default function Login({ onSuccess }: Props) {
     );
   }
 
+  const showPassword = passwordEnabled && (mode === 'login' || registerEnabled);
+  const showRegisterToggle = registerEnabled && passwordEnabled;
+
   return (
     <div className="center-screen">
       <form className="card auth-card" onSubmit={submit}>
@@ -83,41 +100,66 @@ export default function Login({ onSuccess }: Props) {
           <span className="brand-mark">禁</span>
           <div>
             <h1>taboo · 禁制</h1>
-            <p className="muted">开源自部署密钥管理平台 — MVP</p>
+            <p className="muted">开源自部署密钥管理平台</p>
           </div>
         </div>
-        <label>
-          邮箱
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-        </label>
-        {mode === 'register' && (
-          <label>
-            昵称
-            <input value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
+
+        {sources.length > 0 && mode === 'login' && (
+          <div className="sso-block">
+            {sources.map((s) => (
+              <button key={s.id} type="button" className="sso-btn" onClick={() => { window.location.href = s.login_url; }}>
+                使用 {s.name} 登录
+              </button>
+            ))}
+            {showPassword && <p className="muted center sso-or">或使用本地账号</p>}
+          </div>
         )}
-        <label>
-          密码
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
-        </label>
-        {error && <div className="error">{error}</div>}
-        <button type="submit" disabled={busy}>{busy ? '处理中…' : mode === 'login' ? '登录' : '注册'}</button>
-        {mode === 'login' && (
+
+        {showPassword && (
           <>
-            <hr className="divider" />
             <label>
-              组织 Slug（SSO）
+              邮箱
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+            </label>
+            {mode === 'register' && (
+              <label>
+                昵称
+                <input value={name} onChange={(e) => setName(e.target.value)} />
+              </label>
+            )}
+            <label>
+              密码
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
+            </label>
+            {error && <div className="error">{error}</div>}
+            <button type="submit" disabled={busy}>{busy ? '处理中…' : mode === 'login' ? '登录' : '注册'}</button>
+          </>
+        )}
+
+        {!showPassword && error && <div className="error">{error}</div>}
+        {!passwordEnabled && sources.length === 0 && (
+          <p className="muted">未配置外部用户源，且已关闭密码登录。请联系管理员接入 Keycloak 等 IdP。</p>
+        )}
+
+        {mode === 'login' && passwordEnabled && (
+          <details className="sso-advanced">
+            <summary className="muted">组织 SSO（未在登录页公开的 IdP）</summary>
+            <label>
+              组织 Slug
               <input value={orgSlug} onChange={(e) => setOrgSlug(e.target.value)} placeholder="my-org" />
             </label>
             <button type="button" className="ghost" disabled={!orgSlug}
               onClick={() => { window.location.href = `/api/v1/auth/oidc/${encodeURIComponent(orgSlug)}/login`; }}>
               使用组织 SSO 登录
             </button>
-          </>
+          </details>
         )}
-        <p className="muted switch" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
-          {mode === 'login' ? '没有账号？注册（自动创建个人组织）' : '已有账号？去登录'}
-        </p>
+
+        {showRegisterToggle && (
+          <p className="muted switch" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+            {mode === 'login' ? '没有账号？注册（自动创建个人组织）' : '已有账号？去登录'}
+          </p>
+        )}
       </form>
     </div>
   );

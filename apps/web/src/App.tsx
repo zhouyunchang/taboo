@@ -38,7 +38,13 @@ export default function App() {
       user={user}
       orgs={orgs}
       onOrgChange={(o) => setOrgs(o)}
-      onLogout={() => { clearTokens(); setUser(null); }}
+      onLogout={() => {
+        const idp = localStorage.getItem('taboo.idp_logout');
+        clearTokens();
+        localStorage.removeItem('taboo.idp_logout');
+        setUser(null);
+        if (idp) window.location.href = idp;
+      }}
     />
   );
 }

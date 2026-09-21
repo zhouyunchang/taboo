@@ -11,6 +11,23 @@
 - 前置 HTTPS 反向代理（Caddy/nginx），见设计文档 §8「传输：强制 TLS」
 - 限制 `/data` 目录权限（容器内以 uid 10001 运行）
 
+## Keycloak（外部用户源）
+
+1. Keycloak 创建 Confidential Client，Standard flow；Valid redirect URI：
+   `https://taboo.example.com/api/v1/auth/oidc/<org-slug>/callback`
+2. Client scopes 把 Group Membership 写入 ID token（claim `groups`），或映射 realm roles
+3. 用本地 owner 登录 taboo → 组织设置 →「接入 Keycloak / OIDC」，Issuer 形如
+   `https://keycloak.example.com/realms/company`，勾选「显示在登录页」
+4. 可选：关掉本地注册/密码，只走 Keycloak
+
+```bash
+-e TABOO_OIDC_ISSUER=https://keycloak.example.com/realms/company \
+-e TABOO_OIDC_CLIENT_ID=taboo \
+-e TABOO_OIDC_CLIENT_SECRET=... \
+-e TABOO_OIDC_ORG=your-org-slug \
+-e TABOO_DISABLE_REGISTER=1
+```
+
 ## Kubernetes（Helm）
 
 ```bash

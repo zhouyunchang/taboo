@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/auth/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 登录页 Realm 列表（仅 public_login 的 IdP）以及本地注册/密码是否开放 */
+        get: operations["listAuthSources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/register": {
         parameters: {
             query?: never;
@@ -564,7 +581,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** OIDC 登录入口（302 跳转 IdP 授权端点；公开，限流保护） */
+        /** OIDC 登录入口（302 跳转 IdP；PKCE S256 + nonce；公开，限流保护） */
         get: operations["oidcLogin"];
         put?: never;
         post?: never;
@@ -623,7 +640,8 @@ export interface paths {
         delete: operations["deleteOIDCProvider"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** 更新 IdP 配置（owner；client_secret 可选轮换） */
+        patch: operations["updateOIDCProvider"];
         trace?: never;
     };
     "/api/v1/orgs/{slug}/audit/export": {
@@ -633,7 +651,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 审计导出 CSV/JSONL（筛选同审计查询；async=1 或大结果集走异步任务） */
+        /** 审计导出 CSV/JSONL（筛选同审计查询；async=1 走异步任务 + 下载链接） */
         get: operations["auditExport"];
         put?: never;
         post?: never;
@@ -694,6 +712,13 @@ export interface components {
             /** Format: email */
             email?: string;
             name?: string;
+            /** @enum {string} */
+            kind?: "user" | "identity";
+        };
+        AuthSource: {
+            id?: string;
+            name?: string;
+            login_url?: string;
         };
         OrgMembership: {
             id?: string;
@@ -820,32 +845,50 @@ export interface components {
             client_id?: string;
             scopes?: string;
             role_claim?: string;
+            username_claim?: string;
             role_map?: {
                 [key: string]: string;
             };
             /** @enum {string} */
             default_role?: "viewer" | "developer" | "admin" | "owner";
+            /** @description 在登录页展示为实例级 Realm */
+            public_login?: boolean;
+            autocreate?: boolean;
+            /** @description 每次 SSO 登录按组映射同步角色（不降级最后一名 owner） */
+            sync_role?: boolean;
             enabled?: boolean;
             created_at?: string;
             login_url?: string;
         };
         OIDCProviderInput: {
-            name: string;
-            /** @example https://idp.example.com/realms/team */
-            issuer: string;
-            client_id: string;
-            /** @description Master Key 加密落库，不回显 */
-            client_secret: string;
+            name?: string;
+            /** @example https://keycloak.example.com/realms/company */
+            issuer?: string;
+            client_id?: string;
+            /** @description Master Key 加密落库，不回显；PATCH 时可省略 */
+            client_secret?: string;
             /** @default openid */
             scopes: string;
-            /** @default groups */
+            /**
+             * @description 支持点分路径，如 realm_access.roles
+             * @default groups
+             */
             role_claim: string;
-            /** @description claim 值 → 角色（viewer/developer/admin/owner） */
+            /** @default email */
+            username_claim: string;
+            /** @description claim 值 → 角色；Keycloak 组路径会匹配末段 */
             role_map?: {
                 [key: string]: string;
             };
             /** @default viewer */
             default_role: string;
+            /** @default true */
+            public_login: boolean;
+            /** @default true */
+            autocreate: boolean;
+            /** @default true */
+            sync_role: boolean;
+            enabled?: boolean;
         };
         AuditExport: {
             id?: string;
@@ -1032,6 +1075,30 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAuthSources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 登录选项 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        register_enabled?: boolean;
+                        password_enabled?: boolean;
+                        sources?: components["schemas"]["AuthSource"][];
+                    };
+                };
+            };
+        };
+    };
     register: {
         parameters: {
             query?: never;
@@ -1055,6 +1122,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
         };
     };
@@ -1081,6 +1149,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
         };
     };
@@ -2237,7 +2306,10 @@ export interface operations {
     };
     oidcLogin: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 指定 IdP 配置 id；缺省取该组织第一个已启用配置 */
+                pid?: string;
+            };
             header?: never;
             path: {
                 slug: components["parameters"]["OrgSlug"];
@@ -2371,6 +2443,39 @@ export interface operations {
                     };
                 };
             };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateOIDCProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OIDCProviderInput"];
+            };
+        };
+        responses: {
+            /** @description 已更新 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        updated?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

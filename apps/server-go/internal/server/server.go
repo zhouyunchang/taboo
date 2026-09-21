@@ -17,8 +17,8 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/identity"
-	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
+	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
@@ -27,17 +27,19 @@ import (
 )
 
 type Deps struct {
-	DB        *sql.DB
-	MasterKey []byte
-	JWTSecret string
-	CORS      string
-	DEKs      *tc.DEKCache
-	LoginRate int // 登录类接口每 IP 每窗口限流（0 → 默认 5）
-	Dynamic   *dynamic.Service
-	DataDir   string // 数据目录（审计导出文件落盘；空 = 禁用异步导出）
-	Events    *events.Bus        // M5：密钥变更事件总线（nil → 自动创建）
-	Sync      *syncsvc.Service   // M5 #11：nil → 自动创建（Subscribe 到 Events）
-	Webhooks  *whsvc.Service     // M5 #12：nil → 自动创建（Subscribe 到 Events）
+	DB              *sql.DB
+	MasterKey       []byte
+	JWTSecret       string
+	CORS            string
+	DEKs            *tc.DEKCache
+	LoginRate       int // 登录类接口每 IP 每窗口限流（0 → 默认 5）
+	Dynamic         *dynamic.Service
+	DataDir         string           // 数据目录（审计导出文件落盘；空 = 禁用异步导出）
+	Events          *events.Bus      // M5：密钥变更事件总线（nil → 自动创建）
+	Sync            *syncsvc.Service // M5 #11：nil → 自动创建（Subscribe 到 Events）
+	Webhooks        *whsvc.Service   // M5 #12：nil → 自动创建（Subscribe 到 Events）
+	DisableRegister bool
+	DisablePassword bool
 }
 
 func New(d *Deps) *chi.Mux {
@@ -48,7 +50,10 @@ func New(d *Deps) *chi.Mux {
 	r.Use(cors(d.CORS))
 	r.Use(securityHeaders)
 
-	orgs := &orgsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir}
+	orgs := &orgsvc.Service{
+		DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir,
+		DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword,
+	}
 	bus := d.Events
 	if bus == nil {
 		bus = events.NewBus()
@@ -85,7 +90,11 @@ func New(d *Deps) *chi.Mux {
 		// TOTP 2FA 第二步（公开，登录同窗口限流）
 		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/auth/totp/login", totps.Login2FA)
 		// OIDC SSO 登录跳转 + callback（公开，登录同窗口限流；M5 #13）
-		oidcSvc := &oidc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
+		oidcSvc := &oidc.Service{
+			DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret,
+			DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword,
+		}
+		r.Get("/auth/sources", oidcSvc.ListSources)
 		r.Route("/auth/oidc/{slug}", func(r chi.Router) {
 			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/login", oidcSvc.Login)
 			r.Get("/callback", oidcSvc.Callback)
@@ -140,7 +149,7 @@ func cors(origin string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(204)

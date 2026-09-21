@@ -56,6 +56,16 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); }
 .error { color: var(--danger); font-size: 13px; }
 .switch { cursor: pointer; text-align: center; margin: 0; }
 .switch:hover { color: var(--accent); }
+.sso-block { display: flex; flex-direction: column; gap: 8px; }
+.sso-btn {
+  background: transparent; color: var(--fg); border: 1px solid var(--border);
+  font-weight: 600; padding: 10px 14px;
+}
+.sso-btn:hover { border-color: var(--accent); color: var(--accent); }
+.sso-or { margin: 4px 0 0; font-size: 12px; }
+.sso-advanced { display: flex; flex-direction: column; gap: 10px; }
+.sso-advanced summary { cursor: pointer; font-size: 12px; }
+label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--fg); }
 
 .layout { display: flex; flex-direction: column; min-height: 100vh; }
 .topbar {
