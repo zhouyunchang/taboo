@@ -127,13 +127,11 @@ func (s *Service) Routes(r chi.Router) {
 
 func (s *Service) envOf(w http.ResponseWriter, r *http.Request, action string) (string, project.Ctx, bool) {
 	p := project.Of(r)
-	u := auth.From(r)
 	envSlug := r.URL.Query().Get("env")
 	if envSlug == "" {
 		envSlug = "dev"
 	}
-	if !auth.Can(s.DB, u, p.OrgID, p.ID, action, envSlug) {
-		writeErr(w, apperr.Forbidden)
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, action, envSlug) {
 		return "", p, false
 	}
 	envID, err := s.envIDOf(p.ID, envSlug)
@@ -146,7 +144,7 @@ func (s *Service) envOf(w http.ResponseWriter, r *http.Request, action string) (
 
 // List GET /folders?env=
 func (s *Service) List(w http.ResponseWriter, r *http.Request) {
-	envID, p, ok := s.envOf(w, r, "read")
+	envID, _, ok := s.envOf(w, r, "read")
 	if !ok {
 		return
 	}
@@ -162,8 +160,6 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		_ = rows.Scan(&f.ID, &f.ParentID, &f.Name, &f.Path)
 		out = append(out, f)
 	}
-	auth.Audit(s.DB, p.OrgID, auth.From(r), "folders.list", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env"),
-		map[string]any{"count": len(out)}, r.RemoteAddr)
 	writeJSON(w, 200, map[string]any{"folders": out})
 }
 
@@ -190,8 +186,7 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, p.OrgID, auth.From(r), "folders.create", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path,
-		nil, r.RemoteAddr)
+	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.create", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path, nil)
 	writeJSON(w, 201, map[string]any{"id": id, "path": path})
 }
 
@@ -222,8 +217,7 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, p.OrgID, auth.From(r), "folders.delete", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path,
-		nil, r.RemoteAddr)
+	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.delete", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path, nil)
 	writeJSON(w, 200, map[string]any{"deleted": path})
 }
 
@@ -293,7 +287,7 @@ func (s *Service) Move(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, p.OrgID, auth.From(r), "folders.move", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+from,
-		map[string]any{"to": to}, r.RemoteAddr)
+	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.move", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+from,
+		map[string]any{"to": to})
 	writeJSON(w, 200, map[string]any{"from": from, "to": to})
 }

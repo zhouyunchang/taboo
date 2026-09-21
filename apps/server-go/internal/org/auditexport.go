@@ -17,6 +17,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
 // asyncExportThreshold：超过该行数走异步任务（生成文件 + 下载链接）
@@ -85,6 +86,9 @@ func (s *Service) AuditExport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.AuditExport, "") {
+		return
+	}
 	format := r.URL.Query().Get("format")
 	if format != "csv" && format != "jsonl" {
 		format = "csv"
@@ -134,8 +138,8 @@ func (s *Service) AuditExport(w http.ResponseWriter, r *http.Request) {
 			count++
 		}
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "audit.export", "org/audit",
-		map[string]any{"format": format, "rows": count, "mode": "sync"}, ipOf(r))
+	_ = auth.AuditReq(s.DB, r, orgID, auth.From(r), "audit.export", "org/audit",
+		map[string]any{"format": format, "rows": count, "mode": "sync"})
 }
 
 // createExportJob 异步导出：落任务行，worker 生成文件
@@ -154,8 +158,8 @@ func (s *Service) createExportJob(w http.ResponseWriter, r *http.Request, orgID,
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "audit.export.request", "org/audit",
-		map[string]any{"format": format, "job": id}, ipOf(r))
+	_ = auth.AuditReq(s.DB, r, orgID, auth.From(r), "audit.export.request", "org/audit",
+		map[string]any{"format": format, "job": id})
 	writeJSON(w, 202, map[string]any{
 		"id": id, "status": "pending",
 		"download_url": "/api/v1/orgs/" + chi.URLParam(r, "slug") + "/audit/exports/" + id,
@@ -166,6 +170,9 @@ func (s *Service) createExportJob(w http.ResponseWriter, r *http.Request, orgID,
 func (s *Service) AuditExportDownload(w http.ResponseWriter, r *http.Request) {
 	orgID, _, ok := s.orgOf(w, r)
 	if !ok {
+		return
+	}
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.AuditExport, "") {
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -196,6 +203,9 @@ func (s *Service) ListAuditExports(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.AuditExport, "") {
+		return
+	}
 	rows, err := s.DB.Query(`SELECT id, format, status, row_count, error, created_at, completed_at
 		FROM audit_exports WHERE org_id = ? ORDER BY created_at DESC LIMIT 50`, orgID)
 	if err != nil {
@@ -221,6 +231,31 @@ func (s *Service) ListAuditExports(w http.ResponseWriter, r *http.Request) {
 		out = append(out, j)
 	}
 	writeJSON(w, 200, map[string]any{"exports": out})
+}
+
+func (s *Service) RetryAuditExport(w http.ResponseWriter, r *http.Request) {
+	orgID, _, ok := s.orgOf(w, r)
+	if !ok {
+		return
+	}
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.AuditExport, "") {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var status string
+	if err := s.DB.QueryRow(`SELECT status FROM audit_exports WHERE id = ? AND org_id = ?`, id, orgID).Scan(&status); err != nil {
+		writeErr(w, apperr.NotFound)
+		return
+	}
+	if status != "failed" {
+		writeErr(w, apperr.New(400, "INVALID", "only failed exports can be retried"))
+		return
+	}
+	if _, err := s.DB.Exec(`UPDATE audit_exports SET status = 'pending', error = '' WHERE id = ?`, id); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "status": "pending"})
 }
 
 // StartExportWorker 后台生成导出文件（dataDir/exports/{org}/{id}.fmt）

@@ -39,7 +39,8 @@ helm install taboo ./deploy/helm/taboo -n taboo \
 
 - Master Key / JWT Secret 经 K8s Secret 注入（`existingSecret` 必填，values 明文会被 `fail` 拦截）
 - 默认单副本：SQLite WAL 单写多读，事件 worker（Sync/Webhook/动态密钥/审计导出）为进程内轮询
-- 数据卷 PVC 存 SQLite 与导出文件；liveness = `--check`，readiness = HTTP `/`
+- 数据卷 PVC 存 SQLite 与导出文件；liveness = `/api/v1/healthz`，readiness = `/api/v1/readyz`
+- 滚动更新：`terminationGracePeriodSeconds: 30`，`preStop` sleep 3s，进程 graceful drain 15s
 - 详细说明见 [deploy/helm/taboo/README.md](../deploy/helm/taboo/README.md)
 
 ## 发布产物（GoReleaser）
@@ -56,6 +57,14 @@ cosign verify ghcr.io/zhouyunchang/taboo:v1.0.0
 ```
 
 ## 备份与恢复
+
+工具化备份（进程内 SQLite `VACUUM INTO` + 复制 `master.key` 0600）：
+
+```bash
+taboo-server backup /backup/taboo-$(date +%Y%m%d)
+```
+
+K8s CronJob 示例：对 PVC 挂载的 `/data` 执行同一命令，产物落到备份卷。恢复仍是停机替换 `$TABOO_DATA_DIR`。
 
 1. 停机（或至少确保无写入）
 2. 备份整个 `$TABOO_DATA_DIR`（`taboo.db` + `master.key`）

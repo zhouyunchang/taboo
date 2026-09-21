@@ -40,7 +40,7 @@ go test ./...          # 契约漂移检查（路由 vs openapi.yaml）
 taboo-server --check
 ```
 
-校验：Master Key 加解密往返、Argon2id 哈希路径、DB schema 版本与关键表存在性。K8s liveness probe 默认使用它。
+校验：Master Key 加解密往返、Argon2id 哈希路径、DB schema 版本与关键表存在性。K8s 探活用 `/api/v1/healthz` 与 `/api/v1/readyz`，不要把 `--check`（含 Argon2）当 liveness。
 
 ## 环境变量
 

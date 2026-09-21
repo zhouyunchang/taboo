@@ -61,9 +61,16 @@ func (s *Service) Routes(r chi.Router) {
 }
 
 func (s *Service) audit(u *auth.Actor, action, resource string, r *http.Request) {
-	var orgID string
-	if err := s.DB.QueryRow(`SELECT org_id FROM org_members WHERE user_id = ? LIMIT 1`, u.ID).Scan(&orgID); err == nil {
-		auth.Audit(s.DB, orgID, u, action, resource, nil, clientIP(r))
+	rows, err := s.DB.Query(`SELECT org_id FROM org_members WHERE user_id = ?`, u.ID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var orgID string
+		if rows.Scan(&orgID) == nil {
+			_ = auth.AuditReq(s.DB, r, orgID, u, action, resource, nil)
+		}
 	}
 }
 
@@ -281,9 +288,3 @@ func base32HexLower(b []byte) string {
 	return string(out)
 }
 
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
-	}
-	return r.RemoteAddr
-}

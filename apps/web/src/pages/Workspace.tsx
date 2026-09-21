@@ -47,6 +47,11 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
 
   if (!org) return <div className="center-screen">没有组织</div>;
 
+  const canAdmin = org.role === 'owner' || org.role === 'admin';
+  const canAudit = org.role === 'owner' || org.role === 'admin';
+  const envMeta = envs.find((e) => e.slug === env);
+  const envProtected = Boolean(envMeta && 'protected' in envMeta && (envMeta as { protected?: boolean }).protected);
+
   return (
     <div className="layout">
       <header className="topbar">
@@ -65,7 +70,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
         <aside className="sidebar">
           <div className="sidebar-title">
             项目
-            <button className="ghost" onClick={createProject} title="新建项目">＋</button>
+            {canAdmin && <button className="ghost" onClick={createProject} title="新建项目">＋</button>}
           </div>
           {projects.map((p) => (
             <div key={p.id} className={`nav-item ${project?.id === p.id ? 'active' : ''}`} onClick={() => { setProject(p); setTab('secrets'); }}>
@@ -83,20 +88,20 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
               </button>
             ))}
             <div className="spacer" />
-            <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>
-            <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>
-            <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>
+            {canAdmin && <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>}
+            {canAdmin && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
+            {canAudit && <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>}
             <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>组织设置</button>
           </div>
           {tab === 'secrets'
-            ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} />
+            ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} canWrite={(org.role === 'developer' && !envProtected) || canAdmin} />
             : tab === 'identities'
               ? <IdentitiesPanel orgSlug={org.slug} project={project} envs={envs} />
               : tab === 'dynamic'
                 ? project && <DynamicPanel key={project.id} projectId={project.id} projectSlug={project.slug} />
                 : tab === 'settings'
                   ? <SettingsPanel orgSlug={org.slug} role={org.role} />
-                  : <AuditPanel orgSlug={org.slug} />}
+                  : canAudit ? <AuditPanel orgSlug={org.slug} /> : <p className="muted">没有审计权限</p>}
         </main>
       </div>
       {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
@@ -202,7 +207,7 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SecretsPanel({ projectId, env, projectSlug }: { projectId: string; env: string; projectSlug: string }) {
+function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: string; env: string; projectSlug: string; canWrite: boolean }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
   const [cur, setCur] = useState('/'); // 当前文件夹路径（物化路径 /a/b/）
@@ -252,9 +257,9 @@ function SecretsPanel({ projectId, env, projectSlug }: { projectId: string; env:
     <div className="panel">
       <div className="panel-head">
         <h2>{projectSlug} / {env}</h2>
-        <button className="ghost" onClick={createFolder}>＋ 新建文件夹</button>
-        {cur !== '/' && <button className="ghost" onClick={deleteFolder}>删除此空文件夹</button>}
-        <button onClick={() => setEditing('__new__')}>＋ 新建密钥</button>
+        {canWrite && <button className="ghost" onClick={createFolder}>＋ 新建文件夹</button>}
+        {canWrite && cur !== '/' && <button className="ghost" onClick={deleteFolder}>删除此空文件夹</button>}
+        {canWrite && <button onClick={() => setEditing('__new__')}>＋ 新建密钥</button>}
       </div>
       <div className="crumbs mono">
         <span className={`crumb ${cur === '/' ? 'active' : ''}`} onClick={() => setCur('/')}>根目录</span>
@@ -276,7 +281,7 @@ function SecretsPanel({ projectId, env, projectSlug }: { projectId: string; env:
             </thead>
             <tbody>
               {secrets.map((s) => (
-                <SecretRow key={s.id} s={s} projectId={projectId} env={env}
+                <SecretRow key={s.id} s={s} projectId={projectId} env={env} canWrite={canWrite && (s.canWrite !== false)}
                   onChanged={load} onEdit={() => setEditing(s.key)} onDetail={() => setDetail(s)} />
               ))}
               {secrets.length === 0 && <tr><td colSpan={6} className="muted center">此文件夹还没有密钥</td></tr>}
@@ -341,8 +346,8 @@ function TreeNode({ f, byParent, cur, onSelect }: {
   );
 }
 
-function SecretRow({ s, projectId, env, onChanged, onEdit, onDetail }: {
-  s: SecretMeta; projectId: string; env: string;
+function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }: {
+  s: SecretMeta; projectId: string; env: string; canWrite: boolean;
   onChanged: () => void; onEdit: () => void; onDetail: () => void;
 }) {
   const [value, setValue] = useState<string | null>(null);
@@ -385,8 +390,8 @@ function SecretRow({ s, projectId, env, onChanged, onEdit, onDetail }: {
       <td className="actions">
         {s.canReveal && <button className="ghost" onClick={reveal}>{value === null ? '显示' : '隐藏'}</button>}
         {s.canReveal && <button className="ghost" onClick={copy}>复制</button>}
-        <button className="ghost" onClick={onEdit}>编辑</button>
-        <button className="ghost" onClick={remove}>删除</button>
+        {canWrite && <button className="ghost" onClick={onEdit}>编辑</button>}
+        {canWrite && <button className="ghost" onClick={remove}>删除</button>}
       </td>
     </tr>
   );
@@ -489,43 +494,64 @@ function DetailDrawer({ projectId, env, meta, onClose }: {
 
 function AuditPanel({ orgSlug }: { orgSlug: string }) {
   const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [filter, setFilter] = useState('');
+  const [action, setAction] = useState('');
+  const [actor, setActor] = useState('');
+  const [resource, setResource] = useState('');
+  const [jobs, setJobs] = useState<{ id: string; status: string; format: string }[]>([]);
+  const [verify, setVerify] = useState<string>('');
 
-  useEffect(() => {
-    api.get<{ logs: AuditLog[] }>(`/api/v1/orgs/${orgSlug}/audit?limit=200`)
+  const qs = () => {
+    const p = new URLSearchParams({ limit: '200' });
+    if (action) p.set('action', action);
+    if (actor) p.set('actor', actor);
+    if (resource) p.set('resource', resource);
+    return p.toString();
+  };
+
+  const load = useCallback(() => {
+    api.get<{ logs: AuditLog[] }>(`/api/v1/orgs/${orgSlug}/audit?${qs()}`)
       .then((d) => setLogs(d.logs))
       .catch(() => {});
-  }, [orgSlug]);
+    api.get<{ exports: { id: string; status: string; format: string }[] }>(`/api/v1/orgs/${orgSlug}/audit/exports`)
+      .then((d) => setJobs(d.exports ?? []))
+      .catch(() => {});
+  }, [orgSlug, action, actor, resource]);
+  useEffect(load, [load]);
 
-  const shown = logs.filter((l) =>
-    !filter || l.action.includes(filter) || l.resource.includes(filter) || l.actor_name.includes(filter));
-
-  // 导出带鉴权：fetch blob → 触发浏览器下载（window.open 不带 Authorization）
   async function download(format: string) {
-    const res = await fetch(`/api/v1/orgs/${orgSlug}/audit/export?format=${format}`, {
+    const res = await fetch(`/api/v1/orgs/${orgSlug}/audit/export?format=${format}&async=1&${qs()}`, {
       headers: { Authorization: `Bearer ${localStorage.getItem('taboo.access') ?? ''}` },
     });
     if (!res.ok) { alert('导出失败'); return; }
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `taboo-audit.${format}`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    load();
+  }
+
+  async function checkChain() {
+    try {
+      const d = await api.get<{ ok: boolean; checked: number; broken_at?: string }>(`/api/v1/orgs/${orgSlug}/audit/verify`);
+      setVerify(d.ok ? `链完整（${d.checked} 条）` : `链断裂于 ${d.broken_at}`);
+    } catch (e) { setVerify(e instanceof ApiError ? e.message : String(e)); }
   }
 
   return (
     <div className="panel">
       <div className="panel-head">
         <h2>审计日志</h2>
-        <input placeholder="筛选 actor / action / resource" value={filter} onChange={(e) => setFilter(e.target.value)} />
-        <button className="ghost" onClick={() => download('csv')}>导出 CSV</button>
-        <button className="ghost" onClick={() => download('jsonl')}>导出 JSONL</button>
+        <input placeholder="action" value={action} onChange={(e) => setAction(e.target.value)} />
+        <input placeholder="actor" value={actor} onChange={(e) => setActor(e.target.value)} />
+        <input placeholder="resource" value={resource} onChange={(e) => setResource(e.target.value)} />
+        <button className="ghost" onClick={() => download('csv')}>异步导出 CSV</button>
+        <button className="ghost" onClick={() => download('jsonl')}>异步导出 JSONL</button>
+        <button className="ghost" onClick={checkChain}>验真</button>
       </div>
+      {verify && <p className="muted">{verify}</p>}
+      {jobs.length > 0 && (
+        <p className="muted">导出任务：{jobs.map((j) => `${j.format} ${j.status}`).join(' · ')}</p>
+      )}
       <table className="table">
         <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>资源</th><th>IP</th></tr></thead>
         <tbody>
-          {shown.map((l) => (
+          {logs.map((l) => (
             <tr key={l.id}>
               <td className="muted nowrap">{l.created_at}</td>
               <td>{l.actor_name}</td>
@@ -648,8 +674,9 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
               <select value={s.env} onChange={(e) => setScopes(scopes.map((x, i) => i === idx ? { ...x, env: e.target.value } : x))}>
                 {envs.map((en) => <option key={en.id} value={en.slug}>{en.name}</option>)}
               </select>
-              <select value={s.permission} onChange={(e) => setScopes(scopes.map((x, i) => i === idx ? { ...x, permission: e.target.value } : x))}>
-                <option value="read">read</option>
+              <select value={s.permission} onChange={(e) => setScopes(scopes.map((x, i) => i === idx ? { ...x, permission: e.target.value as IdentityScope['permission'] } : x))}>
+                <option value="read">read（仅元数据）</option>
+                <option value="reveal">reveal（明文）</option>
                 <option value="write">write</option>
               </select>
               <button type="button" className="ghost" disabled={scopes.length === 1} onClick={() => setScopes(scopes.filter((_, i) => i !== idx))}>✕</button>

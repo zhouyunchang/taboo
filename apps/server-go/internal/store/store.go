@@ -6,6 +6,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -50,10 +51,11 @@ CREATE TABLE IF NOT EXISTS orgs (
 );
 
 CREATE TABLE IF NOT EXISTS org_members (
-  org_id    TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
-  user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role      TEXT NOT NULL CHECK (role IN ('owner','admin','developer','viewer')),
-  joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+  org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL CHECK (role IN ('owner','admin','developer','viewer')),
+  restricted INTEGER NOT NULL DEFAULT 0,
+  joined_at  TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (org_id, user_id)
 );
 
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS environments (
   name       TEXT NOT NULL,
   slug       TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
+  protected  INTEGER NOT NULL DEFAULT 0,
   UNIQUE (project_id, slug)
 );
 
@@ -111,16 +114,20 @@ CREATE TABLE IF NOT EXISTS secret_versions (
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
-  id         TEXT PRIMARY KEY,
-  org_id     TEXT NOT NULL,
-  actor_id   TEXT NOT NULL,
-  actor_name TEXT NOT NULL DEFAULT '',
-  actor_type TEXT NOT NULL DEFAULT 'user',
-  action     TEXT NOT NULL,
-  resource   TEXT NOT NULL,
-  metadata   TEXT NOT NULL DEFAULT '{}',
-  ip         TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  id          TEXT PRIMARY KEY,
+  org_id      TEXT NOT NULL,
+  actor_id    TEXT NOT NULL,
+  actor_name  TEXT NOT NULL DEFAULT '',
+  actor_type  TEXT NOT NULL DEFAULT 'user',
+  action      TEXT NOT NULL,
+  resource    TEXT NOT NULL,
+  metadata    TEXT NOT NULL DEFAULT '{}',
+  ip          TEXT NOT NULL DEFAULT '',
+  user_agent  TEXT NOT NULL DEFAULT '',
+  request_id  TEXT NOT NULL DEFAULT '',
+  prev_hash   TEXT NOT NULL DEFAULT '',
+  entry_hash  TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_audit_org_time ON audit_logs(org_id, created_at);
 
@@ -149,7 +156,7 @@ CREATE TABLE IF NOT EXISTS identity_scopes (
   identity_id TEXT NOT NULL REFERENCES machine_identities(id) ON DELETE CASCADE,
   project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   env_id      TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
-  permission  TEXT NOT NULL CHECK (permission IN ('read','write')),
+  permission  TEXT NOT NULL CHECK (permission IN ('read','reveal','write')),
   PRIMARY KEY (identity_id, project_id, env_id)
 );
 
@@ -283,11 +290,53 @@ CREATE TABLE IF NOT EXISTS dynamic_leases (
   identity_id        TEXT NOT NULL,
   username           TEXT NOT NULL UNIQUE,
   password_encrypted TEXT NOT NULL,
-  status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','expired','revoked','failed')),
+  status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','expired','revoked','failed','revoking')),
+  reclaim_fails      INTEGER NOT NULL DEFAULT 0,
   expires_at         INTEGER NOT NULL,
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),
   revoked_at         TEXT
 );
+
+CREATE TABLE IF NOT EXISTS org_invites (
+  id          TEXT PRIMARY KEY,
+  org_id      TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  email       TEXT NOT NULL,
+  role        TEXT NOT NULL CHECK (role IN ('owner','admin','developer','viewer')),
+  token_hash  TEXT NOT NULL UNIQUE,
+  expires_at  INTEGER NOT NULL,
+  created_by  TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS project_grants (
+  org_id     TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL CHECK (role IN ('owner','admin','developer','viewer')),
+  PRIMARY KEY (project_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS outbox_events (
+  id         TEXT PRIMARY KEY,
+  org_id     TEXT NOT NULL,
+  event_id   TEXT NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'secret',
+  payload    TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','dead')),
+  error      TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_events(status, created_at);
+
+CREATE TABLE IF NOT EXISTS audit_checkpoints (
+  id         TEXT PRIMARY KEY,
+  org_id     TEXT NOT NULL,
+  last_id    TEXT NOT NULL,
+  last_hash  TEXT NOT NULL,
+  hmac       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created_at);
 `)
 	if err != nil {
 		return err
@@ -308,6 +357,17 @@ CREATE TABLE IF NOT EXISTS dynamic_leases (
 	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN public_login INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN autocreate INTEGER NOT NULL DEFAULT 1`)
 	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN sync_role INTEGER NOT NULL DEFAULT 1`)
+	_, _ = db.Exec(`ALTER TABLE environments ADD COLUMN protected INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`UPDATE environments SET protected = 1 WHERE slug = 'prod'`)
+	_, _ = db.Exec(`ALTER TABLE org_members ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN request_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN entry_hash TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE dynamic_leases ADD COLUMN reclaim_fails INTEGER NOT NULL DEFAULT 0`)
+	if err := migrateIdentityScopes(db); err != nil {
+		return err
+	}
 	// 存量迁移：每环境补根文件夹，folder 字符串回填 folder_id（幂等）
 	if err := migrateFolders(db); err != nil {
 		return err
@@ -321,7 +381,7 @@ CREATE TABLE IF NOT EXISTS dynamic_leases (
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 6
+const SchemaVersion = 9
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录
@@ -348,4 +408,42 @@ func migrateFolders(db *sql.DB) error {
 		(SELECT id FROM folders f WHERE f.env_id = secrets.env_id AND f.path = secrets.folder)
 		WHERE folder_id IS NULL`)
 	return err
+}
+
+// migrateIdentityScopes 重建 CHECK，并把存量 read 升为 reveal（避免 CI 突然 403）。
+func migrateIdentityScopes(db *sql.DB) error {
+	var ddl string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'identity_scopes'`).Scan(&ddl); err != nil {
+		return nil
+	}
+	if strings.Contains(ddl, "'reveal'") {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE identity_scopes_new (
+  identity_id TEXT NOT NULL REFERENCES machine_identities(id) ON DELETE CASCADE,
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  env_id      TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+  permission  TEXT NOT NULL CHECK (permission IN ('read','reveal','write')),
+  PRIMARY KEY (identity_id, project_id, env_id)
+)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO identity_scopes_new (identity_id, project_id, env_id, permission)
+		SELECT identity_id, project_id, env_id,
+			CASE WHEN permission = 'read' THEN 'reveal' ELSE permission END
+		FROM identity_scopes`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE identity_scopes`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE identity_scopes_new RENAME TO identity_scopes`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

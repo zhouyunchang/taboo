@@ -11,9 +11,21 @@ export default function App() {
 
   useEffect(() => {
     window.addEventListener('taboo:logout', () => setUser(null));
+    const invite = window.location.pathname.startsWith('/invite/')
+      ? window.location.pathname.slice('/invite/'.length)
+      : '';
     if (getToken()) {
+      const afterMe = (d: { user: User; orgs: Org[] }) => {
+        setUser(d.user);
+        setOrgs(d.orgs);
+        if (invite) {
+          api.post(`/api/v1/invites/${invite}/accept`)
+            .then(() => api.get<{ orgs: Org[] }>('/api/v1/me').then((m) => { setOrgs(m.orgs); window.history.replaceState({}, '', '/'); }))
+            .catch(() => {});
+        }
+      };
       api.get<{ user: User; orgs: Org[] }>('/api/v1/me')
-        .then((d) => { setUser(d.user); setOrgs(d.orgs); })
+        .then(afterMe)
         .catch(() => clearTokens())
         .finally(() => setLoading(false));
     }
@@ -27,7 +39,15 @@ export default function App() {
         onSuccess={(d) => {
           setTokens(d.tokens);
           setUser(d.user);
-          api.get<{ orgs: Org[] }>('/api/v1/me').then((m) => setOrgs(m.orgs));
+          const invite = window.location.pathname.startsWith('/invite/')
+            ? window.location.pathname.slice('/invite/'.length)
+            : '';
+          const go = () => api.get<{ orgs: Org[] }>('/api/v1/me').then((m) => setOrgs(m.orgs));
+          if (invite) {
+            api.post(`/api/v1/invites/${invite}/accept`).then(() => { window.history.replaceState({}, '', '/'); go(); }).catch(go);
+          } else {
+            go();
+          }
         }}
       />
     );

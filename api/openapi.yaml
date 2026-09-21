@@ -5,7 +5,7 @@
 openapi: 3.1.0
 info:
   title: taboo · 禁制 — 密钥管理平台 API
-  version: 0.6.0
+  version: 0.7.0
   description: 开源自部署密钥管理平台。高价值数据 + 严格访问控制 + 全程留痕。M5：Secret Sync / Webhooks / OIDC SSO / 审计导出。
 servers:
   - url: http://localhost:7100
@@ -19,8 +19,24 @@ tags:
   - { name: sync, description: Secret Sync 外部平台推送（GitHub Actions / Vercel / Cloudflare） }
   - { name: webhooks, description: 密钥变更事件 Webhook（HMAC-SHA256 签名） }
   - { name: sso, description: 外部用户源 / OIDC Realm（Keycloak 等，JIT 入组 + 组角色映射） }
+  - { name: members, description: 组织成员 / 邀请 / 项目授权矩阵 }
 
 paths:
+  /api/v1/healthz:
+    get:
+      tags: [orgs]
+      summary: 进程存活
+      operationId: healthz
+      responses:
+        '200': { description: 进程活着 }
+  /api/v1/readyz:
+    get:
+      tags: [orgs]
+      summary: 就绪（SELECT 1 + schema 版本）
+      operationId: readyz
+      responses:
+        '200': { description: 就绪 }
+        '503': { description: DB 或 schema 异常 }
   /api/v1/auth/sources:
     get:
       tags: [sso]
@@ -224,6 +240,11 @@ paths:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: limit, in: query, schema: { type: integer, default: 100 } }
         - { name: before, in: query, schema: { type: string }, description: cursor 分页预留（当前按时间倒序 limit） }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: resource, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
       responses:
         '200':
           description: 审计记录
@@ -234,6 +255,152 @@ paths:
                 properties:
                   logs: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/orgs/{slug}/audit/verify:
+    get:
+      tags: [orgs]
+      summary: 验真审计哈希链与 checkpoint
+      operationId: verifyAudit
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200':
+          description: 验真结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  checked: { type: integer }
+                  broken_at: { type: string }
+                  checkpoint_ok: { type: boolean }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/orgs/{slug}/members:
+    get:
+      tags: [members]
+      summary: 成员列表（owner）
+      operationId: listMembers
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200':
+          description: 成员
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  members: { type: array, items: { $ref: '#/components/schemas/OrgMember' } }
+    post:
+      tags: [members]
+      summary: 添加已注册用户为成员
+      operationId: addMember
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string }
+                role: { type: string, enum: [owner, admin, developer, viewer] }
+                restricted: { type: boolean }
+      responses:
+        '201': { description: 已添加 }
+  /api/v1/orgs/{slug}/members/{userId}:
+    patch:
+      tags: [members]
+      summary: 改角色 / restricted
+      operationId: patchMember
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [owner, admin, developer, viewer] }
+                restricted: { type: boolean }
+      responses:
+        '200': { description: 已更新 }
+    delete:
+      tags: [members]
+      summary: 移除成员
+      operationId: removeMember
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已移除 }
+  /api/v1/orgs/{slug}/members/{userId}/grants:
+    put:
+      tags: [members]
+      summary: 替换项目授权矩阵
+      operationId: putMemberGrants
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grants:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      project_id: { type: string }
+                      role: { type: string }
+      responses:
+        '200': { description: 已更新 }
+  /api/v1/orgs/{slug}/invites:
+    post:
+      tags: [members]
+      summary: 创建邀请（自托管返回一次性链接）
+      operationId: createInvite
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string }
+                role: { type: string, enum: [owner, admin, developer, viewer] }
+      responses:
+        '201':
+          description: 邀请链接
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  url: { type: string }
+                  token: { type: string }
+                  expires_at: { type: integer }
+  /api/v1/invites/{token}/accept:
+    post:
+      tags: [members]
+      summary: 接受邀请（登录用户邮箱须匹配）
+      operationId: acceptInvite
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已加入 }
   /api/v1/orgs/{slug}/identities:
     get:
       tags: [identities]
@@ -878,6 +1045,17 @@ paths:
                 properties:
                   exports: { type: array, items: { $ref: '#/components/schemas/AuditExport' } }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/orgs/{slug}/audit/exports/{id}/retry:
+    post:
+      tags: [orgs]
+      summary: 失败的导出任务重试一次
+      operationId: retryAuditExport
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已重新入队 }
   /api/v1/orgs/{slug}/audit/exports/{id}:
     get:
       tags: [orgs]
@@ -932,6 +1110,25 @@ components:
         name: { type: string }
         slug: { type: string }
         role: { type: string, enum: [owner, admin, developer, viewer] }
+        restricted: { type: boolean }
+    OrgMember:
+      type: object
+      properties:
+        user_id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [owner, admin, developer, viewer] }
+        restricted: { type: boolean }
+        joined_at: { type: string }
+        grants:
+          type: array
+          items:
+            type: object
+            properties:
+              project_id: { type: string }
+              project_slug: { type: string }
+              project_name: { type: string }
+              role: { type: string }
     Project:
       type: object
       properties:
@@ -946,6 +1143,7 @@ components:
         name: { type: string }
         slug: { type: string }
         sort_order: { type: integer }
+        protected: { type: boolean }
     Folder:
       type: object
       properties:
@@ -964,6 +1162,7 @@ components:
         version: { type: integer }
         updated_at: { type: string }
         canReveal: { type: boolean }
+        canWrite: { type: boolean }
     SecretValue:
       allOf:
         - { $ref: '#/components/schemas/SecretMeta' }
@@ -1092,7 +1291,7 @@ components:
         project_id: { type: string }
         project_slug: { type: string }
         env: { type: string, description: 显式环境，禁止通配 }
-        permission: { type: string, enum: [read, write] }
+        permission: { type: string, enum: [read, reveal, write] }
     Identity:
       type: object
       properties:
@@ -1123,7 +1322,7 @@ components:
             properties:
               project_id: { type: string }
               env: { type: string }
-              permission: { type: string, enum: [read, write] }
+              permission: { type: string, enum: [read, reveal, write] }
     RegisterRequest:
       type: object
       required: [email, password]

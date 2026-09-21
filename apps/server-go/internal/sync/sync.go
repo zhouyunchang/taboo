@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -23,6 +24,8 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
 // 退避序列：第 N 次失败后 next = backoff[N]（秒），超出即死信
@@ -45,7 +48,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, e *apperr.Error) { writeJSON(w, e.Status, e) }
 
-func ipOf(r *http.Request) string { return r.RemoteAddr }
+func ipOf(r *http.Request) string { return httpx.ClientIP(r) }
 
 // Subscribe 挂到事件总线：密钥变更 → 匹配目标 → 入队同步任务
 func (s *Service) Subscribe(bus *events.Bus) {
@@ -158,16 +161,15 @@ func (s *Service) execute(runID, orgID, platform, configEnc, projectID, envSlug,
 
 	failRun := func(err error) {
 		attempts++
-		status := "failed"
-		nextAt := time.Now().Unix() + int64(backoffSec[attempts-1])
-		if attempts >= maxAttempts {
-			status = "dead"
-			nextAt = 0
-			auth.Audit(s.DB, orgID, nil, "sync.dead", "sync/"+platform+"/"+key,
+		status, nextAt := retryAfterFail(attempts)
+		if status == "dead" {
+			_ = auth.Audit(s.DB, orgID, nil, "sync.dead", "sync/"+platform+"/"+key,
 				map[string]any{"run_id": runID, "error": err.Error()}, "")
 		}
-		_, _ = s.DB.Exec(`UPDATE sync_runs SET status = ?, attempts = ?, next_attempt_at = ?, error = ?,
-			updated_at = datetime('now') WHERE id = ?`, status, attempts, nextAt, err.Error(), runID)
+		if _, e := s.DB.Exec(`UPDATE sync_runs SET status = ?, attempts = ?, next_attempt_at = ?, error = ?,
+			updated_at = datetime('now') WHERE id = ?`, status, attempts, nextAt, err.Error(), runID); e != nil {
+			slog.Error("sync failRun update", "run", runID, "err", e)
+		}
 	}
 
 	// 明文取出：仅在内存短暂存在，绝不落库/日志
@@ -196,9 +198,13 @@ func (s *Service) execute(runID, orgID, platform, configEnc, projectID, envSlug,
 		return
 	}
 	fingerprint := tc.SHA256(value)[:16]
-	_, _ = s.DB.Exec(`UPDATE sync_runs SET status = 'success', attempts = attempts + 1,
+	if _, err := s.DB.Exec(`UPDATE sync_runs SET status = 'success', attempts = attempts + 1,
 		fingerprint = ?, error = '', updated_at = datetime('now') WHERE id = ?`,
-		fingerprint, runID)
+		fingerprint, runID); err != nil {
+		slog.Error("sync success update", "run", runID, "err", err)
+	}
+	_ = auth.Audit(s.DB, orgID, nil, "sync.push", "sync/"+platform+"/"+key,
+		map[string]any{"run_id": runID, "fingerprint": fingerprint, "target": platform, "key": key}, "")
 }
 
 func errUnknownPlatform(p string) error {
@@ -266,8 +272,8 @@ func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (orgID, slug str
 // manageOnly 组织管理（owner）：Sync/Webhook/SSO 配置均属高敏操作，仅用户主体可管理
 func manageOnly(db *sql.DB, w http.ResponseWriter, r *http.Request, orgID string) bool {
 	u := auth.From(r)
-	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", "manage", "") {
-		writeErr(w, apperr.Forbidden)
+	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", rbac.Admin, "") {
+		auth.Deny(db, w, r, orgID, rbac.Admin, "org/sync")
 		return false
 	}
 	return true

@@ -18,6 +18,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
 type Service struct {
@@ -28,7 +29,7 @@ type Service struct {
 type ScopeIn struct {
 	ProjectID  string `json:"project_id"`
 	EnvSlug    string `json:"env"`
-	Permission string `json:"permission"` // read | write
+	Permission string `json:"permission"` // read | reveal | write
 }
 
 type ScopeOut struct {
@@ -46,8 +47,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, e *apperr.Error) { writeJSON(w, e.Status, e) }
-
-func ipOf(r *http.Request) string { return r.RemoteAddr }
 
 // orgOf 校验组织存在 + 当前用户为成员（机器身份本身不可管理身份）
 func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (orgID, slug string, ok bool) {
@@ -75,8 +74,7 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.From(r)
-	if !auth.Can(s.DB, u, orgID, "", "manage", "") {
-		writeErr(w, apperr.Forbidden)
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.Admin, "") {
 		return
 	}
 	var b struct {
@@ -101,8 +99,8 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	resolvedScopes := make([]resolved, 0, len(b.Scopes))
 	for _, sc := range b.Scopes {
-		if sc.Permission != "read" && sc.Permission != "write" {
-			writeErr(w, apperr.New(400, "INVALID", "permission must be read or write"))
+		if sc.Permission != "read" && sc.Permission != "reveal" && sc.Permission != "write" {
+			writeErr(w, apperr.New(400, "INVALID", "permission must be read, reveal or write"))
 			return
 		}
 		if sc.ProjectID == "" || sc.EnvSlug == "" || sc.EnvSlug == "*" || sc.ProjectID == "*" {
@@ -150,8 +148,11 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, orgID, u, "identity.create", "org/"+slug+"/identity/"+b.Name,
-		map[string]any{"client_id": clientID, "scopes": len(resolvedScopes)}, ipOf(r))
+	if err := auth.AuditReq(s.DB, r, orgID, u, "identity.create", "org/"+slug+"/identity/"+b.Name,
+		map[string]any{"client_id": clientID, "scopes": len(resolvedScopes)}); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
+		return
+	}
 	// client_secret 仅本次响应返回一次
 	writeJSON(w, 201, map[string]any{
 		"id": id, "name": b.Name, "client_id": clientID,
@@ -164,6 +165,9 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
 	if !ok {
+		return
+	}
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.Admin, "") {
 		return
 	}
 	rows, err := s.DB.Query(`SELECT id, name, client_id, status, token_ttl, created_at
@@ -194,7 +198,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	for i := range out {
 		out[i].Scopes = scopeOuts(s.DB, ids[i])
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "identity.list", "org/"+slug+"/identities", nil, ipOf(r))
+	_ = auth.AuditReq(s.DB, r, orgID, auth.From(r), "identity.list", "org/"+slug+"/identities", nil)
 	writeJSON(w, 200, map[string]any{"identities": out})
 }
 
@@ -205,8 +209,7 @@ func (s *Service) Revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.From(r)
-	if !auth.Can(s.DB, u, orgID, "", "manage", "") {
-		writeErr(w, apperr.Forbidden)
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.Admin, "") {
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -220,7 +223,10 @@ func (s *Service) Revoke(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, orgID, u, "identity.revoke", "org/"+slug+"/identity/"+name, nil, ipOf(r))
+	if err := auth.AuditReq(s.DB, r, orgID, u, "identity.revoke", "org/"+slug+"/identity/"+name, nil); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
+		return
+	}
 	writeJSON(w, 200, map[string]any{"id": id, "status": "revoked"})
 }
 
@@ -239,6 +245,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		Scan(&id, &orgID, &name, &secretHash, &status, &ttl)
 	// 统一错误，不区分“不存在”与“秘密错误”
 	if err != nil || status != "active" || !auth.CheckIdentitySecret(b.ClientSecret, secretHash) {
+		_ = auth.AuditReq(s.DB, r, "-", nil, "identity.token.failed", "identity/"+b.ClientID, map[string]any{"reason": "bad_credentials"})
 		writeErr(w, apperr.BadCredentials)
 		return
 	}
@@ -249,8 +256,11 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, orgID, &auth.Actor{ID: id, Name: name, Kind: auth.KindIdentity},
-		"identity.token", "identity/"+name, map[string]any{"ttl": ttl}, ipOf(r))
+	if err := auth.AuditReq(s.DB, r, orgID, &auth.Actor{ID: id, Name: name, Kind: auth.KindIdentity},
+		"identity.token", "identity/"+name, map[string]any{"ttl": ttl}); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"access_token": access, "token_type": "Bearer", "expires_in": ttl,
 	})

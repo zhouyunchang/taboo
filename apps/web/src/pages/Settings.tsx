@@ -4,8 +4,9 @@ import type { SyncTarget, SyncRun, Webhook, OIDCProvider } from '../api';
 
 // 组织设置（M5 #11/#12/#13）：Secret Sync / Webhooks / OIDC SSO
 export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role: string }) {
-  const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso'>('sync');
-  const canManage = role === 'owner';
+  const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso' | 'members'>('sync');
+  const canManage = role === 'owner' || role === 'admin';
+  const canMembers = role === 'owner';
 
   return (
     <div className="panel">
@@ -15,11 +16,13 @@ export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role
         <button className={`tab ${sub === 'sync' ? 'active' : ''}`} onClick={() => setSub('sync')}>Secret Sync</button>
         <button className={`tab ${sub === 'webhooks' ? 'active' : ''}`} onClick={() => setSub('webhooks')}>Webhooks</button>
         <button className={`tab ${sub === 'sso' ? 'active' : ''}`} onClick={() => setSub('sso')}>用户源 / SSO</button>
+        {canMembers && <button className={`tab ${sub === 'members' ? 'active' : ''}`} onClick={() => setSub('members')}>成员与角色</button>}
       </div>
-      {!canManage && <p className="muted">当前角色为 {role}，仅 owner 可增删配置；以下列表所有成员可见。</p>}
+      {!canManage && <p className="muted">当前角色为 {role}，admin/owner 可管配置；仅 owner 可管成员。</p>}
       {sub === 'sync' && <SyncTab orgSlug={orgSlug} canManage={canManage} />}
       {sub === 'webhooks' && <WebhooksTab orgSlug={orgSlug} canManage={canManage} />}
       {sub === 'sso' && <SsoTab orgSlug={orgSlug} canManage={canManage} />}
+      {sub === 'members' && canMembers && <MembersTab orgSlug={orgSlug} />}
     </div>
   );
 }
@@ -424,6 +427,128 @@ function OidcCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onClose
           <button type="submit" disabled={busy}>{busy ? '接入中…' : '接入'}</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+type MemberRow = {
+  user_id: string;
+  email: string;
+  name: string;
+  role: string;
+  restricted: boolean;
+  grants: { project_id: string; project_slug: string; project_name: string; role: string }[];
+};
+
+function MembersTab({ orgSlug }: { orgSlug: string }) {
+  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [projects, setProjects] = useState<{ id: string; slug: string; name: string }[]>([]);
+  const [error, setError] = useState('');
+  const [inviteUrl, setInviteUrl] = useState('');
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('developer');
+
+  const load = useCallback(() => {
+    Promise.all([
+      api.get<{ members: MemberRow[] }>(`/api/v1/orgs/${orgSlug}/members`),
+      api.get<{ projects: { id: string; slug: string; name: string }[] }>(`/api/v1/orgs/${orgSlug}/projects`),
+    ]).then(([m, p]) => {
+      setMembers(m.members ?? []);
+      setProjects(p.projects ?? []);
+    }).catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+  }, [orgSlug]);
+  useEffect(load, [load]);
+
+  async function invite(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    try {
+      const d = await api.post<{ url: string }>(`/api/v1/orgs/${orgSlug}/invites`, { email, role });
+      setInviteUrl(d.url);
+      setEmail('');
+      load();
+    } catch (err) { setError(err instanceof ApiError ? err.message : String(err)); }
+  }
+
+  async function changeRole(userId: string, next: string) {
+    try {
+      await api.patch(`/api/v1/orgs/${orgSlug}/members/${userId}`, { role: next });
+      load();
+    } catch (err) { setError(err instanceof ApiError ? err.message : String(err)); }
+  }
+
+  async function toggleRestricted(m: MemberRow) {
+    try {
+      await api.patch(`/api/v1/orgs/${orgSlug}/members/${m.user_id}`, { restricted: !m.restricted });
+      load();
+    } catch (err) { setError(err instanceof ApiError ? err.message : String(err)); }
+  }
+
+  async function setGrant(m: MemberRow, projectId: string, grantRole: string) {
+    const rest = (m.grants ?? []).filter((g) => g.project_id !== projectId);
+    const grants = grantRole === '' ? rest : [...rest, { project_id: projectId, role: grantRole }];
+    try {
+      await api.put(`/api/v1/orgs/${orgSlug}/members/${m.user_id}/grants`, { grants });
+      load();
+    } catch (err) { setError(err instanceof ApiError ? err.message : String(err)); }
+  }
+
+  async function remove(m: MemberRow) {
+    if (!window.confirm(`移除成员 ${m.email}？`)) return;
+    try {
+      await api.del(`/api/v1/orgs/${orgSlug}/members/${m.user_id}`);
+      load();
+    } catch (err) { setError(err instanceof ApiError ? err.message : String(err)); }
+  }
+
+  return (
+    <div>
+      <p className="muted">admin 可管配置；仅 owner 可邀请、改角色、移除成员。restricted 成员只能访问授权矩阵中的项目。</p>
+      <form className="inline" onSubmit={invite}>
+        <input type="email" required placeholder="邀请邮箱" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <select value={role} onChange={(e) => setRole(e.target.value)}>
+          {['viewer', 'developer', 'admin', 'owner'].map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <button type="submit">生成邀请链接</button>
+      </form>
+      {inviteUrl && (
+        <p className="card once-secret">邀请链接（仅此一次）：<input readOnly value={inviteUrl} onFocus={(e) => e.target.select()} /></p>
+      )}
+      {error && <div className="error">{error}</div>}
+      <table className="table">
+        <thead>
+          <tr>
+            <th>成员</th><th>角色</th><th>仅授权项目</th>
+            {projects.map((p) => <th key={p.id}>{p.slug}</th>)}
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {members.map((m) => (
+            <tr key={m.user_id}>
+              <td>{m.name || m.email}<div className="muted">{m.email}</div></td>
+              <td>
+                <select value={m.role} onChange={(e) => changeRole(m.user_id, e.target.value)}>
+                  {['viewer', 'developer', 'admin', 'owner'].map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </td>
+              <td><input type="checkbox" checked={m.restricted} onChange={() => toggleRestricted(m)} disabled={m.role === 'owner' || m.role === 'admin'} /></td>
+              {projects.map((p) => {
+                const g = (m.grants ?? []).find((x) => x.project_id === p.id);
+                return (
+                  <td key={p.id}>
+                    <select value={g?.role ?? ''} onChange={(e) => setGrant(m, p.id, e.target.value)} disabled={m.role === 'owner' || m.role === 'admin'}>
+                      <option value="">组织角色</option>
+                      {['viewer', 'developer', 'admin'].map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </td>
+                );
+              })}
+              <td><button className="ghost" onClick={() => remove(m)}>移除</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

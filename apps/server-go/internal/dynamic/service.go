@@ -90,7 +90,7 @@ func (s *Service) mustRole(w http.ResponseWriter, r *http.Request, p project.Ctx
 	if u.Kind == auth.KindUser {
 		role, ok := auth.Membership(s.DB, p.OrgID, u.ID)
 		if !ok || (role != "owner" && role != "admin") {
-			writeErr(w, apperr.Forbidden)
+			auth.Deny(s.DB, w, r, p.OrgID, "admin", "project/"+p.Slug+"/dynamic")
 			return nil, false
 		}
 		return u, true
@@ -156,8 +156,8 @@ func (s *Service) CreateEngine(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, p.OrgID, u, "dynamic.engine.create", "project/"+p.Slug+"/engine/"+id,
-		map[string]any{"name": b.Name, "type": typ}, r.RemoteAddr)
+	_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.engine.create", "project/"+p.Slug+"/engine/"+id,
+		map[string]any{"name": b.Name, "type": typ})
 	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "type": typ})
 }
 
@@ -264,8 +264,8 @@ func (s *Service) RequestLease(w http.ResponseWriter, r *http.Request) {
 
 	engine, err := s.engineOf(chi.URLParam(r, "eid"), connEnc)
 	if err != nil {
-		auth.Audit(s.DB, p.OrgID, u, "dynamic.lease.failed", "project/"+p.Slug+"/engine/"+chi.URLParam(r, "eid"),
-			map[string]any{"reason": err.Error()}, r.RemoteAddr)
+		_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.failed", "project/"+p.Slug+"/engine/"+chi.URLParam(r, "eid"),
+			map[string]any{"reason": err.Error()})
 		writeErr(w, apperr.New(502, "ENGINE_UNREACHABLE", err.Error()))
 		return
 	}
@@ -274,8 +274,8 @@ func (s *Service) RequestLease(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := engine.Grant(ctx, username, password, ttl); err != nil {
-		auth.Audit(s.DB, p.OrgID, u, "dynamic.lease.failed", "project/"+p.Slug+"/engine/"+chi.URLParam(r, "eid"),
-			map[string]any{"reason": err.Error()}, r.RemoteAddr)
+		_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.failed", "project/"+p.Slug+"/engine/"+chi.URLParam(r, "eid"),
+			map[string]any{"reason": err.Error()})
 		writeErr(w, apperr.New(502, "GRANT_FAILED", err.Error()))
 		return
 	}
@@ -287,8 +287,8 @@ func (s *Service) RequestLease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, p.OrgID, u, "dynamic.lease.create", "project/"+p.Slug+"/lease/"+lid,
-		map[string]any{"username": username, "ttl": ttl.Seconds()}, r.RemoteAddr)
+	_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.create", "project/"+p.Slug+"/lease/"+lid,
+		map[string]any{"username": username, "ttl": ttl.Seconds()})
 	// 明文密码仅此一次下发
 	writeJSON(w, 201, map[string]any{
 		"id": lid, "username": username, "password": password,
@@ -386,8 +386,8 @@ func (s *Service) RenewLease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, p.OrgID, u, "dynamic.lease.renew", "project/"+p.Slug+"/lease/"+lease["id"].(string),
-		map[string]any{"username": username, "expires_at": newExp.Unix()}, r.RemoteAddr)
+	_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.renew", "project/"+p.Slug+"/lease/"+lease["id"].(string),
+		map[string]any{"username": username, "expires_at": newExp.Unix()})
 	writeJSON(w, 200, map[string]any{"id": lease["id"], "expires_at": newExp.Unix()})
 }
 
@@ -407,8 +407,8 @@ func (s *Service) RevokeLease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(502, "REVOKE_FAILED", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, p.OrgID, u, "dynamic.lease.revoke", "project/"+p.Slug+"/lease/"+lease["id"].(string),
-		map[string]any{"username": lease["username"]}, r.RemoteAddr)
+	_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.revoke", "project/"+p.Slug+"/lease/"+lease["id"].(string),
+		map[string]any{"username": lease["username"]})
 	writeJSON(w, 200, map[string]any{"id": lease["id"], "status": "revoked"})
 }
 
@@ -425,6 +425,18 @@ func (s *Service) revokeNow(ctx context.Context, engineID, leaseID, username str
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := engine.Revoke(cctx, username); err != nil {
+		var n int
+		_ = s.DB.QueryRow(`SELECT COALESCE(reclaim_fails,0) FROM dynamic_leases WHERE id = ?`, leaseID).Scan(&n)
+		n++
+		status := "active"
+		if n >= 5 {
+			status = "failed"
+			var orgID string
+			_ = s.DB.QueryRow(`SELECT org_id FROM dynamic_engines WHERE id = ?`, engineID).Scan(&orgID)
+			_ = auth.Audit(s.DB, orgID, &auth.Actor{ID: "system", Name: "system", Kind: auth.KindUser},
+				"dynamic.lease.reclaim_failed", "lease/"+leaseID, map[string]any{"username": username, "fails": n}, "")
+		}
+		_, _ = s.DB.Exec(`UPDATE dynamic_leases SET reclaim_fails = ?, status = CASE WHEN ? = 'failed' THEN 'failed' ELSE status END WHERE id = ?`, n, status, leaseID)
 		return err
 	}
 	_, err = s.DB.Exec(`UPDATE dynamic_leases SET status = 'revoked', revoked_at = datetime('now') WHERE id = ?`, leaseID)

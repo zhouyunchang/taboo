@@ -26,4 +26,4 @@ kubectl -n taboo exec deploy/taboo-taboo -- /usr/local/bin/taboo-server --check
 - **单副本**：SQLite 内嵌模式（WAL，单写多读）。事件 worker（Sync / Webhook / 动态密钥回收 / 审计导出）均为进程内轮询，不支持水平扩展；需要 HA 时请等待 PG 主模式（issue #1）。
 - **密钥注入**：`TABOO_MASTER_KEY` / `TABOO_JWT_SECRET` 只经 K8s Secret 注入，禁止写入 values 或 git。
 - **数据卷**：`/data` 含 `taboo.db`、`master.key`（如使用文件模式）与审计导出文件，请纳入备份策略。
-- **健康检查**：liveness 用 `--check`（加密往返 + schema 版本 + 关键表存在性），readiness 用 HTTP `/`。
+- **健康检查**：liveness = `GET /api/v1/healthz`，readiness = `GET /api/v1/readyz`。`--check` 仅用于启动/CI。

@@ -21,6 +21,7 @@ import (
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
 	totpsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/totp"
 	whsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/webhooks"
@@ -40,6 +41,7 @@ type Deps struct {
 	Webhooks        *whsvc.Service   // M5 #12：nil → 自动创建（Subscribe 到 Events）
 	DisableRegister bool
 	DisablePassword bool
+	WorkerCtx       context.Context
 }
 
 func New(d *Deps) *chi.Mux {
@@ -80,10 +82,35 @@ func New(d *Deps) *chi.Mux {
 	if loginRate <= 0 {
 		loginRate = 5
 	}
-	// 审计导出后台 worker：异步生成导出文件（M5 #14）
-	orgs.StartExportWorker(context.Background(), 10*time.Second)
+	wctx := d.WorkerCtx
+	if wctx == nil {
+		wctx = context.Background()
+	}
+	orgs.StartExportWorker(wctx, 10*time.Second)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		})
+		r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+			if d.DB == nil {
+				http.Error(w, `{"ok":false}`, http.StatusServiceUnavailable)
+				return
+			}
+			var one int
+			if err := d.DB.QueryRow(`SELECT 1`).Scan(&one); err != nil {
+				http.Error(w, `{"ok":false,"error":"db"}`, http.StatusServiceUnavailable)
+				return
+			}
+			var ver int
+			if err := d.DB.QueryRow(`PRAGMA user_version`).Scan(&ver); err != nil || ver != store.SchemaVersion {
+				http.Error(w, `{"ok":false,"error":"schema"}`, http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		})
 		orgs.PublicRoutes(r)
 		// client_credentials 换 token（公开，登录同窗口限流）
 		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/identities/token", identities.Token)
@@ -173,7 +200,6 @@ func securityHeaders(next http.Handler) http.Handler {
 func projectCtx(db *sql.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			u := auth.From(r)
 			var p project.Ctx
 			err := db.QueryRow(`SELECT id, org_id, slug FROM projects WHERE id = ?`, chi.URLParam(r, "pid")).
 				Scan(&p.ID, &p.OrgID, &p.Slug)
@@ -181,8 +207,7 @@ func projectCtx(db *sql.DB) func(http.Handler) http.Handler {
 				writeErr(w, apperr.NotFound)
 				return
 			}
-			if !auth.Can(db, u, p.OrgID, p.ID, "read", "") {
-				writeErr(w, apperr.Forbidden)
+			if !auth.Require(db, w, r, p.OrgID, p.ID, "read", "") {
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(project.With(r.Context(), p)))

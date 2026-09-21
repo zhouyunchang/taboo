@@ -30,7 +30,10 @@
 | `GET/POST/DELETE /api/v1/orgs/{slug}/webhooks*` | Webhook 订阅 + 投递日志（M5 #12） |
 | `GET/POST/PATCH/DELETE /api/v1/orgs/{slug}/oidc*` | OIDC Realm 配置 |
 | `GET /api/v1/orgs/{slug}/audit` | 审计查询（actor/action/resource/from/to 筛选） |
-| `GET /api/v1/orgs/{slug}/audit/export` | 审计导出 CSV/JSONL（M5 #14） |
+| `GET /api/v1/orgs/{slug}/audit/verify` | 哈希链验真 |
+| `GET /api/v1/orgs/{slug}/audit/export` | 审计导出 CSV/JSONL（`async=1` 走任务） |
+| `GET/POST /api/v1/orgs/{slug}/members` | 成员列表 / 添加已注册用户 |
+| `POST /api/v1/orgs/{slug}/invites` | 邀请链接（自托管无 SMTP） |
 
 ## SDK
 

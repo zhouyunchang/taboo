@@ -28,6 +28,8 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
 // 退避序列（秒）：第 N 次失败后调度第 N 次重试，共 6 次尝试后 dead
@@ -56,7 +58,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, e *apperr.Error) { writeJSON(w, e.Status, e) }
 
-func ipOf(r *http.Request) string { return r.RemoteAddr }
+func ipOf(r *http.Request) string { return httpx.ClientIP(r) }
 
 // Subscribe 订阅密钥变更事件 → 为每个匹配的订阅生成投递记录（至少一次）
 func (s *Service) Subscribe(bus *events.Bus) {
@@ -214,14 +216,10 @@ func (s *Service) deliver(id, orgID, event, payload string, attempts int, target
 
 func (s *Service) finishFail(id, orgID, event string, attempts int, cause string) {
 	attempts++
-	status := "failed"
-	var nextAt int64
-	if attempts >= maxAttempts {
-		status = "dead"
-		auth.Audit(s.DB, orgID, nil, "webhook.dead", "webhook/"+id,
+	status, nextAt := retryAfterFail(attempts)
+	if status == "dead" {
+		_ = auth.Audit(s.DB, orgID, nil, "webhook.dead", "webhook/"+id,
 			map[string]any{"event": event, "error": cause, "attempts": attempts}, "")
-	} else {
-		nextAt = time.Now().Unix() + int64(backoffSec[attempts-1])
 	}
 	_, _ = s.DB.Exec(`UPDATE webhook_deliveries SET status = ?, attempts = ?, next_attempt_at = ?,
 		error = ? WHERE id = ?`, status, attempts, nextAt, cause, id)
@@ -249,8 +247,8 @@ func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (orgID, slug str
 
 func manageOnly(db *sql.DB, w http.ResponseWriter, r *http.Request, orgID string) bool {
 	u := auth.From(r)
-	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", "manage", "") {
-		writeErr(w, apperr.Forbidden)
+	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", rbac.Admin, "") {
+		auth.Deny(db, w, r, orgID, rbac.Admin, "org/webhooks")
 		return false
 	}
 	return true

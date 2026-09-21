@@ -4,6 +4,40 @@
  */
 
 export interface paths {
+    "/api/v1/healthz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 进程存活 */
+        get: operations["healthz"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 就绪（SELECT 1 + schema 版本） */
+        get: operations["readyz"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/sources": {
         parameters: {
             query?: never;
@@ -186,6 +220,110 @@ export interface paths {
         get: operations["audit"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/audit/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 验真审计哈希链与 checkpoint */
+        get: operations["verifyAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 成员列表（owner） */
+        get: operations["listMembers"];
+        put?: never;
+        /** 添加已注册用户为成员 */
+        post: operations["addMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** 移除成员 */
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        /** 改角色 / restricted */
+        patch: operations["patchMember"];
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/members/{userId}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 替换项目授权矩阵 */
+        put: operations["putMemberGrants"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 创建邀请（自托管返回一次性链接） */
+        post: operations["createInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/invites/{token}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 接受邀请（登录用户邮箱须匹配） */
+        post: operations["acceptInvite"];
         delete?: never;
         options?: never;
         head?: never;
@@ -678,6 +816,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/audit/exports/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 失败的导出任务重试一次 */
+        post: operations["retryAuditExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{slug}/audit/exports/{id}": {
         parameters: {
             query?: never;
@@ -726,6 +881,22 @@ export interface components {
             slug?: string;
             /** @enum {string} */
             role?: "owner" | "admin" | "developer" | "viewer";
+            restricted?: boolean;
+        };
+        OrgMember: {
+            user_id?: string;
+            email?: string;
+            name?: string;
+            /** @enum {string} */
+            role?: "owner" | "admin" | "developer" | "viewer";
+            restricted?: boolean;
+            joined_at?: string;
+            grants?: {
+                project_id?: string;
+                project_slug?: string;
+                project_name?: string;
+                role?: string;
+            }[];
         };
         Project: {
             id?: string;
@@ -739,6 +910,7 @@ export interface components {
             name?: string;
             slug?: string;
             sort_order?: number;
+            protected?: boolean;
         };
         Folder: {
             id?: string;
@@ -757,6 +929,7 @@ export interface components {
             version?: number;
             updated_at?: string;
             canReveal?: boolean;
+            canWrite?: boolean;
         };
         SecretValue: components["schemas"]["SecretMeta"] & {
             value?: string;
@@ -907,7 +1080,7 @@ export interface components {
             /** @description 显式环境，禁止通配 */
             env?: string;
             /** @enum {string} */
-            permission?: "read" | "write";
+            permission?: "read" | "reveal" | "write";
         };
         Identity: {
             id?: string;
@@ -931,7 +1104,7 @@ export interface components {
                 project_id: string;
                 env: string;
                 /** @enum {string} */
-                permission: "read" | "write";
+                permission: "read" | "reveal" | "write";
             }[];
         };
         RegisterRequest: {
@@ -1075,6 +1248,49 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    healthz: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 进程活着 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    readyz: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 就绪 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description DB 或 schema 异常 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listAuthSources: {
         parameters: {
             query?: never;
@@ -1388,6 +1604,11 @@ export interface operations {
                 limit?: number;
                 /** @description cursor 分页预留（当前按时间倒序 limit） */
                 before?: string;
+                action?: string;
+                actor?: string;
+                resource?: string;
+                from?: string;
+                to?: string;
             };
             header?: never;
             path: {
@@ -1409,6 +1630,222 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    verifyAudit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 验真结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok?: boolean;
+                        checked?: number;
+                        broken_at?: string;
+                        checkpoint_ok?: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成员 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        members?: components["schemas"]["OrgMember"][];
+                    };
+                };
+            };
+        };
+    };
+    addMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    email: string;
+                    /** @enum {string} */
+                    role?: "owner" | "admin" | "developer" | "viewer";
+                    restricted?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description 已添加 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已移除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    patchMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    role?: "owner" | "admin" | "developer" | "viewer";
+                    restricted?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description 已更新 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putMemberGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    grants?: {
+                        project_id?: string;
+                        role?: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description 已更新 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    email: string;
+                    /** @enum {string} */
+                    role?: "owner" | "admin" | "developer" | "viewer";
+                };
+            };
+        };
+        responses: {
+            /** @description 邀请链接 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        url?: string;
+                        token?: string;
+                        expires_at?: number;
+                    };
+                };
+            };
+        };
+    };
+    acceptInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已加入 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     listIdentities: {
@@ -2546,6 +2983,27 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    retryAuditExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已重新入队 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     downloadAuditExport: {

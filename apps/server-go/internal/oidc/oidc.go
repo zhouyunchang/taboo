@@ -34,6 +34,8 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
 var validRoles = map[string]bool{"viewer": true, "developer": true, "admin": true, "owner": true}
@@ -58,17 +60,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func writeErr(w http.ResponseWriter, e *apperr.Error) { writeJSON(w, e.Status, e) }
 
 func ipOf(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i > 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	host, _, _ := strings.Cut(r.RemoteAddr, ":")
-	if host != "" {
-		return host
-	}
-	return r.RemoteAddr
+	return httpx.ClientIP(r)
 }
 
 // ---------- OpenID Discovery + JWKS（内存缓存 1h） ----------
@@ -632,8 +624,8 @@ func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (orgID, slug str
 
 func manageOnly(db *sql.DB, w http.ResponseWriter, r *http.Request, orgID string) bool {
 	u := auth.From(r)
-	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", "manage", "") {
-		writeErr(w, apperr.Forbidden)
+	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", rbac.Admin, "") {
+		auth.Deny(db, w, r, orgID, rbac.Admin, "org/oidc")
 		return false
 	}
 	return true

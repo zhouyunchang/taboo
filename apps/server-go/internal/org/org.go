@@ -13,8 +13,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 )
 
@@ -60,8 +62,6 @@ func slugify(s string) string {
 	return out
 }
 
-func ipOf(r *http.Request) string { return r.RemoteAddr }
-
 // ---------- 路由 ----------
 
 func (s *Service) PublicRoutes(r chi.Router) {
@@ -75,15 +75,23 @@ func (s *Service) PublicRoutes(r chi.Router) {
 
 func (s *Service) Routes(r chi.Router) {
 	r.Get("/me", s.Me)
+	r.Post("/invites/{token}/accept", s.AcceptInvite)
 	r.Route("/orgs/{slug}", func(r chi.Router) {
 		r.Get("/projects", s.ListProjects)
 		r.Post("/projects", s.CreateProject)
+		r.Get("/members", s.ListMembers)
+		r.Post("/members", s.AddMember)
+		r.Patch("/members/{userId}", s.PatchMember)
+		r.Delete("/members/{userId}", s.RemoveMember)
+		r.Put("/members/{userId}/grants", s.PutGrants)
+		r.Post("/invites", s.CreateInvite)
 		r.Get("/audit", s.Audit)
+		r.Get("/audit/verify", s.AuditVerify)
 		r.Get("/audit/export", s.AuditExport)
 		r.Get("/audit/exports", s.ListAuditExports)
 		r.Get("/audit/exports/{id}", s.AuditExportDownload)
+		r.Post("/audit/exports/{id}/retry", s.RetryAuditExport)
 	})
-	// 注意：/projects/{pid} 作用域在 internal/server 统一挂载（含密钥路由），此处只提供 handler
 }
 
 // ---------- 认证 ----------
@@ -159,15 +167,22 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	for i, env := range []string{"dev", "staging", "prod"} {
 		envID := tc.NewID()
-		if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order) VALUES (?, ?, ?, ?, ?)`,
-			envID, projectID, env, env, i); err != nil {
+		prot := 0
+		if env == "prod" {
+			prot = 1
+		}
+		if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
+			envID, projectID, env, env, i, prot); err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
 		}
 		ensureRootFolder(s.DB, envID)
 	}
 	u := &auth.Actor{ID: userID, Email: email, Name: b.Name, Kind: auth.KindUser}
-	auth.Audit(s.DB, orgID, u, "auth.register", "user/"+email, nil, ipOf(r))
+	if err := auth.AuditReq(s.DB, r, orgID, u, "auth.register", "user/"+email, nil); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
 	tk, err := auth.IssueTokens(s.DB, s.JWTSecret, u)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
@@ -211,6 +226,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		ok, needsRehash, _ = tc.CheckPassword(b.Password, hash)
 	}
 	if err != nil || !ok {
+		_ = auth.AuditReq(s.DB, r, "-", nil, "auth.login.failed", "user/"+email, map[string]any{"reason": "bad_credentials"})
 		writeErr(w, apperr.BadCredentials)
 		return
 	}
@@ -235,7 +251,10 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	var orgID string
 	if err := s.DB.QueryRow(`SELECT org_id FROM org_members WHERE user_id = ? LIMIT 1`, userID).Scan(&orgID); err == nil {
-		auth.Audit(s.DB, orgID, u, "auth.login", "user/"+email, nil, ipOf(r))
+		if err := auth.AuditReq(s.DB, r, orgID, u, "auth.login", "user/"+email, nil); err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
 	}
 	tk, err := auth.IssueTokens(s.DB, s.JWTSecret, u)
 	if err != nil {
@@ -279,12 +298,13 @@ func (s *Service) Refresh(w http.ResponseWriter, r *http.Request) {
 func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	type orgRow struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Slug string `json:"slug"`
-		Role string `json:"role"`
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Slug       string `json:"slug"`
+		Role       string `json:"role"`
+		Restricted bool   `json:"restricted"`
 	}
-	rows, err := s.DB.Query(`SELECT o.id, o.name, o.slug, m.role FROM orgs o
+	rows, err := s.DB.Query(`SELECT o.id, o.name, o.slug, m.role, COALESCE(m.restricted,0) FROM orgs o
 		JOIN org_members m ON m.org_id = o.id WHERE m.user_id = ?`, u.ID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
@@ -294,7 +314,9 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 	orgs := []orgRow{}
 	for rows.Next() {
 		var o orgRow
-		_ = rows.Scan(&o.ID, &o.Name, &o.Slug, &o.Role)
+		var rest int
+		_ = rows.Scan(&o.ID, &o.Name, &o.Slug, &o.Role, &rest)
+		o.Restricted = rest == 1
 		orgs = append(orgs, o)
 	}
 	writeJSON(w, 200, map[string]any{"user": u, "orgs": orgs, "totp_enabled": totpEnabledOf(s.DB, u.ID)})
@@ -326,7 +348,17 @@ func (s *Service) ListProjects(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := s.DB.Query(`SELECT id, name, slug, created_at FROM projects WHERE org_id = ? ORDER BY created_at`, orgID)
+	u := auth.From(r)
+	role, restricted, _ := auth.MemberInfo(s.DB, orgID, u.ID)
+	q := `SELECT id, name, slug, created_at FROM projects WHERE org_id = ? ORDER BY created_at`
+	args := []any{orgID}
+	if restricted && !rbac.Privileged(role) {
+		q = `SELECT p.id, p.name, p.slug, p.created_at FROM projects p
+			JOIN project_grants g ON g.project_id = p.id AND g.user_id = ?
+			WHERE p.org_id = ? ORDER BY p.created_at`
+		args = []any{u.ID, orgID}
+	}
+	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -350,6 +382,9 @@ func (s *Service) ListProjects(w http.ResponseWriter, r *http.Request) {
 func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 	orgID, _, ok := s.orgOf(w, r)
 	if !ok {
+		return
+	}
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.Admin, "") {
 		return
 	}
 	var b struct {
@@ -376,11 +411,18 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	for i, env := range []string{"dev", "staging", "prod"} {
 		envID := tc.NewID()
-		_, _ = s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order) VALUES (?, ?, ?, ?, ?)`,
-			envID, pid, env, env, i)
+		prot := 0
+		if env == "prod" {
+			prot = 1
+		}
+		_, _ = s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
+			envID, pid, env, env, i, prot)
 		ensureRootFolder(s.DB, envID)
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "project.create", "project/"+slug, nil, ipOf(r))
+	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "project.create", "project/"+slug, nil); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
 	writeJSON(w, 201, map[string]any{"id": pid, "name": b.Name, "slug": slug})
 }
 
@@ -394,7 +436,7 @@ func (s *Service) projectOf(w http.ResponseWriter, r *http.Request) (secret.Proj
 	}
 	u := auth.From(r)
 	if !auth.Can(s.DB, u, p.OrgID, p.ID, "read", "") {
-		writeErr(w, apperr.Forbidden)
+		auth.Deny(s.DB, w, r, p.OrgID, "read", "project/"+p.Slug)
 		return p, false
 	}
 	return p, true
@@ -405,22 +447,25 @@ func (s *Service) ListEnvs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := s.DB.Query(`SELECT id, name, slug, sort_order FROM environments WHERE project_id = ? ORDER BY sort_order`, p.ID)
+	rows, err := s.DB.Query(`SELECT id, name, slug, sort_order, COALESCE(protected,0) FROM environments WHERE project_id = ? ORDER BY sort_order`, p.ID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	defer rows.Close()
 	type env struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Slug string `json:"slug"`
-		Sort int    `json:"sort_order"`
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Slug      string `json:"slug"`
+		Sort      int    `json:"sort_order"`
+		Protected bool   `json:"protected"`
 	}
 	out := []env{}
 	for rows.Next() {
 		var e env
-		_ = rows.Scan(&e.ID, &e.Name, &e.Slug, &e.Sort)
+		var prot int
+		_ = rows.Scan(&e.ID, &e.Name, &e.Slug, &e.Sort, &prot)
+		e.Protected = prot == 1
 		out = append(out, e)
 	}
 	writeJSON(w, 200, map[string]any{"environments": out})
@@ -431,8 +476,12 @@ func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, rbac.Admin, "") {
+		return
+	}
 	var b struct {
-		Name string `json:"name"`
+		Name      string `json:"name"`
+		Protected bool   `json:"protected"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if strings.TrimSpace(b.Name) == "" {
@@ -442,22 +491,52 @@ func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
 	var maxSort int
 	_ = s.DB.QueryRow(`SELECT COALESCE(MAX(sort_order), -1) FROM environments WHERE project_id = ?`, p.ID).Scan(&maxSort)
 	id := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order) VALUES (?, ?, ?, ?, ?)`,
-		id, p.ID, b.Name, slugify(b.Name), maxSort+1); err != nil {
+	slug := slugify(b.Name)
+	prot := 0
+	if b.Protected || slug == "prod" {
+		prot = 1
+	}
+	if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, p.ID, b.Name, slug, maxSort+1, prot); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	ensureRootFolder(s.DB, id)
-	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name})
+	if err := auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "env.create", "project/"+p.Slug+"/env/"+slug,
+		map[string]any{"protected": prot == 1}); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "slug": slug, "protected": prot == 1})
 }
 
 // ---------- 审计查询 ----------
+
+func (s *Service) AuditVerify(w http.ResponseWriter, r *http.Request) {
+	orgID, _, ok := s.orgOf(w, r)
+	if !ok {
+		return
+	}
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.AuditRead, "") {
+		return
+	}
+	res, err := audit.Verify(s.DB, orgID, s.MasterKey)
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	writeJSON(w, 200, res)
+}
 
 func (s *Service) Audit(w http.ResponseWriter, r *http.Request) {
 	orgID, _, ok := s.orgOf(w, r)
 	if !ok {
 		return
 	}
+	if !auth.Require(s.DB, w, r, orgID, "", rbac.AuditRead, "") {
+		return
+	}
+	_ = auth.AuditReq(s.DB, r, orgID, auth.From(r), "audit.read", "org/audit", nil)
 	f := parseAuditFilter(r)
 	cond, args := buildAuditQuery(orgID, f)
 	rows, err := s.DB.Query(`SELECT id, actor_name, action, resource, metadata, ip, created_at FROM audit_logs
