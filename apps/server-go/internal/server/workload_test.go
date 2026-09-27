@@ -90,6 +90,9 @@ func TestExternalWorkloadProfilesAndLocalRevocation(t *testing.T) {
 			b, _ = json.Marshal(map[string]any{"grants": grants})
 			checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/workloads/"+binding+"/grants", string(b), ""), 200)
 			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets/KEY?env=dev", "", token, "a"), 200)
+			checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/workloads/"+binding+"/grants", `{"grants":[]}`, ""), 200)
+			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", token, "a"), 403)
+			checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/workloads/"+binding+"/grants", string(b), ""), 200)
 			// Provider changes cannot silently reinterpret bound subjects from a new issuer.
 			checkStatus(t, f.localRequest("PATCH", "/api/v1/orgs/a/oauth-trusts/"+trust, `{"issuer":"https://different.example"}`, ""), 409)
 			if profile == "INTROSPECTION_RFC7662" {

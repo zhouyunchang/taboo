@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -591,6 +592,17 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		envID, folderID, key).Scan(&secretID, &latest); err != nil {
 		writeErr(w, apperr.SecretNotFound)
 		return
+	}
+	if expected := r.URL.Query().Get("expectedVersion"); expected != "" {
+		version, e := strconv.Atoi(expected)
+		if e != nil || version < 1 {
+			writeErr(w, apperr.InvalidInput)
+			return
+		}
+		if version != latest {
+			writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
+			return
+		}
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError } from '../api';
+import { api, ApiError, hasBrowserSession } from '../api';
+import { GrantEditor, ConnectionSecurity, OrganizationSecurity, WorkloadGovernance } from '../components/Governance';
 import Modal from '../components/Modal';
 import ValidatedForm from '../components/ValidatedForm';
 import type { SyncTarget, SyncRun, Webhook, OIDCProvider } from '../api';
 
 // 组织设置（M5 #11/#12/#13）：Secret Sync / Webhooks / OIDC SSO
 export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role: string }) {
-  const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso' | 'members'>('sync');
-  const canManage = role === 'owner' || role === 'admin';
+  const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso' | 'members' | 'security' | 'workloads'>('sync');
+  const canManage = role === 'owner' || (!hasBrowserSession() && role === 'admin');
   const canMembers = role === 'owner';
 
   return (
@@ -18,12 +19,15 @@ export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role
         <button className={`tab ${sub === 'sync' ? 'active' : ''}`} onClick={() => setSub('sync')}>Secret Sync</button>
         <button className={`tab ${sub === 'webhooks' ? 'active' : ''}`} onClick={() => setSub('webhooks')}>Webhooks</button>
         <button className={`tab ${sub === 'sso' ? 'active' : ''}`} onClick={() => setSub('sso')}>用户源 / SSO</button>
+        {canMembers && <><button className={`tab ${sub === 'security' ? 'active' : ''}`} onClick={() => setSub('security')}>登录策略</button><button className={`tab ${sub === 'workloads' ? 'active' : ''}`} onClick={() => setSub('workloads')}>OAuth 工作负载</button></>}
         {canMembers && <button className={`tab ${sub === 'members' ? 'active' : ''}`} onClick={() => setSub('members')}>成员与角色</button>}
       </div>
-      {!canManage && <p className="muted">当前角色为 {role}，admin/owner 可管配置；仅 owner 可管成员。</p>}
+      {!canManage && <p className="muted">当前角色为 {role}，外部登录由 owner 管理身份连接、授权和秘密同步。</p>}
       {sub === 'sync' && <SyncTab orgSlug={orgSlug} canManage={canManage} />}
       {sub === 'webhooks' && <WebhooksTab orgSlug={orgSlug} canManage={canManage} />}
       {sub === 'sso' && <SsoTab orgSlug={orgSlug} canManage={canManage} />}
+      {sub === 'security' && canMembers && <OrganizationSecurity orgSlug={orgSlug} />}
+      {sub === 'workloads' && canMembers && <WorkloadGovernance orgSlug={orgSlug} />}
       {sub === 'members' && canMembers && <MembersTab orgSlug={orgSlug} />}
     </div>
   );
@@ -49,7 +53,7 @@ function SyncTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean }
       .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
     api.get<{ runs: SyncRun[] }>(`/api/v1/orgs/${orgSlug}/sync/runs?limit=50`)
       .then((d) => setRuns(d.runs))
-      .catch(() => {});
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [orgSlug]);
   useEffect(() => { load(); }, [load]);
 
@@ -144,7 +148,7 @@ function SyncTargetCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; o
   }
 
   return (
-    <div className="drawer" onClick={onClose}>
+    <Modal title="添加同步目标" onClose={onClose} busy={busy}>
       <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>添加同步目标</h3>
         <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="prod-github" /></label>
@@ -163,11 +167,11 @@ function SyncTargetCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; o
         <label className="row"><input type="checkbox" checked={ping} onChange={(e) => setPing(e.target.checked)} /> 创建前测试平台连通性</label>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">
-          <button type="button" className="ghost" onClick={onClose}>取消</button>
+          <button type="button" className="ghost" disabled={busy} onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
         </div>
       </ValidatedForm>
-    </div>
+    </Modal>
   );
 }
 
@@ -278,7 +282,7 @@ function WebhookCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onCl
   }
 
   return (
-    <div className="drawer" onClick={onClose}>
+    <Modal title="添加 Webhook" onClose={onClose} busy={busy}>
       <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>添加 Webhook 订阅</h3>
         <label>接收 URL<input value={url} onChange={(e) => setUrl(e.target.value)} required placeholder="https://hooks.example.com/taboo" /></label>
@@ -286,11 +290,11 @@ function WebhookCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onCl
         <label>事件过滤（逗号分隔；留空 = 全部）<input value={events} placeholder="secret.created, secret.deleted" /></label>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">
-          <button type="button" className="ghost" onClick={onClose}>取消</button>
+          <button type="button" className="ghost" disabled={busy} onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
         </div>
       </ValidatedForm>
-    </div>
+    </Modal>
   );
 }
 
@@ -300,6 +304,7 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
   const [providers, setProviders] = useState<OIDCProvider[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [error, setError] = useState('');
+  const [security, setSecurity] = useState<OIDCProvider | null>(null);
   const [removing, setRemoving] = useState<OIDCProvider | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -358,7 +363,7 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
                   </button>
                 )}
                 <a className="btn ghost" href={p.login_url ?? '#'}>登录链接</a>
-                {canManage && <button className="ghost" onClick={() => setRemoving(p)}>删除</button>}
+                {canManage && <><button className="ghost" onClick={() => setSecurity(p)}>会话策略</button><button className="ghost" onClick={() => setRemoving(p)}>删除</button></>}
               </td>
             </tr>
           ))}
@@ -366,6 +371,7 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
           {!loading && !error && providers.length === 0 && <tr><td colSpan={6} className="muted center">尚未接入外部用户源</td></tr>}
         </tbody>
       </table></div>
+      {security?.id && <ConnectionSecurity orgSlug={orgSlug} id={security.id} onClose={() => setSecurity(null)} />}
       {removing && <Modal title="删除身份连接" onClose={() => setRemoving(null)} busy={busy}>
         <p>删除「{removing.name}」将终止该连接的登录和浏览器会话；组织、成员及秘密仍保留。</p>
         {error && <p className="error" role="alert">{error}</p>}
@@ -455,6 +461,7 @@ type MemberRow = {
 };
 
 function MembersTab({ orgSlug }: { orgSlug: string }) {
+  const [actionMember,setActionMember]=useState<MemberRow|null>(null);
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [projects, setProjects] = useState<{ id: string; slug: string; name: string }[]>([]);
   const [error, setError] = useState('');
@@ -519,8 +526,8 @@ function MembersTab({ orgSlug }: { orgSlug: string }) {
     <div>
       <p className="muted">admin 可管配置；仅 owner 可邀请、改角色、移除成员。restricted 成员只能访问授权矩阵中的项目。</p>
       <ValidatedForm className="inline" onSubmit={invite}>
-        <input type="email" required placeholder="邀请邮箱" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <select value={role} onChange={(e) => setRole(e.target.value)}>
+        <input aria-label="邀请邮箱" type="email" required placeholder="邀请邮箱" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <select aria-label="邀请角色" value={role} onChange={(e) => setRole(e.target.value)}>
           {['viewer', 'developer', 'admin', 'owner'].map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
         <button type="submit">生成邀请链接</button>
@@ -542,27 +549,28 @@ function MembersTab({ orgSlug }: { orgSlug: string }) {
             <tr key={m.user_id}>
               <td>{m.name || m.email}<div className="muted">{m.email}</div></td>
               <td>
-                <select value={m.role} onChange={(e) => changeRole(m.user_id, e.target.value)}>
+                <select aria-label={`${m.name || m.email} 的组织角色`} value={m.role} onChange={(e) => changeRole(m.user_id, e.target.value)}>
                   {['viewer', 'developer', 'admin', 'owner'].map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
               </td>
-              <td><input type="checkbox" checked={m.restricted} onChange={() => toggleRestricted(m)} disabled={m.role === 'owner' || m.role === 'admin'} /></td>
+              <td><input aria-label={`${m.name || m.email} 仅授权项目`} type="checkbox" checked={m.restricted} onChange={() => toggleRestricted(m)} disabled={m.role === 'owner' || m.role === 'admin'} /></td>
               {projects.map((p) => {
                 const g = (m.grants ?? []).find((x) => x.project_id === p.id);
                 return (
                   <td key={p.id}>
-                    <select value={g?.role ?? ''} onChange={(e) => setGrant(m, p.id, e.target.value)} disabled={m.role === 'owner' || m.role === 'admin'}>
+                    <select aria-label={`${m.name || m.email} 在 ${p.name} 的角色`} value={g?.role ?? ''} onChange={(e) => setGrant(m, p.id, e.target.value)} disabled={m.role === 'owner' || m.role === 'admin'}>
                       <option value="">组织角色</option>
                       {['viewer', 'developer', 'admin'].map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </td>
                 );
               })}
-              <td><button className="ghost" onClick={() => remove(m)}>移除</button></td>
+              <td><button className="ghost" onClick={() => setActionMember(m)}>操作授权</button><button className="ghost" onClick={() => remove(m)}>移除</button></td>
             </tr>
           ))}
         </tbody>
       </table>
+      {actionMember && <GrantEditor orgSlug={orgSlug} path={`/api/v1/orgs/${orgSlug}/members/${actionMember.user_id}/actions`} onClose={() => setActionMember(null)} />}
     </div>
   );
 }

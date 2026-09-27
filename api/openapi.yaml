@@ -1,6 +1,6 @@
 # taboo（禁制）OpenAPI 3.1 契约 —— 前后端与 SDK 的唯一事实源（M3 #7）
 # 约定：
-#   - 错误统一 {code, message, details}；Bearer 鉴权；写路径支持 Idempotency-Key 头（幂等约定，v1.5 强制）
+#   - 错误统一 {code, message, details}；Bearer 鉴权；秘密写入、回滚和删除支持可选 Idempotency-Key；结果未知时用原请求重试
 #   - 审计类列表为 cursor 分页预留（当前 limit/offset 兼容实现）
 openapi: 3.1.0
 info:
@@ -323,7 +323,7 @@ paths:
       tags: [orgs]
       summary: 验真审计哈希链与 checkpoint
       operationId: verifyAudit
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       responses:
         '200':
@@ -343,7 +343,7 @@ paths:
       tags: [members]
       summary: 成员列表（owner）
       operationId: listMembers
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       responses:
         '200':
@@ -358,7 +358,7 @@ paths:
       tags: [members]
       summary: 添加已注册用户为成员
       operationId: addMember
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       requestBody:
         required: true
@@ -378,7 +378,7 @@ paths:
       tags: [members]
       summary: 改角色 / restricted
       operationId: patchMember
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: userId, in: path, required: true, schema: { type: string } }
@@ -396,7 +396,7 @@ paths:
       tags: [members]
       summary: 移除成员
       operationId: removeMember
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: userId, in: path, required: true, schema: { type: string } }
@@ -407,7 +407,7 @@ paths:
       tags: [members]
       summary: 替换项目授权矩阵
       operationId: putMemberGrants
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: userId, in: path, required: true, schema: { type: string } }
@@ -535,7 +535,7 @@ paths:
       tags: [members]
       summary: 创建邀请（自托管返回一次性链接）
       operationId: createInvite
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       requestBody:
         content:
@@ -573,7 +573,7 @@ paths:
       tags: [identities]
       summary: 机器身份列表（owner/admin）
       operationId: listIdentities
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       responses:
         '200': { description: 身份列表, content: { application/json: { schema: { type: object, properties: { identities: { type: array, items: { $ref: '#/components/schemas/Identity' } } } } } } }
@@ -583,7 +583,7 @@ paths:
       tags: [identities]
       summary: 创建机器身份（client_secret 仅此一次返回）
       operationId: createIdentity
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       requestBody:
         required: true
@@ -598,7 +598,7 @@ paths:
       tags: [identities]
       summary: 吊销机器身份（token 立即失效）
       operationId: revokeIdentity
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -770,7 +770,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
       tags: [secrets]
-      summary: 删除密钥和历史版本（write 权限，事务审计）
+      summary: 删除密钥和历史版本（独立 delete 权限，事务审计）
       operationId: deleteSecret
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
@@ -779,6 +779,7 @@ paths:
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
         - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 }, description: 同一请求重放原响应，不同请求复用返回 409 }
+        - { name: expectedVersion, in: query, schema: { type: integer, minimum: 1 }, description: 当前版本前置条件，不匹配返回 409 }
       responses:
         '200': { description: 已删除, content: { application/json: { schema: { type: object, required: [key, deleted], properties: { key: { type: string }, deleted: { type: boolean } } } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -850,7 +851,7 @@ paths:
       tags: [secrets]
       summary: 动态密钥引擎列表 + 活跃 lease（不含连接串/密码）
       operationId: listDynamicEngines
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Pid' }]
       responses:
         '200':
@@ -867,7 +868,7 @@ paths:
       tags: [secrets]
       summary: 创建 PostgreSQL 动态密钥引擎（owner/admin；连接串 Master Key 加密落库）
       operationId: createDynamicEngine
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Pid' }]
       requestBody:
         required: true
@@ -906,7 +907,7 @@ paths:
       tags: [secrets]
       summary: 续期 lease（延长 VALID UNTIL，不超 max_ttl；lease 所属身份或 owner/admin）
       operationId: renewLease
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
         - { name: lid, in: path, required: true, schema: { type: string } }
@@ -924,7 +925,7 @@ paths:
       tags: [secrets]
       summary: 持久化回收 lease；失败保留任务并重试（外部登录仅 owner）
       operationId: revokeLease
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
         - { name: lid, in: path, required: true, schema: { type: string } }
@@ -939,7 +940,7 @@ paths:
       tags: [sync]
       summary: 同步目标列表（成员可见；config 只回显已配置的键名）
       operationId: listSyncTargets
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -956,7 +957,7 @@ paths:
       tags: [sync]
       summary: 创建同步目标（owner；平台凭证 Master Key 加密落库；?ping=1 先自检连通性）
       operationId: createSyncTarget
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       requestBody:
@@ -973,7 +974,7 @@ paths:
       tags: [sync]
       summary: 删除同步目标（owner）
       operationId: deleteSyncTarget
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -986,7 +987,7 @@ paths:
       tags: [sync]
       summary: 手动全量重推（owner；绑定范围内所有密钥入队）
       operationId: retrySyncTarget
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -999,7 +1000,7 @@ paths:
       tags: [sync]
       summary: 同步记录（指纹审计，不含明文；可按目标/状态筛选）
       operationId: listSyncRuns
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: target_id, in: query, schema: { type: string } }
@@ -1022,7 +1023,7 @@ paths:
       tags: [webhooks]
       summary: Webhook 订阅列表（不含签名密钥）
       operationId: listWebhooks
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -1039,7 +1040,7 @@ paths:
       tags: [webhooks]
       summary: 创建订阅（owner；secret 缺省自动生成，仅本次响应返回）
       operationId: createWebhook
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       requestBody:
@@ -1062,7 +1063,7 @@ paths:
       tags: [webhooks]
       summary: 删除订阅（owner）
       operationId: deleteWebhook
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1075,7 +1076,7 @@ paths:
       tags: [webhooks]
       summary: 投递日志（至少一次 + 指数退避；payload 不含明文）
       operationId: listWebhookDeliveries
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1102,6 +1103,33 @@ paths:
                         created_at: { type: string }
                         delivered_at: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/organizations:
+    get:
+      tags: [auth]
+      summary: 当前外部用户已加入的组织及匹配 issuer 的登录连接；切换需要重新验证
+      operationId: listBrowserOrganizations
+      security: [{ browserSession: [] }]
+      responses:
+        '200':
+          description: 仅返回当前用户的组织名称和已登记的登录链接
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  organizations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        connection: { type: string }
+                        current: { type: boolean }
+                        login_url: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/auth/session:
     get:
@@ -1181,7 +1209,7 @@ paths:
       tags: [sso]
       summary: IdP 配置列表（成员可见；不含 client_secret）
       operationId: listOIDCProviders
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -1198,7 +1226,7 @@ paths:
       tags: [sso]
       summary: 接入 IdP（owner；创建前做 discovery 连通性自检；client_secret 加密落库）
       operationId: createOIDCProvider
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       requestBody:
@@ -1215,7 +1243,7 @@ paths:
       tags: [sso]
       summary: 更新 IdP 配置（owner；client_secret 可选轮换）
       operationId: updateOIDCProvider
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1233,7 +1261,7 @@ paths:
       tags: [sso]
       summary: 删除 IdP 配置（owner）
       operationId: deleteOIDCProvider
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1248,7 +1276,7 @@ paths:
       tags: [orgs]
       summary: 审计导出 CSV/JSONL（筛选同审计查询；async=1 走异步任务 + 下载链接）
       operationId: auditExport
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: format, in: query, schema: { type: string, enum: [csv, jsonl], default: csv } }
@@ -1267,7 +1295,7 @@ paths:
       tags: [orgs]
       summary: 导出任务列表
       operationId: listAuditExports
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -1285,7 +1313,7 @@ paths:
       tags: [orgs]
       summary: 失败的导出任务重试一次
       operationId: retryAuditExport
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1296,7 +1324,7 @@ paths:
       tags: [orgs]
       summary: 下载导出文件（未完成时返回任务状态）
       operationId: downloadAuditExport
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1309,7 +1337,7 @@ paths:
       tags: [identities]
       summary: 读取机器 OAuth 信任连接（组织 owner）
       operationId: listOAuthTrusts
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -1322,7 +1350,7 @@ paths:
       tags: [identities]
       summary: 登记机器 OAuth 信任连接（组织 owner）
       operationId: createOAuthTrust
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       requestBody:
@@ -1341,7 +1369,7 @@ paths:
       tags: [identities]
       summary: 更新或停用机器 OAuth 信任连接（组织 owner）
       operationId: updateOAuthTrust
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1360,7 +1388,7 @@ paths:
       tags: [identities]
       summary: 删除信任并撤销其工作负载（组织 owner）
       operationId: deleteOAuthTrust
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1375,7 +1403,7 @@ paths:
       tags: [identities]
       summary: 读取外部工作负载与权限（组织 owner）
       operationId: listWorkloads
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -1388,7 +1416,7 @@ paths:
       tags: [identities]
       summary: 显式绑定外部机器主体（组织 owner）
       operationId: createWorkload
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       requestBody:
@@ -1407,7 +1435,7 @@ paths:
       tags: [identities]
       summary: 替换工作负载显式权限（组织 owner）
       operationId: putWorkloadGrants
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1427,7 +1455,7 @@ paths:
       tags: [identities]
       summary: 撤销工作负载绑定（组织 owner）
       operationId: revokeWorkload
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1445,7 +1473,7 @@ components:
       in: cookie
       name: taboo.session
       description: OIDC BFF；写入还要求精确 Origin 和 X-CSRF-Token；只允许已适配的组织范围路由
-    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT or opaque with explicit registered profile }
   parameters:
     OrgSlug: { name: slug, in: path, required: true, schema: { type: string } }
     Pid: { name: pid, in: path, required: true, schema: { type: string } }
@@ -1636,7 +1664,7 @@ components:
       type: object
       required: [grants]
       properties:
-        grants: { type: array, minItems: 1, maxItems: 200, items: { $ref: '#/components/schemas/WorkloadGrant' } }
+        grants: { type: array, minItems: 0, maxItems: 200, items: { $ref: '#/components/schemas/WorkloadGrant' } }
     WorkloadInput:
       allOf:
         - { $ref: '#/components/schemas/WorkloadGrantsInput' }

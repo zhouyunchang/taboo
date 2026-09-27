@@ -345,3 +345,26 @@ func TestFederationProviderPatchAndAudit(t *testing.T) {
 		t.Fatal("unaudited configuration committed")
 	}
 }
+
+func TestFederationOrganizationChoicesDoNotChangeScope(t *testing.T) {
+	f := fixture(t, "")
+	a := f.login("a", nil)
+	checkStatus(t, f.request("GET", "/api/v1/auth/organizations", nil, false), 401)
+	choices := f.request("GET", "/api/v1/auth/organizations", a, false)
+	checkStatus(t, choices, 200)
+	if strings.Contains(choices.Body.String(), `"id":"b"`) {
+		t.Fatal("unjoined organization exposed")
+	}
+	_ = f.login("b", nil)
+	choices = f.request("GET", "/api/v1/auth/organizations", a, false)
+	checkStatus(t, choices, 200)
+	if !strings.Contains(choices.Body.String(), `"id":"b"`) {
+		t.Fatal("joined organization absent")
+	}
+	checkStatus(t, f.request("GET", "/api/v1/orgs/b/projects", a, false), 403)
+	f.exec(`UPDATE oidc_providers SET enabled=0 WHERE id='provider-b'`)
+	choices = f.request("GET", "/api/v1/auth/organizations", a, false)
+	if strings.Contains(choices.Body.String(), `"id":"b"`) {
+		t.Fatal("disabled connection exposed")
+	}
+}

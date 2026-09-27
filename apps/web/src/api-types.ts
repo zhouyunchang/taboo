@@ -639,7 +639,7 @@ export interface paths {
         get: operations["revealSecret"];
         put?: never;
         post?: never;
-        /** 删除密钥和历史版本（write 权限，事务审计） */
+        /** 删除密钥和历史版本（独立 delete 权限，事务审计） */
         delete: operations["deleteSecret"];
         options?: never;
         head?: never;
@@ -879,6 +879,23 @@ export interface paths {
         };
         /** 投递日志（至少一次 + 指数退避；payload 不含明文） */
         get: operations["listWebhookDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 当前外部用户已加入的组织及匹配 issuer 的登录连接；切换需要重新验证 */
+        get: operations["listBrowserOrganizations"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2785,6 +2802,8 @@ export interface operations {
             query?: {
                 env?: components["parameters"]["Env"];
                 path?: string;
+                /** @description 当前版本前置条件，不匹配返回 409 */
+                expectedVersion?: number;
             };
             header?: {
                 /** @description 同一请求重放原响应，不同请求复用返回 409 */
@@ -3356,6 +3375,36 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    listBrowserOrganizations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 仅返回当前用户的组织名称和已登记的登录链接 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        organizations?: {
+                            id?: string;
+                            name?: string;
+                            connection?: string;
+                            current?: boolean;
+                            login_url?: string;
+                        }[];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     getBrowserSession: {

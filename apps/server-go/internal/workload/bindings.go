@@ -28,8 +28,8 @@ type Binding struct {
 }
 
 func (s *Service) validateGrants(w http.ResponseWriter, org string, grants []Grant) bool {
-	if len(grants) == 0 || len(grants) > 200 {
-		fail(w, 400, "INVALID_GRANTS", "between 1 and 200 explicit resource grants are required")
+	if grants == nil || len(grants) > 200 {
+		fail(w, 400, "INVALID_GRANTS", "an explicit grants array with at most 200 entries is required")
 		return false
 	}
 	seen := map[string]bool{}

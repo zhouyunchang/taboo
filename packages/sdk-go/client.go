@@ -119,6 +119,17 @@ func (c *Client) ensureToken(ctx context.Context) (string, error) {
 }
 
 func (c *Client) do(ctx context.Context, method, p string, body, out any) error {
+	return c.doMutation(ctx, method, p, body, out, MutationOptions{})
+}
+
+// MutationOptions must be retained with the request until its outcome is known.
+// Reuse IdempotencyKey and the exact payload after an ambiguous transport failure.
+type MutationOptions struct {
+	IdempotencyKey  string
+	ExpectedVersion *int
+}
+
+func (c *Client) doMutation(ctx context.Context, method, p string, body, out any, options MutationOptions) error {
 	token, err := c.ensureToken(ctx)
 	if err != nil {
 		return err
@@ -133,6 +144,9 @@ func (c *Client) do(ctx context.Context, method, p string, body, out any) error 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if options.IdempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", options.IdempotencyKey)
+	}
 	c.mu.Lock()
 	if c.oauth != nil {
 		req.Header.Set("X-Taboo-Trust", c.oauth.TrustID)

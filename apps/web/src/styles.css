@@ -191,3 +191,27 @@ button.nav-item.active { background: var(--accent2); color: #fff; }
 
 select { color-scheme: dark; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font: inherit; }
 .resize-none { resize: none; min-height: 80px; }
+
+/* Governance retains the same table/form rhythm on narrow tenant consoles. */
+.org-switch { display:flex; gap:8px; align-items:center; min-width:0; max-width:100%; }
+.org-switch select { width:auto; max-width:260px; }
+.modal fieldset { border:1px solid var(--border, #ddd); border-radius:8px; padding:10px; margin:8px 0; min-width:0; }
+.modal .drawer-inner { width:100%; max-width:100%; padding:0; box-shadow:none; border:0; }
+.table-scroll { max-width:100%; overflow-x:auto; }
+.table-scroll td { overflow-wrap:anywhere; }
+.panel > .table { display:block; overflow-x:auto; }
+@media (max-width:600px) {
+  .org-switch { flex:1; }
+  .org-switch select { max-width:190px; }
+  .panel-head { flex-wrap:wrap; }
+  .panel-head h3 { width:100%; }
+}
+.org-switch { flex-direction:row; flex-shrink:0; }
+.topbar .brand { flex-shrink:0; }
+@media (max-width:600px) {
+  .topbar .brand { flex-basis:100%; }
+  .topbar .org-switch { flex:1 1 100%; justify-content:space-between; }
+  .topbar .org-switch select { width:calc(100% - 48px); max-width:none; min-width:0; }
+  .topbar .spacer { display:none; }
+  .table-scroll table { min-width:620px; }
+}

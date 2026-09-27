@@ -26,9 +26,15 @@ func TestConsumerAPI(t *testing.T) {
 		c.WithIdentity(cfg.ClientID, cfg.ClientSecret)
 	}
 	ctx := context.Background()
-	version, err := c.UpsertSecret(ctx, "project-a", "dev", "/", "CONSUMER_SECRET", "consumer-fixture-value", "", nil)
+	expected := 0
+	options := MutationOptions{IdempotencyKey: "sdk-consumer-create", ExpectedVersion: &expected}
+	version, err := c.UpsertSecret(ctx, "project-a", "dev", "/", "CONSUMER_SECRET", "consumer-fixture-value", "", nil, options)
 	if err != nil || version < 1 {
 		t.Fatalf("write: %v", err)
+	}
+	replay, err := c.UpsertSecret(ctx, "project-a", "dev", "/", "CONSUMER_SECRET", "consumer-fixture-value", "", nil, options)
+	if err != nil || replay != version {
+		t.Fatalf("receipt replay: %v", err)
 	}
 	items, err := c.ListSecrets(ctx, "project-a", "dev", "/")
 	if err != nil || len(items) != 1 {

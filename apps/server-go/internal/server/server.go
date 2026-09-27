@@ -130,6 +130,7 @@ func New(d *Deps) *chi.Mux {
 			DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword,
 		}
 		r.Get("/auth/session", auth.BrowserSession(d.DB, oidcSvc.CheckSession))
+		r.With(auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Get("/auth/organizations", oidcSvc.Organizations)
 		r.Post("/auth/logout", oidcSvc.Logout)
 		r.Get("/auth/sources", oidcSvc.ListSources)
 		r.Route("/auth/oidc/{slug}", func(r chi.Router) {

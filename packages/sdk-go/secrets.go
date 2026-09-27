@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 )
 
 // ---------- 实体 ----------
@@ -122,12 +123,17 @@ func (c *Client) ListSecrets(ctx context.Context, projectID, env, folderPath str
 }
 
 // UpsertSecret 创建/更新（产生新版本）；同 key 不同 folderPath 互不冲突
-func (c *Client) UpsertSecret(ctx context.Context, projectID, env, folderPath, key, value, comment string, tags []string) (int, error) {
+func (c *Client) UpsertSecret(ctx context.Context, projectID, env, folderPath, key, value, comment string, tags []string, options ...MutationOptions) (int, error) {
 	var out struct {
 		Version int `json:"version"`
 	}
 	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets" + q(vset("env", env, "path", folderPath))
-	err := c.do(ctx, "POST", p, map[string]any{"key": key, "value": value, "comment": comment, "tags": tags}, &out)
+	opt := firstMutationOption(options)
+	body := map[string]any{"key": key, "value": value, "comment": comment, "tags": tags}
+	if opt.ExpectedVersion != nil {
+		body["expectedVersion"] = *opt.ExpectedVersion
+	}
+	err := c.doMutation(ctx, "POST", p, body, &out, opt)
 	return out.Version, err
 }
 
@@ -150,12 +156,17 @@ func (c *Client) SecretVersions(ctx context.Context, projectID, env, folderPath,
 }
 
 // RollbackSecret 回滚到历史版本（以旧值产生新版本）
-func (c *Client) RollbackSecret(ctx context.Context, projectID, env, folderPath, key string, version int) (int, error) {
+func (c *Client) RollbackSecret(ctx context.Context, projectID, env, folderPath, key string, version int, options ...MutationOptions) (int, error) {
 	var out struct {
 		Version int `json:"version"`
 	}
 	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + "/rollback" + q(vset("env", env, "path", folderPath))
-	err := c.do(ctx, "POST", p, map[string]int{"version": version}, &out)
+	opt := firstMutationOption(options)
+	body := map[string]int{"version": version}
+	if opt.ExpectedVersion != nil {
+		body["expectedVersion"] = *opt.ExpectedVersion
+	}
+	err := c.doMutation(ctx, "POST", p, body, &out, opt)
 	return out.Version, err
 }
 
@@ -182,4 +193,21 @@ func (c *Client) DefaultProject(ctx context.Context, orgSlug string) (*Project, 
 		return nil, fmt.Errorf("no project in org %s", orgSlug)
 	}
 	return &ps[0], nil
+}
+
+func firstMutationOption(options []MutationOptions) MutationOptions {
+	if len(options) > 0 {
+		return options[0]
+	}
+	return MutationOptions{}
+}
+
+func (c *Client) DeleteSecret(ctx context.Context, projectID, env, folderPath, key string, options ...MutationOptions) error {
+	opt := firstMutationOption(options)
+	query := vset("env", env, "path", folderPath)
+	if opt.ExpectedVersion != nil {
+		query.Set("expectedVersion", strconv.Itoa(*opt.ExpectedVersion))
+	}
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + q(query)
+	return c.doMutation(ctx, "DELETE", p, nil, nil, opt)
 }

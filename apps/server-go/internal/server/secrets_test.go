@@ -61,8 +61,9 @@ func TestSecretEnvelopeMutationAndAuditAtomicity(t *testing.T) {
 	f.exec(`UPDATE secret_versions SET ciphertext=(SELECT ciphertext FROM secret_versions WHERE version=1) WHERE version=3`)
 	checkStatus(t, f.localRequest("GET", "/api/v1/projects/project-a/secrets/K?env=dev", "", ""), 500)
 	checkStatus(t, f.localRequest("GET", "/api/v1/projects/project-a/export?env=dev", "", ""), 500)
-	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev", "", "delete"), 200)
-	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev", "", "delete"), 200)
+	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev&expectedVersion=2", "", "stale-delete"), 409)
+	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev&expectedVersion=3", "", "delete"), 200)
+	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev&expectedVersion=3", "", "delete"), 200)
 	testdb.FailAudit(t, f.db)
 	checkStatus(t, f.localRequest("POST", path, `{"key":"NEW","value":"hidden"}`, "failed-write"), 500)
 	if err := f.db.QueryRow(`SELECT COUNT(*) FROM secrets`).Scan(&n); err != nil || n != 0 {

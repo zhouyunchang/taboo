@@ -283,7 +283,7 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.SetBrowserCookie(w, raw, origin, expires)
 	// No token, identity payload, or provider error is rendered into script.
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/?signed_in=1", http.StatusSeeOther)
 }
 
 func bindIdentity(tx *sql.Tx, p *provider, subject string, claims map[string]any) (string, error) {

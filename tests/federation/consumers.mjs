@@ -20,6 +20,10 @@ if (external) {
 } else {
  await cli(['login','--client-id',env.TABOO_CLIENT_ID,'--client-secret',env.TABOO_CLIENT_SECRET]);
 }
+const writeArgs=['set','CONSUMER_SECRET','consumer-fixture-value','--idempotency-key','cli-consumer-update','--expected-version','1'];
+assert((await cli(writeArgs)).includes('(v2)'));
+assert((await cli(writeArgs)).includes('(v2)'));
+await cli(['set','CONSUMER_SECRET','consumer-fixture-value','--idempotency-key','cli-stale-version','--expected-version','1'],{},false);
 assert((await cli(['list'])).includes('CONSUMER_SECRET'));
 assert.equal((await cli(['get','CONSUMER_SECRET'])).trim(),'consumer-fixture-value');
 assert((await cli(['run','--',process.execPath,'-e','process.stdout.write(process.env.CONSUMER_SECRET)'])).includes('consumer-fixture-value'));
