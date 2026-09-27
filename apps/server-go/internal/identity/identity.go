@@ -241,7 +241,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	var status string
 	var ttl int
 	err := s.DB.QueryRow(`SELECT id, org_id, name, secret_hash, status, token_ttl
-		FROM machine_identities WHERE client_id = ?`, b.ClientID).
+		FROM machine_identities WHERE client_id = ? AND auth_type='client_credentials'`, b.ClientID).
 		Scan(&id, &orgID, &name, &secretHash, &status, &ttl)
 	// 统一错误，不区分“不存在”与“秘密错误”
 	if err != nil || status != "active" || !auth.CheckIdentitySecret(b.ClientSecret, secretHash) {

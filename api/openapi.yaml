@@ -1120,6 +1120,140 @@ paths:
         '200': { description: 文件内容或任务状态 JSON }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/orgs/{slug}/oauth-trusts:
+    get:
+      tags: [identities]
+      summary: 读取机器 OAuth 信任连接（组织 owner）
+      operationId: listOAuthTrusts
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200': { description: 信任连接，不含凭据, content: { application/json: { schema: { type: object, required: [trusts], properties: { trusts: { type: array, items: { $ref: '#/components/schemas/OAuthTrust' } } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+    post:
+      tags: [identities]
+      summary: 登记机器 OAuth 信任连接（组织 owner）
+      operationId: createOAuthTrust
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OAuthTrustInput' }
+      responses:
+        '201': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/orgs/{slug}/oauth-trusts/{id}:
+    patch:
+      tags: [identities]
+      summary: 更新或停用机器 OAuth 信任连接（组织 owner）
+      operationId: updateOAuthTrust
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OAuthTrustInput' }
+      responses:
+        '200': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+    delete:
+      tags: [identities]
+      summary: 删除信任并撤销其工作负载（组织 owner）
+      operationId: deleteOAuthTrust
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/orgs/{slug}/workloads:
+    get:
+      tags: [identities]
+      summary: 读取外部工作负载与权限（组织 owner）
+      operationId: listWorkloads
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200': { description: 外部工作负载, content: { application/json: { schema: { type: object, required: [workloads], properties: { workloads: { type: array, items: { $ref: '#/components/schemas/Workload' } } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+    post:
+      tags: [identities]
+      summary: 显式绑定外部机器主体（组织 owner）
+      operationId: createWorkload
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkloadInput' }
+      responses:
+        '201': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/orgs/{slug}/workloads/{id}/grants:
+    put:
+      tags: [identities]
+      summary: 替换工作负载显式权限（组织 owner）
+      operationId: putWorkloadGrants
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkloadGrantsInput' }
+      responses:
+        '200': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/orgs/{slug}/workloads/{id}/revoke:
+    post:
+      tags: [identities]
+      summary: 撤销工作负载绑定（组织 owner）
+      operationId: revokeWorkload
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+
 components:
   securitySchemes:
     browserSession:
@@ -1237,6 +1371,63 @@ components:
         version: { type: integer }
         created_by: { type: string }
         created_at: { type: string }
+    OAuthTrustInput:
+      type: object
+      properties:
+        name: { type: string, maxLength: 200 }
+        issuer: { type: string, description: 操作员允许的精确 issuer；已有信任不允许更换 issuer }
+        audience: { type: string, description: 必须在资源 Token 中验证的 audience }
+        metadata_mode: { type: string, enum: [oauth, oidc], default: oauth }
+        token_profile: { type: string, enum: [JWT_RFC9068, INTROSPECTION_RFC7662], default: JWT_RFC9068 }
+        client_id: { type: string, description: 内省使用的资源服务器 Client }
+        client_secret: { type: string, writeOnly: true }
+        max_lifetime: { type: integer, minimum: 60, maximum: 900, default: 900 }
+        enabled: { type: boolean }
+    OAuthTrust:
+      type: object
+      required: [id, name, issuer, audience, metadata_mode, token_profile, max_lifetime, enabled, revocation_profile]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        issuer: { type: string }
+        audience: { type: string }
+        metadata_mode: { type: string, enum: [oauth, oidc] }
+        token_profile: { type: string, enum: [JWT_RFC9068, INTROSPECTION_RFC7662] }
+        client_id: { type: string }
+        max_lifetime: { type: integer }
+        enabled: { type: boolean }
+        revocation_profile: { type: string, enum: [BOUNDED, ONLINE_REQUIRED] }
+    WorkloadGrant:
+      type: object
+      required: [project_id, environment_id, action, required_scope]
+      properties:
+        project_id: { type: string }
+        environment_id: { type: string }
+        action: { type: string, enum: [read, reveal, write, export], description: 四种动作独立，不隐含其他动作 }
+        required_scope: { type: string, description: 该动作必须在已验证 Token 中出现的精确 scope }
+    WorkloadGrantsInput:
+      type: object
+      required: [grants]
+      properties:
+        grants: { type: array, minItems: 1, maxItems: 200, items: { $ref: '#/components/schemas/WorkloadGrant' } }
+    WorkloadInput:
+      allOf:
+        - { $ref: '#/components/schemas/WorkloadGrantsInput' }
+        - type: object
+          required: [name, trust_id, subject, client_id]
+          properties:
+            name: { type: string }
+            trust_id: { type: string }
+            subject: { type: string, description: 已确认的外部机器 sub，与 client_id 不假定相等 }
+            client_id: { type: string }
+    Workload:
+      allOf:
+        - { $ref: '#/components/schemas/WorkloadInput' }
+        - type: object
+          required: [id, enabled]
+          properties:
+            id: { type: string }
+            enabled: { type: boolean }
     SecretUpsertRequest:
       type: object
       required: [key, value]

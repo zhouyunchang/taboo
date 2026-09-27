@@ -115,7 +115,7 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "reveal", envSlug) {
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "export", envSlug) {
 		return
 	}
 	envID, err := s.envOf(p.ID, envSlug)

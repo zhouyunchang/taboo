@@ -86,6 +86,7 @@ func UpgradeEnvelopes(db *sql.DB, master []byte, apply bool) (int, error) {
 		orgKey                        bool
 	}
 	sources := []source{
+		{"oauth_trusts", "client_secret_enc", `SELECT id,org_id,'','',1,client_secret_enc,id FROM oauth_trusts WHERE client_secret_enc<>''`, "oauth-introspection", false},
 		{"secret_versions", "ciphertext", `SELECT v.id,p.org_id,p.id,e.id,v.version,v.ciphertext,s.id FROM secret_versions v JOIN secrets s ON s.id=v.secret_id JOIN environments e ON e.id=s.env_id JOIN projects p ON p.id=e.project_id`, "secret", true},
 		{"oidc_providers", "client_secret_enc", `SELECT id,org_id,'','',1,client_secret_enc,id FROM oidc_providers`, "oidc-client", false},
 		{"sync_targets", "config_enc", `SELECT id,org_id,'','',1,config_enc,id FROM sync_targets`, "sync-target", false},

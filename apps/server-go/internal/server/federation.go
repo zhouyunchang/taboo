@@ -20,6 +20,26 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+			if a.WorkloadBinding != "" {
+				parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/"), "/")
+				if len(parts) < 3 || parts[0] != "projects" {
+					writeErr(w, apperr.Forbidden)
+					return
+				}
+				switch parts[2] {
+				case "secrets", "environments", "folders", "export":
+				default:
+					writeErr(w, apperr.Forbidden)
+					return
+				}
+				var org string
+				if err := db.QueryRow(`SELECT org_id FROM projects WHERE id=?`, parts[1]).Scan(&org); err != nil || org != a.OrganizationID {
+					writeErr(w, apperr.Forbidden)
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
 			path := r.URL.Path
 			if path == "/api/v1/me" || path == "/api/v1/auth/session" || path == "/api/v1/auth/logout" {
 				next.ServeHTTP(w, r)

@@ -36,7 +36,7 @@ func Load() *Config {
 	c := &Config{
 		DatabaseURL:         os.Getenv("TABOO_DATABASE_URL"),
 		DatabaseRuntimeRole: os.Getenv("TABOO_DATABASE_RUNTIME_ROLE"),
-		IssuerAllowlist:     strings.Split(os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ","),
+		IssuerAllowlist:     strings.Split(os.Getenv("TABOO_ISSUER_ALLOWLIST")+","+os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ","),
 		SessionProfile:      os.Getenv("TABOO_OIDC_SESSION_PROFILE"),
 		PublicOrigin:        os.Getenv("TABOO_PUBLIC_ORIGIN"),
 		Port:                getenv("TABOO_PORT", getenv("PORT", "7100")),

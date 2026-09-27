@@ -7,6 +7,8 @@ import "fmt"
 // edges are immutable: resources must be explicitly copied to another tenant.
 func migrateIntegrity(db migrationDB) error {
 	checks := map[string]string{
+		"workload_bindings":  `EXISTS(SELECT 1 FROM machine_identities m WHERE m.id=NEW.id AND m.org_id=NEW.org_id AND m.auth_type='external_oauth')`,
+		"workload_grants":    `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND e.id=NEW.env_id)`,
 		"secrets":            `EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.folder_id AND f.env_id=NEW.env_id)`,
 		"folders":            `NEW.parent_id IS NULL OR EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.parent_id AND f.env_id=NEW.env_id)`,
 		"project_grants":     `EXISTS(SELECT 1 FROM projects p JOIN org_members m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND m.user_id=NEW.user_id)`,
@@ -30,10 +32,14 @@ func migrateIntegrity(db migrationDB) error {
 			}
 		}
 	}
-	for table, column := range map[string]string{"projects": "org_id", "environments": "project_id", "folders": "env_id", "secrets": "env_id", "machine_identities": "org_id", "sync_targets": "org_id", "webhooks": "org_id", "dynamic_engines": "org_id"} {
+	for table, column := range map[string]string{"projects": "org_id", "environments": "project_id", "folders": "env_id", "secrets": "env_id", "machine_identities": "org_id", "sync_targets": "org_id", "webhooks": "org_id", "dynamic_engines": "org_id", "oauth_trusts": "org_id", "workload_bindings": "org_id"} {
 		if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS immutable_` + table + ` BEFORE UPDATE ON ` + table + ` WHEN NEW.id<>OLD.id OR NEW.` + column + `<>OLD.` + column + ` BEGIN SELECT RAISE(ABORT,'resource ownership is immutable'); END`); err != nil {
 			return err
 		}
+	}
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS immutable_machine_auth BEFORE UPDATE ON machine_identities WHEN NEW.auth_type<>OLD.auth_type BEGIN SELECT RAISE(ABORT,'authentication source is immutable'); END;
+ CREATE TRIGGER IF NOT EXISTS immutable_workload_binding_trust BEFORE UPDATE ON workload_bindings WHEN NEW.trust_id<>OLD.trust_id BEGIN SELECT RAISE(ABORT,'workload trust is immutable'); END;`); err != nil {
+		return err
 	}
 	rows, err := db.Query(`PRAGMA foreign_key_check`)
 	if err != nil {

@@ -13,9 +13,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { runScan } from './scan.js';
+import { externalOAuth } from './oauth.js';
 
 const BASE = process.env.TABOO_SERVER || 'http://localhost:7100';
-const SESSION = path.join(os.homedir(), '.taboo', 'session.json');
+const SESSION = process.env.TABOO_SESSION_FILE || path.join(os.homedir(), '.taboo', 'session.json');
 
 const [,, cmd, ...args] = process.argv;
 const flag = (name, def) => {
@@ -23,6 +24,9 @@ const flag = (name, def) => {
   return i >= 0 ? args[i + 1] : def;
 };
 const env = flag('env', 'dev');
+let oauth;
+try { oauth = externalOAuth(process.env, cmd === 'login' && args.includes('--oauth')); } catch (error) { console.error(error.message); process.exit(2); }
+process.on('unhandledRejection', (error) => { console.error(error?.message || 'request failed'); process.exit(1); });
 
 function saveSession(d) {
   fs.mkdirSync(path.dirname(SESSION), { recursive: true, mode: 0o700 });
@@ -57,26 +61,28 @@ async function ensureToken(s) {
   return s;
 }
 async function call(method, p, body, raw = false) {
-  const s = await ensureToken(loadSession());
+  const s = oauth ? await oauth.session() : await ensureToken(loadSession());
   const res = await fetch(BASE + p, {
     method,
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(s?.access ? { Authorization: `Bearer ${s.access}` } : {}),
+      ...(s?.kind === 'oauth' ? { 'X-Taboo-Trust': s.trust, 'X-Taboo-Organization': s.organization } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
+    redirect: 'manual', signal: AbortSignal.timeout(30000),
   });
-  if (raw) return res;
+  if (raw && res.ok) return res;
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) { console.error(`error ${res.status}: ${data.code} ${data.message}`); process.exit(1); }
+  if (!res.ok) { console.error(`error ${res.status}: ${data.code || 'HTTP_ERROR'} ${data.message || 'request rejected'}`); process.exit(1); }
   return data;
 }
 
 async function projectId() {
-  const explicit = flag('project', null);
+  const explicit = flag('project', process.env.TABOO_PROJECT_ID || null);
   if (explicit) return explicit;
-  const s = loadSession();
-  if (s?.kind === 'identity') {
+  const s = oauth ? { kind: 'oauth' } : loadSession();
+  if (s?.kind === 'identity' || s?.kind === 'oauth') {
     console.error('机器身份会话请显式指定 --project <project_id>（scope 内项目）');
     process.exit(1);
   }
@@ -89,6 +95,7 @@ async function projectId() {
 
 switch (cmd) {
   case 'login': {
+    if (oauth) { await oauth.session(); console.log('External OAuth credentials verified; no token or credential saved to disk.'); break; }
     const clientId = flag('client-id', null);
     const clientSecret = flag('client-secret', null);
     if (clientId || clientSecret) {

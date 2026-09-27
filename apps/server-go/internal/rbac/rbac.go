@@ -4,6 +4,7 @@ package rbac
 const (
 	Read        = "read"
 	Reveal      = "reveal"
+	Export      = "export"
 	Write       = "write"
 	Admin       = "admin"
 	Members     = "members"
@@ -49,7 +50,7 @@ func UserAllows(role, action string, envProtected bool) bool {
 	switch action {
 	case Read:
 		return rank >= roleRank["viewer"]
-	case Reveal, Write:
+	case Reveal, Write, Export:
 		if rank >= roleRank["admin"] {
 			return true
 		}
@@ -80,7 +81,7 @@ func IdentityAllows(action string, perms []string) bool {
 	switch Normalize(action) {
 	case Read:
 		return hasPerm(perms, "read", "reveal", "write")
-	case Reveal:
+	case Reveal, Export:
 		return hasPerm(perms, "reveal", "write")
 	case Write:
 		return hasPerm(perms, "write")
@@ -90,7 +91,7 @@ func IdentityAllows(action string, perms []string) bool {
 
 func Sensitive(action string) bool {
 	switch Normalize(action) {
-	case Reveal, Write, Admin, Members, AuditExport:
+	case Reveal, Export, Write, Admin, Members, AuditExport:
 		return true
 	}
 	return false

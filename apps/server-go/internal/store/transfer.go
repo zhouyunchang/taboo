@@ -23,7 +23,7 @@ func ImportSQLite(source, target *sql.DB) (map[string]int, error) {
 		return nil, err
 	}
 	defer write.Rollback()
-	tables := []string{"users", "orgs", "org_members", "projects", "environments", "folders", "secrets", "secret_versions", "audit_logs", "refresh_tokens", "machine_identities", "identity_scopes", "recovery_codes", "sync_targets", "sync_runs", "webhooks", "webhook_deliveries", "oidc_providers", "audit_exports", "dynamic_engines", "dynamic_leases", "org_invites", "project_grants", "outbox_events", "audit_checkpoints", "external_identities", "federation_admissions", "audit_heads", "mutation_receipts"}
+	tables := []string{"users", "orgs", "org_members", "projects", "environments", "folders", "secrets", "secret_versions", "audit_logs", "refresh_tokens", "machine_identities", "identity_scopes", "recovery_codes", "sync_targets", "sync_runs", "webhooks", "webhook_deliveries", "oidc_providers", "audit_exports", "dynamic_engines", "dynamic_leases", "org_invites", "project_grants", "outbox_events", "audit_checkpoints", "external_identities", "federation_admissions", "audit_heads", "mutation_receipts", "oauth_trusts", "workload_bindings", "workload_grants"}
 	counts := map[string]int{}
 	for _, table := range tables {
 		var n int

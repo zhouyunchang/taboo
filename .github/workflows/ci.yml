@@ -106,5 +106,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: apps/server-go/go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
       - name: Required PostgreSQL RLS, recovery, migration and Keycloak interoperability
-        run: TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
+        run: TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
+
+  consumers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: go test -race ./... && go vet ./...
+        working-directory: packages/sdk-go
+      - run: go test -race ./... && go vet ./...
+        working-directory: apps/mcp
+      - run: node --test apps/cli/oauth.test.js
+      - name: Real SDK, CLI and MCP processes with JWT, opaque and local credentials
+        run: ./scripts/test-consumers.sh

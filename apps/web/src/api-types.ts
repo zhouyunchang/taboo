@@ -885,6 +885,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/oauth-trusts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取机器 OAuth 信任连接（组织 owner） */
+        get: operations["listOAuthTrusts"];
+        put?: never;
+        /** 登记机器 OAuth 信任连接（组织 owner） */
+        post: operations["createOAuthTrust"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/oauth-trusts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** 删除信任并撤销其工作负载（组织 owner） */
+        delete: operations["deleteOAuthTrust"];
+        options?: never;
+        head?: never;
+        /** 更新或停用机器 OAuth 信任连接（组织 owner） */
+        patch: operations["updateOAuthTrust"];
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/workloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取外部工作负载与权限（组织 owner） */
+        get: operations["listWorkloads"];
+        put?: never;
+        /** 显式绑定外部机器主体（组织 owner） */
+        post: operations["createWorkload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/workloads/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 替换工作负载显式权限（组织 owner） */
+        put: operations["putWorkloadGrants"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/workloads/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 撤销工作负载绑定（组织 owner） */
+        post: operations["revokeWorkload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -973,6 +1061,69 @@ export interface components {
             version: number;
             created_by: string;
             created_at: string;
+        };
+        OAuthTrustInput: {
+            name?: string;
+            /** @description 操作员允许的精确 issuer；已有信任不允许更换 issuer */
+            issuer?: string;
+            /** @description 必须在资源 Token 中验证的 audience */
+            audience?: string;
+            /**
+             * @default oauth
+             * @enum {string}
+             */
+            metadata_mode: "oauth" | "oidc";
+            /**
+             * @default JWT_RFC9068
+             * @enum {string}
+             */
+            token_profile: "JWT_RFC9068" | "INTROSPECTION_RFC7662";
+            /** @description 内省使用的资源服务器 Client */
+            client_id?: string;
+            client_secret?: string;
+            /** @default 900 */
+            max_lifetime: number;
+            enabled?: boolean;
+        };
+        OAuthTrust: {
+            id: string;
+            name: string;
+            issuer: string;
+            audience: string;
+            /** @enum {string} */
+            metadata_mode: "oauth" | "oidc";
+            /** @enum {string} */
+            token_profile: "JWT_RFC9068" | "INTROSPECTION_RFC7662";
+            client_id?: string;
+            max_lifetime: number;
+            enabled: boolean;
+            /** @enum {string} */
+            revocation_profile: "BOUNDED" | "ONLINE_REQUIRED";
+        };
+        WorkloadGrant: {
+            project_id: string;
+            environment_id: string;
+            /**
+             * @description 四种动作独立，不隐含其他动作
+             * @enum {string}
+             */
+            action: "read" | "reveal" | "write" | "export";
+            /** @description 该动作必须在已验证 Token 中出现的精确 scope */
+            required_scope: string;
+        };
+        WorkloadGrantsInput: {
+            grants: components["schemas"]["WorkloadGrant"][];
+        };
+        WorkloadInput: components["schemas"]["WorkloadGrantsInput"] & {
+            name: string;
+            trust_id: string;
+            /** @description 已确认的外部机器 sub，与 client_id 不假定相等 */
+            subject: string;
+            client_id: string;
+        };
+        Workload: components["schemas"]["WorkloadInput"] & {
+            id: string;
+            enabled: boolean;
         };
         SecretUpsertRequest: {
             /** @description 单段 key，禁止包含 /（folder 与 key 分离，#16） */
@@ -3162,6 +3313,358 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    listOAuthTrusts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 信任连接，不含凭据 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        trusts: components["schemas"]["OAuthTrust"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createOAuthTrust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthTrustInput"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteOAuthTrust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateOAuthTrust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthTrustInput"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listWorkloads: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 外部工作负载 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        workloads: components["schemas"]["Workload"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createWorkload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkloadInput"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putWorkloadGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkloadGrantsInput"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revokeWorkload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
 }

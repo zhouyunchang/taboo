@@ -21,6 +21,61 @@
       },
       "defaultClientScopes": [],
       "optionalClientScopes": []
+    },
+    {
+      "clientId": "taboo-machine",
+      "secret": "fixture-machine-secret",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "defaultClientScopes": [],
+      "optionalClientScopes": [
+        "taboo.read",
+        "taboo.write",
+        "taboo.reveal",
+        "taboo.export"
+      ],
+      "protocolMappers": [
+        {
+          "name": "taboo-resource-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "https://taboo.example/api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "taboo-introspection-client-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true",
+            "included.client.audience": "taboo-resource"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "taboo-resource",
+      "secret": "fixture-resource-secret",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "defaultClientScopes": [],
+      "optionalClientScopes": []
     }
   ],
   "users": [
@@ -38,6 +93,36 @@
       "lastName": "User",
       "email": "fixture@example.test",
       "emailVerified": true
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "taboo.read",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true"
+      }
+    },
+    {
+      "name": "taboo.write",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true"
+      }
+    },
+    {
+      "name": "taboo.reveal",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true"
+      }
+    },
+    {
+      "name": "taboo.export",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true"
+      }
     }
   ]
 }

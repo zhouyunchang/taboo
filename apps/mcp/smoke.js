@@ -91,7 +91,7 @@ check('list ok no values', !list.result?.isError && list.result?.content?.[0]?.t
 
 // 3. secrets.get：默认掩码
 const getMasked = await mcp.call('tools/call', { name: 'secrets.get', arguments: { key: 'MCP_DEMO' } });
-check('get masked by default', !getMasked.result?.isError && getMasked.result?.content?.[0]?.text?.includes('mc••••••••••••ue')
+check('get masked by default', !getMasked.result?.isError && getMasked.result?.content?.[0]?.text?.includes('MCP_DEMO=••••')
   && !getMasked.result.content[0].text.includes('mcp-secret-value'), getMasked.result?.content?.[0]?.text);
 
 // 4. secrets.get reveal=true：明文 + 审计

@@ -26,9 +26,11 @@ import (
 	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
 	totpsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/totp"
 	whsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/webhooks"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/workload"
 )
 
 type Deps struct {
+	Workloads       *workload.Service
 	PublicOrigin    string
 	IssuerAllowlist []string
 	SessionProfile  string
@@ -51,6 +53,9 @@ type Deps struct {
 func New(d *Deps) *chi.Mux {
 	copy := *d
 	d = &copy
+	if d.Workloads == nil {
+		d.Workloads = workload.New(d.DB, d.MasterKey, d.IssuerAllowlist)
+	}
 	if d.Dynamic == nil {
 		d.Dynamic = dynamic.New(d.DB, d.MasterKey)
 	}
@@ -118,7 +123,7 @@ func New(d *Deps) *chi.Mux {
 			r.Get("/callback", oidcSvc.Callback)
 		})
 		r.Group(func(r chi.Router) {
-			r.Use(auth.Middleware(d.DB, d.JWTSecret, d.allowedBrowser))
+			r.Use(auth.MiddlewareWithExternal(d.DB, d.JWTSecret, d.Workloads.Authenticate, d.allowedBrowser))
 			r.Use(federatedScope(d.DB))
 			handler := scopedHTTP(d)
 			if err := chi.Walk(protectedRoutes(d), func(method, path string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -156,7 +161,7 @@ func cors(origin string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,Idempotency-Key,X-Taboo-Trust,X-Taboo-Organization")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(204)
 				return
@@ -215,6 +220,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	oidcSvc := &oidc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, PublicOrigin: d.PublicOrigin, SessionProfile: d.SessionProfile, IssuerAllowlist: d.IssuerAllowlist, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
 	r.Post("/auth/logout", auth.BrowserLogout(d.DB))
 	orgs.Routes(r)
+	d.Workloads.WithDB(d.DB).Routes(r)
 	totps.Routes(r)
 	// 机器身份管理（组织级，需 owner）
 	r.Route("/orgs/{slug}/identities", func(r chi.Router) {

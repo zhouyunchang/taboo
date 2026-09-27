@@ -33,6 +33,7 @@ type Client struct {
 	token     string
 	refresh   string
 	identity  *IdentityCredentials
+	oauth     *OAuthCredentials
 	onRefresh func(token, refresh string) // 旋转回调（落盘持久化用）
 }
 
@@ -46,7 +47,7 @@ type IdentityCredentials struct {
 func New(baseURL string) *Client {
 	return &Client{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		HTTPClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
@@ -55,6 +56,9 @@ func (c *Client) WithToken(token string) *Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.token = token
+	c.oauth = nil
+	c.identity = nil
+	c.refresh = ""
 	return c
 }
 
@@ -62,6 +66,8 @@ func (c *Client) WithToken(token string) *Client {
 func (c *Client) WithUserTokens(access, refresh string, expiresIn time.Duration, onRefresh func(access, refresh string)) *Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.oauth = nil
+	c.identity = nil
 	c.token = access
 	c.refresh = refresh
 	c.onRefresh = onRefresh
@@ -72,6 +78,9 @@ func (c *Client) WithUserTokens(access, refresh string, expiresIn time.Duration,
 func (c *Client) WithIdentity(clientID, clientSecret string) *Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.oauth = nil
+	c.token = ""
+	c.refresh = ""
 	c.identity = &IdentityCredentials{ClientID: clientID, ClientSecret: clientSecret}
 	return c
 }
@@ -80,6 +89,9 @@ func (c *Client) WithIdentity(clientID, clientSecret string) *Client {
 func (c *Client) ensureToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.oauth != nil {
+		return c.oauthToken(ctx)
+	}
 	if c.identity != nil && time.Until(c.identity.ExpiresAt) < 30*time.Second {
 		p := fmt.Sprintf("%s/api/v1/identities/token", c.BaseURL)
 		body, _ := json.Marshal(map[string]string{"client_id": c.identity.ClientID, "client_secret": c.identity.ClientSecret})
@@ -121,6 +133,12 @@ func (c *Client) do(ctx context.Context, method, p string, body, out any) error 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.mu.Lock()
+	if c.oauth != nil {
+		req.Header.Set("X-Taboo-Trust", c.oauth.TrustID)
+		req.Header.Set("X-Taboo-Organization", c.oauth.Organization)
+	}
+	c.mu.Unlock()
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -130,7 +148,7 @@ func (c *Client) do(ctx context.Context, method, p string, body, out any) error 
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 400 {
-	 ae := &ApiError{Status: res.StatusCode}
+		ae := &ApiError{Status: res.StatusCode}
 		_ = json.NewDecoder(res.Body).Decode(ae)
 		if ae.Code == "" {
 			ae.Code = "HTTP_" + fmt.Sprint(res.StatusCode)
