@@ -27,7 +27,6 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
-	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
 var validRoles = map[string]bool{"viewer": true, "developer": true, "admin": true, "owner": true}
@@ -185,8 +184,8 @@ func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (orgID, slug str
 
 func manageOnly(db *sql.DB, w http.ResponseWriter, r *http.Request, orgID string) bool {
 	u := auth.From(r)
-	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", rbac.Admin, "") {
-		auth.Deny(db, w, r, orgID, rbac.Admin, "org/oidc")
+	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", auth.DelegationAction(u), "") {
+		auth.Deny(db, w, r, orgID, auth.DelegationAction(u), "org/oidc")
 		return false
 	}
 	return true
@@ -332,8 +331,8 @@ func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	var name string
-	if err := s.DB.QueryRow(`SELECT name FROM oidc_providers WHERE id = ? AND org_id = ?`, id, orgID).Scan(&name); err != nil {
+	var name, existingIssuer, existingClient string
+	if err := s.DB.QueryRow(`SELECT name,issuer,client_id FROM oidc_providers WHERE id = ? AND org_id = ?`, id, orgID).Scan(&name, &existingIssuer, &existingClient); err != nil {
 		writeErr(w, apperr.NotFound)
 		return
 	}
@@ -345,6 +344,13 @@ func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
 	if err := normalizeProviderInput(&b, false); err != nil {
 		writeErr(w, err)
 		return
+	}
+	if b.Issuer != "" && b.Issuer != existingIssuer || b.ClientID != "" && b.ClientID != existingClient {
+		var n int
+		if err := s.DB.QueryRow(`SELECT (SELECT COUNT(*) FROM federation_admissions WHERE provider_id=?)+(SELECT COUNT(*) FROM users WHERE auth_source=?)`, id, id).Scan(&n); err != nil || n > 0 {
+			writeErr(w, apperr.New(409, "NEW_CONNECTION_REQUIRED", "create a new connection and prove identity replacement"))
+			return
+		}
 	}
 	if b.Issuer != "" {
 		if !s.allowedIssuer(b.Issuer) {
@@ -399,7 +405,11 @@ func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	args = append(args, id, orgID)
 	if err := s.mutateProvider(r, orgID, "oidc.update", "org/"+slug+"/oidc/"+name, `UPDATE oidc_providers SET `+strings.Join(sets, ", ")+` WHERE id = ? AND org_id = ?`, args...); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		if e, ok := err.(*apperr.Error); ok {
+			writeErr(w, e)
+		} else {
+			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "connection unchanged"))
+		}
 		return
 	}
 	writeJSON(w, 200, map[string]any{"id": id, "updated": true})
@@ -421,7 +431,11 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.mutateProvider(r, orgID, "oidc.delete", "org/"+slug+"/oidc/"+name, `DELETE FROM oidc_providers WHERE id = ?`, id); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		if e, ok := err.(*apperr.Error); ok {
+			writeErr(w, e)
+		} else {
+			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "connection unchanged"))
+		}
 		return
 	}
 	discoCache.drop(id)
@@ -484,8 +498,14 @@ func (s *Service) mutateProvider(r *http.Request, org, action, resource, query s
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE orgs SET name=name WHERE id=?`, org); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(r.Context(), query, args...); err != nil {
 		return err
+	}
+	if !auth.ExternalOwnerAvailable(tx, org) {
+		return apperr.New(409, "EXTERNAL_OWNER_REQUIRED", "another proven external owner is required before removing this connection")
 	}
 	if err = auth.AuditReq(tx, r, org, auth.From(r), action, resource, nil); err != nil {
 		return err

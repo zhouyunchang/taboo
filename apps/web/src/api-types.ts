@@ -758,7 +758,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 手动回收 lease（立即 DROP USER；lease 所属身份或 owner/admin） */
+        /** 持久化回收 lease；失败保留任务并重试（外部登录仅 owner） */
         post: operations["revokeLease"];
         delete?: never;
         options?: never;
@@ -1564,7 +1564,7 @@ export interface components {
             /** @example taboo_a1b2c3d4e5f6 */
             username?: string;
             /** @enum {string} */
-            status?: "active" | "expired" | "revoked" | "failed";
+            status?: "active" | "revoking" | "expired" | "revoked" | "failed";
             expires_at?: number;
             seconds_left?: number;
             created_at?: string;
@@ -3062,7 +3062,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 已回收（或原本非活跃） */
+            /** @description 已回收 */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3073,6 +3073,20 @@ export interface operations {
                         status?: string;
                     };
                 };
+            };
+            /** @description 已持久化回收请求，后台继续重试 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 回收任务正在执行 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

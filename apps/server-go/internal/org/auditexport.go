@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,8 +17,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
@@ -102,44 +106,38 @@ func (s *Service) AuditExport(w http.ResponseWriter, r *http.Request) {
 		s.createExportJob(w, r, orgID, format, f)
 		return
 	}
-	// 同步导出：流式写出（行数受 threshold 保护，内存可控）
-	cond, args := buildAuditQuery(orgID, f)
-	rows, err := s.DB.Query(`SELECT actor_name, actor_type, action, resource, metadata, ip, created_at
-		FROM audit_logs WHERE `+cond+` ORDER BY created_at LIMIT ?`, append(args, asyncExportThreshold)...)
-	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	// Record authorization before releasing any export bytes. Query/storage
+	// errors never emit a partially prepared success response.
+	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "audit.export", "org/audit", map[string]any{"format": format, "mode": "sync"}); err != nil {
+		writeErr(w, apperr.New(503, "AUDIT_UNAVAILABLE", "export unavailable"))
 		return
 	}
-	defer rows.Close()
-	count := 0
+	// A temporary file bounds memory and ensures DB/encoding errors are discovered
+	// before the response begins. It is removed even when the client disconnects.
+	temp, err := os.CreateTemp("", "taboo-audit-*")
+	if err != nil {
+		writeErr(w, apperr.New(503, "EXPORT_UNAVAILABLE", "export unavailable"))
+		return
+	}
+	defer os.Remove(temp.Name())
+	defer temp.Close()
+	if _, err = s.writeExport(r.Context(), temp, orgID, format, f, asyncExportThreshold); err != nil {
+		writeErr(w, apperr.New(503, "EXPORT_UNAVAILABLE", "export unavailable"))
+		return
+	}
+	if _, err = temp.Seek(0, 0); err != nil {
+		writeErr(w, apperr.New(503, "EXPORT_UNAVAILABLE", "export unavailable"))
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Disposition", `attachment; filename="taboo-audit-`+time.Now().Format("20060102-150405")+`.`+format+`"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="taboo-audit.`+format+`"`)
 	if format == "csv" {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"created_at", "actor_name", "actor_type", "action", "resource", "metadata", "ip"})
-		for rows.Next() {
-			var actor, actorType, action, resource, metadata, ip, created string
-			_ = rows.Scan(&actor, &actorType, &action, &resource, &metadata, &ip, &created)
-			_ = cw.Write([]string{created, actor, actorType, action, resource, metadata, ip})
-			count++
-		}
-		cw.Flush()
 	} else {
 		w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
-		enc := json.NewEncoder(w)
-		for rows.Next() {
-			var actor, actorType, action, resource, metadata, ip, created string
-			_ = rows.Scan(&actor, &actorType, &action, &resource, &metadata, &ip, &created)
-			_ = enc.Encode(map[string]string{
-				"created_at": created, "actor_name": actor, "actor_type": actorType,
-				"action": action, "resource": resource, "metadata": metadata, "ip": ip,
-			})
-			count++
-		}
 	}
-	_ = auth.AuditReq(s.DB, r, orgID, auth.From(r), "audit.export", "org/audit",
-		map[string]any{"format": format, "rows": count, "mode": "sync"})
+	_, _ = io.Copy(w, temp)
+
 }
 
 // createExportJob 异步导出：落任务行，worker 生成文件
@@ -153,13 +151,19 @@ func (s *Service) createExportJob(w http.ResponseWriter, r *http.Request, orgID,
 		"from": f.From, "to": f.To, "limit": f.Limit,
 	})
 	id := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO audit_exports (id, org_id, actor_id, format, filters)
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO audit_exports (id, org_id, actor_id, format, filters)
 		VALUES (?, ?, ?, ?, ?)`, id, orgID, auth.From(r).ID, format, string(filtersJSON)); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, orgID, auth.From(r), "audit.export.request", "org/audit",
-		map[string]any{"format": format, "job": id})
+	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "audit.export.request", "org/audit", map[string]any{"format": format, "job": id}) {
+		return
+	}
 	writeJSON(w, 202, map[string]any{
 		"id": id, "status": "pending",
 		"download_url": "/api/v1/orgs/" + chi.URLParam(r, "slug") + "/audit/exports/" + id,
@@ -185,6 +189,20 @@ func (s *Service) AuditExportDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if status != "done" {
 		writeJSON(w, 200, map[string]any{"id": id, "status": status})
+		return
+	}
+	root, err := filepath.Abs(filepath.Join(s.DataDir, "exports", orgID))
+	if err != nil {
+		writeErr(w, apperr.NotFound)
+		return
+	}
+	absolute, err := filepath.Abs(filePath)
+	if err != nil || filepath.Dir(absolute) != root || s.DataDir == "" {
+		writeErr(w, apperr.NotFound)
+		return
+	}
+	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "audit.export", "org/audit", map[string]any{"mode": "download", "job": id}); err != nil {
+		writeErr(w, apperr.New(503, "AUDIT_UNAVAILABLE", "download unavailable"))
 		return
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="taboo-audit-`+id+`.`+format+`"`)
@@ -251,8 +269,22 @@ func (s *Service) RetryAuditExport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "only failed exports can be retried"))
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE audit_exports SET status = 'pending', error = '' WHERE id = ?`, id); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE audit_exports SET status='pending',error='',lease_token='',lease_until=0 WHERE id=? AND org_id=? AND status='failed'`, id, orgID)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.New(409, "JOB_CHANGED", "reload before retrying"))
+		return
+	}
+	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "audit.export.retry", "org/audit", map[string]any{"job": id}) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"id": id, "status": "pending"})
@@ -278,7 +310,7 @@ func (s *Service) StartExportWorker(ctx context.Context, interval time.Duration)
 }
 
 func (s *Service) runExportJobs() {
-	rows, err := s.DB.Query(`SELECT id, org_id, format, filters FROM audit_exports WHERE status = 'pending' LIMIT 3`)
+	rows, err := s.DB.Query(`SELECT id, org_id, format, filters FROM audit_exports WHERE status = 'pending' AND lease_until<=? ORDER BY created_at,id LIMIT 3`, time.Now().Unix())
 	if err != nil {
 		return
 	}
@@ -299,60 +331,113 @@ func (s *Service) runExportJobs() {
 }
 
 func (s *Service) generateExport(id, orgID, format, filtersJSON string) {
-	var f struct {
-		Action, Actor, Resource, From, To string
-		Limit                             int
+	lease, err := outbox.Claim(s.DB, "audit_exports", id)
+	if err != nil || lease == "" {
+		return
 	}
-	_ = json.Unmarshal([]byte(filtersJSON), &f)
-	flt := auditFilter{Action: f.Action, Actor: f.Actor, Resource: f.Resource, From: f.From, To: f.To}
+	fail := func() {
+		_, _ = s.DB.Exec(`UPDATE audit_exports SET status='failed',error='export generation failed',lease_token='',lease_until=0 WHERE id=? AND lease_token=?`, id, lease)
+	}
+	var f auditFilter
+	if json.Unmarshal([]byte(filtersJSON), &f) != nil || (format != "csv" && format != "jsonl") {
+		fail()
+		return
+	}
 	if f.Limit <= 0 || f.Limit > 100000 {
 		f.Limit = 100000
 	}
-	cond, args := buildAuditQuery(orgID, flt)
-	rows, err := s.DB.Query(`SELECT actor_name, actor_type, action, resource, metadata, ip, created_at
-		FROM audit_logs WHERE `+cond+` ORDER BY created_at LIMIT ?`, append(args, f.Limit)...)
-	if err != nil {
-		_, _ = s.DB.Exec(`UPDATE audit_exports SET status = 'failed', error = ? WHERE id = ?`, err.Error(), id)
+	dir := filepath.Join(s.DataDir, "exports", orgID)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		fail()
 		return
+	}
+	// Each lease owns its file; a late worker cannot truncate the winning output.
+	file, err := os.CreateTemp(dir, id+"-"+lease+"-*."+format)
+	if err != nil {
+		fail()
+		return
+	}
+	keep := false
+	defer func() {
+		file.Close()
+		if !keep {
+			os.Remove(file.Name())
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	count, err := s.writeExport(ctx, file, orgID, format, f, f.Limit)
+	if err != nil {
+		fail()
+		return
+	}
+	if file.Sync() != nil {
+		fail()
+		return
+	}
+	if file.Close() != nil {
+		fail()
+		return
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE audit_exports SET status='done',file_path=?,row_count=?,completed_at=datetime('now'),lease_token='',lease_until=0 WHERE id=? AND org_id=? AND status='pending' AND lease_token=? AND lease_until>?`, file.Name(), count, id, orgID, lease, time.Now().Unix())
+	if err != nil {
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return
+	}
+	if err = audit.Record(tx, audit.Rec{OrgID: orgID, ActorID: "system", ActorType: "system", Action: "audit.export", Resource: "org/audit", Metadata: map[string]any{"format": format, "rows": count, "mode": "async", "job": id}}); err != nil {
+		return
+	}
+	// If commit acknowledgement is uncertain, keep the private file: the durable
+	// row may reference it. Orphans are safe to remove in the documented cleanup.
+	keep = true
+	if tx.Commit() != nil {
+		return
+	}
+}
+
+func (s *Service) writeExport(ctx context.Context, dst io.Writer, org, format string, f auditFilter, limit int) (int, error) {
+	cond, args := buildAuditQuery(org, f)
+	rows, err := s.DB.QueryContext(ctx, `SELECT actor_name,actor_type,action,resource,metadata,ip,created_at FROM audit_logs WHERE `+cond+` ORDER BY created_at,id LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return 0, err
 	}
 	defer rows.Close()
-	dir := filepath.Join(s.DataDir, "exports", orgID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		_, _ = s.DB.Exec(`UPDATE audit_exports SET status = 'failed', error = ? WHERE id = ?`, err.Error(), id)
-		return
-	}
-	path := filepath.Join(dir, id+"."+format)
-	fh, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		_, _ = s.DB.Exec(`UPDATE audit_exports SET status = 'failed', error = ? WHERE id = ?`, err.Error(), id)
-		return
-	}
 	count := 0
+	cw := csv.NewWriter(dst)
+	enc := json.NewEncoder(dst)
 	if format == "csv" {
-		cw := csv.NewWriter(fh)
-		_ = cw.Write([]string{"created_at", "actor_name", "actor_type", "action", "resource", "metadata", "ip"})
-		for rows.Next() {
-			var actor, actorType, action, resource, metadata, ip, created string
-			_ = rows.Scan(&actor, &actorType, &action, &resource, &metadata, &ip, &created)
-			_ = cw.Write([]string{created, actor, actorType, action, resource, metadata, ip})
-			count++
-		}
-		cw.Flush()
-	} else {
-		enc := json.NewEncoder(fh)
-		for rows.Next() {
-			var actor, actorType, action, resource, metadata, ip, created string
-			_ = rows.Scan(&actor, &actorType, &action, &resource, &metadata, &ip, &created)
-			_ = enc.Encode(map[string]string{
-				"created_at": created, "actor_name": actor, "actor_type": actorType,
-				"action": action, "resource": resource, "metadata": metadata, "ip": ip,
-			})
-			count++
+		if err = cw.Write([]string{"created_at", "actor_name", "actor_type", "action", "resource", "metadata", "ip"}); err != nil {
+			return 0, err
 		}
 	}
-	_ = fh.Close()
-	_, _ = s.DB.Exec(`UPDATE audit_exports SET status = 'done', file_path = ?, row_count = ?,
-		completed_at = datetime('now') WHERE id = ?`, path, count, id)
-	auth.Audit(s.DB, orgID, nil, "audit.export", "org/audit",
-		map[string]any{"format": format, "rows": count, "mode": "async", "job": id}, "")
+	for rows.Next() {
+		var actor, kind, action, resource, metadata, ip, created string
+		if err = rows.Scan(&actor, &kind, &action, &resource, &metadata, &ip, &created); err != nil {
+			return count, err
+		}
+		if format == "csv" {
+			err = cw.Write([]string{created, actor, kind, action, resource, metadata, ip})
+		} else {
+			err = enc.Encode(map[string]string{"created_at": created, "actor_name": actor, "actor_type": kind, "action": action, "resource": resource, "metadata": metadata, "ip": ip})
+		}
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	if format == "csv" {
+		cw.Flush()
+		if err = cw.Error(); err != nil {
+			return count, err
+		}
+	}
+	return count, errors.Join(rows.Err(), ctx.Err())
 }

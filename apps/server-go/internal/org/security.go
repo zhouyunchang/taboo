@@ -177,6 +177,6 @@ func preserveExternalOwner(tx *sql.Tx, org, user, nextRole string) bool {
 		return false
 	}
 	var n int
-	err = tx.QueryRow(`SELECT COUNT(*) FROM org_members m JOIN users u ON u.id=m.user_id WHERE m.org_id=? AND m.role='owner' AND m.user_id<>? AND u.status='active' AND EXISTS(SELECT 1 FROM federation_admissions a JOIN oidc_providers p ON p.id=a.provider_id AND p.org_id=a.org_id WHERE a.user_id=m.user_id AND a.org_id=m.org_id AND p.enabled=1)`, org, user).Scan(&n)
+	err = tx.QueryRow(`SELECT COUNT(*) FROM org_members m JOIN users u ON u.id=m.user_id WHERE m.org_id=? AND m.role='owner' AND m.user_id<>? AND u.status='active' AND EXISTS(SELECT 1 FROM federation_admissions a JOIN oidc_providers p ON p.id=a.provider_id AND p.org_id=a.org_id JOIN external_identities e ON e.user_id=a.user_id AND e.issuer=p.issuer WHERE a.user_id=m.user_id AND a.org_id=m.org_id AND p.enabled=1)`, org, user).Scan(&n)
 	return err == nil && n > 0
 }

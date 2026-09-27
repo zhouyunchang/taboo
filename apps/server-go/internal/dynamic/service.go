@@ -15,12 +15,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
@@ -114,8 +116,11 @@ func (s *Service) engineOf(engineID, connEnc string) (Engine, error) {
 func (s *Service) mustRole(w http.ResponseWriter, r *http.Request, p project.Ctx, action string) (*auth.Actor, bool) {
 	u := auth.From(r)
 	if u.Kind == auth.KindUser {
-		role, ok := auth.Membership(s.DB, p.OrgID, u.ID)
-		if !ok || (role != "owner" && role != "admin") {
+		check := auth.DelegationAction(u)
+		if r.Method == "GET" {
+			check = "audit.read"
+		}
+		if !auth.Can(s.DB, u, p.OrgID, p.ID, check, "") {
 			auth.Deny(s.DB, w, r, p.OrgID, "admin", "project/"+p.Slug+"/dynamic")
 			return nil, false
 		}
@@ -175,15 +180,21 @@ func (s *Service) CreateEngine(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if _, err := s.DB.Exec(`INSERT INTO dynamic_engines (id, org_id, project_id, name, type, conn_encrypted, database, default_ttl, max_ttl)
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO dynamic_engines (id, org_id, project_id, name, type, conn_encrypted, database, default_ttl, max_ttl)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, p.OrgID, p.ID, b.Name, typ, enc, orDefault(b.Database, "postgres"),
 		orDefaultInt(b.DefaultTTLSecs, int(DefaultTTL.Seconds())), orDefaultInt(b.MaxTTLSecs, int(MaxTTL.Seconds()))); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.engine.create", "project/"+p.Slug+"/engine/"+id,
-		map[string]any{"name": b.Name, "type": typ})
+	if !auth.CommitMutation(tx, w, r, p.OrgID, u, "dynamic.engine.create", "project/"+p.Slug+"/engine/"+id, map[string]any{"name": b.Name, "type": typ}) {
+		return
+	}
 	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "type": typ})
 }
 
@@ -239,7 +250,7 @@ func (s *Service) ListEngines(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) activeLeases(engineID string) []map[string]any {
 	rows, err := s.DB.Query(`SELECT id, username, status, expires_at, created_at
-		FROM dynamic_leases WHERE engine_id = ? AND status = 'active' ORDER BY created_at DESC`, engineID)
+		FROM dynamic_leases WHERE engine_id = ? AND status IN ('active','revoking','failed') ORDER BY created_at DESC`, engineID)
 	if err != nil {
 		return nil
 	}
@@ -290,36 +301,40 @@ func (s *Service) RequestLease(w http.ResponseWriter, r *http.Request) {
 
 	engine, err := s.engineOf(chi.URLParam(r, "eid"), connEnc)
 	if err != nil {
-		_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.failed", "project/"+p.Slug+"/engine/"+chi.URLParam(r, "eid"),
-			map[string]any{"reason": err.Error()})
-		writeErr(w, apperr.New(502, "ENGINE_UNREACHABLE", err.Error()))
+		writeErr(w, apperr.New(502, "ENGINE_UNREACHABLE", "database engine unavailable"))
 		return
 	}
-	username := "taboo_" + randomHex(6)
-	password := randomHex(16)
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	if err := engine.Grant(ctx, username, password, ttl); err != nil {
-		_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.failed", "project/"+p.Slug+"/engine/"+chi.URLParam(r, "eid"),
-			map[string]any{"reason": err.Error()})
-		writeErr(w, apperr.New(502, "GRANT_FAILED", err.Error()))
-		return
-	}
-	lid := tc.NewID()
+	username, password, lid, lease := "taboo_"+randomHex(6), randomHex(16), tc.NewID(), tc.NewID()
 	pwEnc, err := tc.Seal(s.MasterKey, password, tc.Context{Purpose: "dynamic-lease", Org: p.OrgID, Project: p.ID, Object: lid, Version: 1})
 	if err != nil {
-		_ = engine.Revoke(ctx, username)
-		writeErr(w, apperr.New(500, "INTERNAL", "lease encryption failed"))
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "lease unavailable"))
 		return
 	}
 	expires := time.Now().Add(ttl).Unix()
-	if _, err := s.DB.Exec(`INSERT INTO dynamic_leases (id, engine_id, identity_id, username, password_encrypted, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?)`, lid, chi.URLParam(r, "eid"), identityID, username, pwEnc, expires); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.create", "project/"+p.Slug+"/lease/"+lid,
-		map[string]any{"username": username, "ttl": ttl.Seconds()})
+	defer tx.Rollback()
+	// Persist recovery responsibility before the external CREATE/ALTER. A crash or
+	// uncertain response leaves a reclaimable row, never an untracked database user.
+	if _, err = tx.Exec(`INSERT INTO dynamic_leases(id,engine_id,identity_id,username,password_encrypted,expires_at,status,lease_token,lease_until) VALUES(?,?,?,?,?,?,'revoking',?,?)`, lid, chi.URLParam(r, "eid"), identityID, username, pwEnc, expires, lease, time.Now().Unix()+60); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "lease unavailable"))
+		return
+	}
+	if !auth.CommitMutation(tx, w, r, p.OrgID, u, "dynamic.lease.request", "lease/"+lid, map[string]any{"ttl": ttl.Seconds()}) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err = engine.Grant(ctx, username, password, time.Until(time.Unix(expires, 0))); err != nil {
+		s.releaseClaim(lid, lease)
+		writeErr(w, apperr.New(502, "GRANT_FAILED", "lease could not be confirmed; recovery is queued"))
+		return
+	}
+	if !s.activateLease(w, r, p.OrgID, u, lid, lease, expires, "dynamic.lease.create") {
+		return
+	}
 	// 明文密码仅此一次下发
 	writeJSON(w, 201, map[string]any{
 		"id": lid, "username": username, "password": password,
@@ -351,7 +366,7 @@ func (s *Service) leaseGuard(w http.ResponseWriter, r *http.Request, p project.C
 	}
 	admin := false
 	if u.Kind == auth.KindUser {
-		if role, ok := auth.Membership(s.DB, p.OrgID, u.ID); ok && (role == "owner" || role == "admin") {
+		if auth.Can(s.DB, u, p.OrgID, "", auth.DelegationAction(u), "") {
 			admin = true
 		}
 	} else if u.Kind == "identity" && u.ID == identityID {
@@ -391,7 +406,7 @@ func (s *Service) RenewLease(w http.ResponseWriter, r *http.Request) {
 	ttl := time.Duration(orDefaultInt(b.TTLSecs, defTTL)) * time.Second
 	newExp := time.Now().Add(ttl)
 	// 续期上限：自当前起不超 max_ttl
-	if newExp.After(time.Now().Add(time.Duration(maxTTL) * time.Second)) {
+	if ttl <= 0 || ttl > time.Duration(maxTTL)*time.Second {
 		writeErr(w, apperr.New(400, "INVALID_TTL", "renewal exceeds max_ttl"))
 		return
 	}
@@ -407,131 +422,189 @@ func (s *Service) RenewLease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(502, "ENGINE_UNREACHABLE", err.Error()))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	if err := engine.Grant(ctx, username, password, time.Until(newExp)); err != nil {
-		writeErr(w, apperr.New(502, "RENEW_FAILED", err.Error()))
-		return
-	}
-	if _, err := s.DB.Exec(`UPDATE dynamic_leases SET expires_at = ? WHERE id = ?`, newExp.Unix(), lease["id"]); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.renew", "project/"+p.Slug+"/lease/"+lease["id"].(string),
-		map[string]any{"username": username, "expires_at": newExp.Unix()})
-	writeJSON(w, 200, map[string]any{"id": lease["id"], "expires_at": newExp.Unix()})
-}
-
-// RevokeLease POST /dynamic-leases/{lid}/revoke —— 手动回收（立即 DROP USER）
-func (s *Service) RevokeLease(w http.ResponseWriter, r *http.Request) {
-	p := project.Of(r)
-	u := auth.From(r)
-	lease, ok := s.leaseGuard(w, r, p)
+	claim := tc.NewID()
+	tx, ok := auth.BeginMutation(s.DB, w, r)
 	if !ok {
 		return
 	}
-	if lease["status"] != "active" {
-		writeJSON(w, 200, map[string]any{"id": lease["id"], "status": lease["status"]})
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE dynamic_leases SET status='revoking',lease_token=?,lease_until=? WHERE id=? AND status='active' AND expires_at>? AND lease_until<=?`, claim, time.Now().Unix()+60, lease["id"], time.Now().Unix(), time.Now().Unix())
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
-	if err := s.revokeNow(r.Context(), lease["engine_id"].(string), lease["id"].(string), lease["username"].(string)); err != nil {
-		writeErr(w, apperr.New(502, "REVOKE_FAILED", err.Error()))
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.New(409, "LEASE_BUSY", "lease changed; reload"))
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, u, "dynamic.lease.revoke", "project/"+p.Slug+"/lease/"+lease["id"].(string),
-		map[string]any{"username": lease["username"]})
-	writeJSON(w, 200, map[string]any{"id": lease["id"], "status": "revoked"})
+	if !auth.CommitMutation(tx, w, r, p.OrgID, u, "dynamic.lease.renew.request", "lease/"+lease["id"].(string), map[string]any{"expires_at": newExp.Unix()}) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := engine.Grant(ctx, username, password, time.Until(newExp)); err != nil {
+		s.releaseClaim(lease["id"].(string), claim)
+		writeErr(w, apperr.New(502, "RENEW_FAILED", "renewal unconfirmed; recovery is queued"))
+		return
+	}
+	if !s.activateLease(w, r, p.OrgID, u, lease["id"].(string), claim, newExp.Unix(), "dynamic.lease.renew") {
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": lease["id"], "expires_at": newExp.Unix()})
 }
 
-// revokeNow 回收 lease：引擎 DROP USER + 状态落库（幂等）
-func (s *Service) revokeNow(ctx context.Context, engineID, leaseID, username string) error {
-	var connEnc string
-	if err := s.DB.QueryRow(`SELECT conn_encrypted FROM dynamic_engines WHERE id = ?`, engineID).Scan(&connEnc); err != nil {
-		return err
+// RevokeLease durably queues reclamation before contacting the target database.
+func (s *Service) RevokeLease(w http.ResponseWriter, r *http.Request) {
+	p := project.Of(r)
+	u := auth.From(r)
+	item, ok := s.leaseGuard(w, r, p)
+	if !ok {
+		return
 	}
-	engine, err := s.engineOf(engineID, connEnc)
+	id := item["id"].(string)
+	if item["status"] == "revoked" {
+		writeJSON(w, 200, map[string]any{"id": id, "status": "revoked"})
+		return
+	}
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE dynamic_leases SET status='revoking',reclaim_fails=0 WHERE id=? AND status IN ('active','failed','revoking','expired') AND lease_until<=?`, id, time.Now().Unix())
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.New(409, "LEASE_BUSY", "lease operation in progress"))
+		return
+	}
+	if !auth.CommitMutation(tx, w, r, p.OrgID, u, "dynamic.lease.revoke.request", "lease/"+id, nil) {
+		return
+	}
+	if err = s.revokeNow(r.Context(), item["engine_id"].(string), id, item["username"].(string)); err != nil {
+		writeJSON(w, 202, map[string]any{"id": id, "status": "revoking"})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "status": "revoked"})
+}
+
+func (s *Service) releaseClaim(id, claim string) {
+	_, _ = s.DB.Exec(`UPDATE dynamic_leases SET lease_token='',lease_until=0 WHERE id=? AND lease_token=?`, id, claim)
+}
+func (s *Service) activateLease(w http.ResponseWriter, r *http.Request, org string, u *auth.Actor, id, claim string, expires int64, action string) bool {
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return false
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE dynamic_leases SET status='active',expires_at=?,lease_token='',lease_until=0 WHERE id=? AND status='revoking' AND lease_token=? AND lease_until>? AND identity_id IN (SELECT id FROM machine_identities WHERE status='active')`, expires, id, claim, time.Now().Unix())
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "lease unconfirmed; recovery remains queued"))
+		return false
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.New(409, "LEASE_CHANGED", "lease unconfirmed; recovery remains queued"))
+		return false
+	}
+	return auth.CommitMutation(tx, w, r, org, u, action, "lease/"+id, map[string]any{"expires_at": expires})
+}
+
+// Reclamation is idempotent and fenced. Failed external effects remain durable
+// for retry, and an expired worker cannot overwrite a successor's result.
+func (s *Service) revokeNow(ctx context.Context, engineID, leaseID, username string) error {
+	claim := tc.NewID()
+	now := time.Now().Unix()
+	result, err := s.DB.Exec(`UPDATE dynamic_leases SET status='revoking',lease_token=?,lease_until=? WHERE id=? AND engine_id=? AND lease_until<=? AND (status IN ('revoking','expired') OR (status='active' AND (expires_at<=? OR identity_id IN (SELECT id FROM machine_identities WHERE status!='active'))))`, claim, now+60, leaseID, engineID, now, now)
 	if err != nil {
 		return err
 	}
-	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if err := engine.Revoke(cctx, username); err != nil {
-		var n int
-		_ = s.DB.QueryRow(`SELECT COALESCE(reclaim_fails,0) FROM dynamic_leases WHERE id = ?`, leaseID).Scan(&n)
-		n++
-		status := "active"
-		if n >= 5 {
-			status = "failed"
-			var orgID string
-			_ = s.DB.QueryRow(`SELECT org_id FROM dynamic_engines WHERE id = ?`, engineID).Scan(&orgID)
-			_ = auth.Audit(s.DB, orgID, &auth.Actor{ID: "system", Name: "system", Kind: auth.KindUser},
-				"dynamic.lease.reclaim_failed", "lease/"+leaseID, map[string]any{"username": username, "fails": n}, "")
-		}
-		_, _ = s.DB.Exec(`UPDATE dynamic_leases SET reclaim_fails = ?, status = CASE WHEN ? = 'failed' THEN 'failed' ELSE status END WHERE id = ?`, n, status, leaseID)
-		return err
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return errors.New("lease busy")
 	}
-	_, err = s.DB.Exec(`UPDATE dynamic_leases SET status = 'revoked', revoked_at = datetime('now') WHERE id = ?`, leaseID)
-	return err
+	var connEnc, orgID string
+	err = s.DB.QueryRow(`SELECT conn_encrypted,org_id FROM dynamic_engines WHERE id=?`, engineID).Scan(&connEnc, &orgID)
+	if err == nil {
+		var engine Engine
+		engine, err = s.engineOf(engineID, connEnc)
+		if err == nil {
+			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err = engine.Revoke(cctx, username)
+			cancel()
+		}
+	}
+	if orgID == "" {
+		return errors.New("engine unavailable")
+	}
+	tx, e := s.DB.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	action := "dynamic.lease.revoke"
+	if err != nil {
+		result, e = tx.Exec(`UPDATE dynamic_leases SET reclaim_fails=reclaim_fails+1,status=CASE WHEN reclaim_fails>=4 THEN 'failed' ELSE 'revoking' END,lease_token='',lease_until=? WHERE id=? AND lease_token=? AND lease_until>?`, now+30, leaseID, claim, time.Now().Unix())
+		action = "dynamic.lease.reclaim_failed"
+	} else {
+		result, e = tx.Exec(`UPDATE dynamic_leases SET status='revoked',revoked_at=datetime('now'),lease_token='',lease_until=0 WHERE id=? AND lease_token=? AND lease_until>?`, leaseID, claim, time.Now().Unix())
+	}
+	if e != nil {
+		return e
+	}
+	n, _ = result.RowsAffected()
+	if n != 1 {
+		return errors.New("claim expired")
+	}
+	if e = audit.Record(tx, audit.Rec{OrgID: orgID, ActorID: "system", ActorType: "system", Action: action, Resource: "lease/" + leaseID}); e != nil {
+		return e
+	}
+	if e = tx.Commit(); e != nil {
+		return e
+	}
+	if err != nil {
+		return errors.New("reclamation failed")
+	}
+	return nil
 }
 
-// ---------- 后台 worker ----------
-
-// StartWorker 到期回收 + 身份吊销联动；ctx 取消即停
 func (s *Service) StartWorker(ctx context.Context, interval time.Duration) {
 	go func() {
-		t := time.NewTicker(interval)
-		defer t.Stop()
+		timer := time.NewTicker(interval)
+		defer timer.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
+			case <-timer.C:
 				s.sweep(ctx)
 			}
 		}
 	}()
 }
-
 func (s *Service) sweep(ctx context.Context) {
 	now := time.Now().Unix()
-	// 1. 到期 lease 回收
-	rows, err := s.DB.Query(`SELECT l.id, l.engine_id, l.username, e.org_id
-		FROM dynamic_leases l JOIN dynamic_engines e ON e.id = l.engine_id
-		WHERE l.status = 'active' AND l.expires_at <= ?`, now)
-	if err == nil {
-		var ids, eids, users, orgs []string
-		for rows.Next() {
-			var id, eid, user, org string
-			_ = rows.Scan(&id, &eid, &user, &org)
-			ids, eids, users, orgs = append(ids, id), append(eids, eid), append(users, user), append(orgs, org)
-		}
-		rows.Close()
-		for i := range ids {
-			if err := s.revokeNow(ctx, eids[i], ids[i], users[i]); err == nil {
-				auth.Audit(s.DB, orgs[i], &auth.Actor{ID: "system", Name: "system", Kind: auth.KindUser},
-					"dynamic.lease.expire", "lease/"+ids[i], map[string]any{"username": users[i]}, "")
-			}
+	rows, err := s.DB.Query(`SELECT l.id,l.engine_id,l.username FROM dynamic_leases l JOIN dynamic_engines e ON e.id=l.engine_id JOIN machine_identities m ON m.id=l.identity_id WHERE l.lease_until<=? AND (l.status IN ('revoking','expired') OR (l.status='active' AND (l.expires_at<=? OR m.status!='active'))) ORDER BY l.expires_at,l.id LIMIT 64`, now, now)
+	if err != nil {
+		return
+	}
+	type job struct{ id, engine, user string }
+	jobs := []job{}
+	for rows.Next() {
+		var j job
+		if rows.Scan(&j.id, &j.engine, &j.user) == nil {
+			jobs = append(jobs, j)
 		}
 	}
-	// 2. 身份吊销联动：活跃 lease 的 identity 已 revoked → 回收
-	rows2, err := s.DB.Query(`SELECT l.id, l.engine_id, l.username, e.org_id
-		FROM dynamic_leases l
-		JOIN dynamic_engines e ON e.id = l.engine_id
-		JOIN machine_identities mi ON mi.id = l.identity_id
-		WHERE l.status = 'active' AND mi.status = 'revoked'`)
-	if err == nil {
-		var ids, eids, users, orgs []string
-		for rows2.Next() {
-			var id, eid, user, org string
-			_ = rows2.Scan(&id, &eid, &user, &org)
-			ids, eids, users, orgs = append(ids, id), append(eids, eid), append(users, user), append(orgs, org)
+	rows.Close()
+	for _, j := range jobs {
+		if ctx.Err() != nil {
+			return
 		}
-		rows2.Close()
-		for i := range ids {
-			if err := s.revokeNow(ctx, eids[i], ids[i], users[i]); err == nil {
-				auth.Audit(s.DB, orgs[i], &auth.Actor{ID: "system", Name: "system", Kind: auth.KindUser},
-					"dynamic.lease.revoke", "lease/"+ids[i], map[string]any{"username": users[i], "reason": "identity_revoked"}, "")
-			}
-		}
+		_ = s.revokeNow(ctx, j.engine, j.id, j.user)
 	}
 }

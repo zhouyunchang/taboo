@@ -349,6 +349,13 @@ func bindIdentity(tx *sql.Tx, p *provider, subject string, claims map[string]any
 	if lookup != nil && !errors.Is(lookup, sql.ErrNoRows) {
 		return "", lookup
 	}
+	if lookup == nil && owner != p.ID {
+		// Membership survives a proved provider change without applying the new
+		// connection's default role over the existing local authorization.
+		if _, err = tx.Exec(`UPDATE federation_admissions SET provider_id=?,last_role='' WHERE org_id=? AND user_id=?`, p.ID, p.OrgID, uid); err != nil {
+			return "", err
+		}
+	}
 	if lookup == nil && owner == p.ID && previous != "" && previous == role && p.SyncRole {
 		if _, err = tx.Exec(`UPDATE org_members SET role=? WHERE org_id=? AND user_id=?`, mappedRole, p.OrgID, uid); err != nil {
 			return "", err

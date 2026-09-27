@@ -26,12 +26,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
-	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
 // 退避序列（秒）：第 N 次失败后调度第 N 次重试，共 6 次尝试后 dead
@@ -218,10 +218,8 @@ func (s *Service) deliver(id, orgID, event, payload string, attempts int, target
 	}
 	defer res.Body.Close()
 	if res.StatusCode/100 == 2 {
-		_, _ = s.DB.Exec(`UPDATE webhook_deliveries SET status = 'success', http_code = ?,
-			attempts = attempts + 1, delivered_at = datetime('now'),lease_token='',lease_until=0 WHERE id = ? AND lease_token=?`, res.StatusCode, id, lease)
-		auth.Audit(s.DB, orgID, nil, "webhook.deliver", "webhook/"+id,
-			map[string]any{"event": event, "http_code": res.StatusCode, "attempts": attempts + 1}, "")
+		_ = outbox.Complete(s.DB, `UPDATE webhook_deliveries SET status='success',http_code=?,attempts=attempts+1,delivered_at=datetime('now'),lease_token='',lease_until=0 WHERE id=? AND lease_token=? AND lease_until>?`, []any{res.StatusCode, id, lease, time.Now().Unix()}, audit.Rec{OrgID: orgID, ActorID: "system", ActorType: "system", Action: "webhook.deliver", Resource: "webhook/" + id, Metadata: map[string]any{"event": event, "http_code": res.StatusCode, "attempts": attempts + 1}})
+
 		return
 	}
 	s.finishFail(id, lease, orgID, event, attempts, "HTTP "+strconv.Itoa(res.StatusCode))
@@ -229,13 +227,13 @@ func (s *Service) deliver(id, orgID, event, payload string, attempts int, target
 
 func (s *Service) finishFail(id, lease, orgID, event string, attempts int, cause string) {
 	attempts++
-	status, nextAt := retryAfterFail(attempts)
+	status, next := retryAfterFail(attempts)
+	action := "webhook.retry"
 	if status == "dead" {
-		_ = auth.Audit(s.DB, orgID, nil, "webhook.dead", "webhook/"+id,
-			map[string]any{"event": event, "error": cause, "attempts": attempts}, "")
+		action = "webhook.dead"
 	}
-	_, _ = s.DB.Exec(`UPDATE webhook_deliveries SET status = ?, attempts = ?, next_attempt_at = ?,
-		error = ?,lease_token='',lease_until=0 WHERE id = ? AND lease_token=?`, status, attempts, nextAt, cause, id, lease)
+	_ = outbox.Complete(s.DB, `UPDATE webhook_deliveries SET status=?,attempts=?,next_attempt_at=?,error='webhook attempt failed',lease_token='',lease_until=0 WHERE id=? AND lease_token=? AND lease_until>?`, []any{status, attempts, next, id, lease, time.Now().Unix()}, audit.Rec{OrgID: orgID, ActorID: "system", ActorType: "system", Action: action, Resource: "webhook/" + id, Metadata: map[string]any{"event": event, "attempts": attempts}})
+
 }
 
 // ---------- HTTP ----------
@@ -260,8 +258,8 @@ func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (orgID, slug str
 
 func manageOnly(db *sql.DB, w http.ResponseWriter, r *http.Request, orgID string) bool {
 	u := auth.From(r)
-	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", rbac.Admin, "") {
-		auth.Deny(db, w, r, orgID, rbac.Admin, "org/webhooks")
+	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", auth.DelegationAction(u), "") {
+		auth.Deny(db, w, r, orgID, auth.DelegationAction(u), "org/webhooks")
 		return false
 	}
 	return true
@@ -351,13 +349,19 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	evJSON, _ := json.Marshal(b.Events)
-	if _, err := s.DB.Exec(`INSERT INTO webhooks (id, org_id, url, secret_enc, events)
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO webhooks (id, org_id, url, secret_enc, events)
 		VALUES (?, ?, ?, ?, ?)`, id, orgID, b.URL, secretEnc, string(evJSON)); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "webhook.create", "org/"+slug+"/webhook/"+id,
-		map[string]any{"url": b.URL, "events": b.Events}, ipOf(r))
+	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "webhook.create", "org/"+slug+"/webhook/"+id, map[string]any{"events": b.Events}) {
+		return
+	}
 	writeJSON(w, 201, map[string]any{"id": id, "url": b.URL, "secret": b.Secret, "events": b.Events})
 }
 
@@ -380,11 +384,18 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if _, err := s.DB.Exec(`DELETE FROM webhooks WHERE id = ? AND org_id = ?`, id, orgID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
 		return
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "webhook.delete", "org/"+slug+"/webhook/"+id, nil, ipOf(r))
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM webhooks WHERE id=? AND org_id=?`, id, orgID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+		return
+	}
+	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "webhook.delete", "org/"+slug+"/webhook/"+id, nil) {
+		return
+	}
 	writeJSON(w, 200, map[string]any{"id": id, "deleted": true})
 }
 

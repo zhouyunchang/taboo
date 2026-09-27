@@ -448,7 +448,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 	if err := migrateIntegrity(db); err != nil {
 		return err
 	}
-	for _, table := range []string{"sync_runs", "webhook_deliveries"} {
+	for _, table := range []string{"sync_runs", "webhook_deliveries", "audit_exports", "dynamic_leases"} {
 		for _, column := range []string{"lease_token TEXT NOT NULL DEFAULT ''", "lease_until INTEGER NOT NULL DEFAULT 0"} {
 			if _, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 				return err
@@ -458,6 +458,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 	if _, err := db.Exec("ALTER TABLE sync_runs ADD COLUMN event_payload TEXT NOT NULL DEFAULT '{}'"); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		return err
 	}
+	for _, table := range []string{"sync_runs", "outbox_events"} {
+		if _, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN event_sequence INTEGER NOT NULL DEFAULT 0"); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
 	// PRAGMA 不支持参数绑定，整数直接内插（值来自本文件常量，无注入面）
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 		return err
@@ -466,7 +471,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 14
+const SchemaVersion = 15
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录

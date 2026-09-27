@@ -9,6 +9,7 @@ import (
 
 // SecretEvent 密钥变更事件（负载不含明文，只有元数据 + 资源定位信息）
 type SecretEvent struct {
+	Sequence      int64 // Durable per-organization order; allocated in the mutation transaction.
 	SecretID      string
 	EnvironmentID string
 	Ciphertext    string // Encrypted immutable snapshot for delayed sync; never sent to webhook recipients.

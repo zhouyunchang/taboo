@@ -147,6 +147,29 @@ func (s *Service) replaceIdentity(tx *sql.Tx, r *http.Request, p *provider, proo
 	if proof.BrowserHash != "" && time.Now().Unix() > proof.AuthUntil {
 		return "", apperr.Unauthorized
 	}
+	rows, e := tx.Query(`SELECT org_id FROM org_members WHERE user_id=? AND role='owner' ORDER BY org_id`, proof.User)
+	if e != nil {
+		return "", e
+	}
+	organizations := []string{}
+	for rows.Next() {
+		var org string
+		if e = rows.Scan(&org); e != nil {
+			rows.Close()
+			return "", e
+		}
+		organizations = append(organizations, org)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return "", e
+	}
+	for _, org := range organizations {
+		if _, e = tx.Exec(`UPDATE orgs SET name=name WHERE id=?`, org); e != nil {
+			return "", e
+		}
+	}
 	result, err := tx.Exec(`UPDATE users SET name=name WHERE id=? AND status='active'`, proof.User)
 	if err != nil {
 		return "", err
@@ -208,6 +231,11 @@ func (s *Service) replaceIdentity(tx *sql.Tx, r *http.Request, p *provider, proo
 	}
 	if _, err = tx.Exec(`INSERT INTO federation_admissions(org_id,provider_id,user_id,last_role) VALUES(?,?,?,'') ON CONFLICT(org_id,user_id) DO UPDATE SET provider_id=excluded.provider_id,last_role=''`, p.OrgID, p.ID, proof.User); err != nil {
 		return "", err
+	}
+	for _, org := range organizations {
+		if !auth.ExternalOwnerAvailable(tx, org) {
+			return "", apperr.New(409, "EXTERNAL_OWNER_REQUIRED", "verify another external owner in each affected organization before replacing this identity")
+		}
 	}
 	actor := &auth.Actor{ID: proof.User, Kind: auth.KindUser, AuthenticationSource: p.ID}
 	err = auth.AuditReq(tx, r, p.OrgID, actor, "oidc.identity.replace", "user/"+proof.User, map[string]any{"provider_id": p.ID})

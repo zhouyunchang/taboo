@@ -338,7 +338,7 @@ func TestFederationProviderPatchAndAudit(t *testing.T) {
 		t.Fatal("unrelated patch erased mapping")
 	}
 	testdb.FailAudit(t, f.db)
-	checkStatus(t, patch(`{"enabled":false}`), 500)
+	checkStatus(t, patch(`{"enabled":false}`), 503)
 	var enabled int
 	f.db.QueryRow(`SELECT enabled FROM oidc_providers WHERE id='provider-a'`).Scan(&enabled)
 	if enabled != 1 {

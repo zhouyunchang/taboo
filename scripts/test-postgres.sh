@@ -11,7 +11,7 @@ docker run -d --name "$container" -e POSTGRES_PASSWORD=fixture-admin -e POSTGRES
   -p "127.0.0.1:$port:5432" "$image" >/dev/null
 ready=false
 for _ in $(seq 1 60); do
-  if docker exec "$container" pg_isready -U postgres -d taboo >/dev/null 2>&1; then ready=true; break; fi
+  if docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d taboo >/dev/null 2>&1; then ready=true; break; fi
   sleep 1
 done
 if [ "$ready" != true ]; then docker logs --tail 30 "$container"; exit 1; fi
@@ -19,6 +19,8 @@ docker exec "$container" psql -U postgres -d taboo -v ON_ERROR_STOP=1 -c \
   "CREATE ROLE taboo_runtime NOLOGIN NOSUPERUSER NOBYPASSRLS; CREATE ROLE taboo_control LOGIN PASSWORD 'fixture-control' NOSUPERUSER NOBYPASSRLS; GRANT taboo_runtime TO taboo_control; ALTER DATABASE taboo OWNER TO taboo_control; GRANT CREATE ON SCHEMA public TO taboo_control;" >/dev/null
 export TABOO_TEST_POSTGRES_DSN="postgres://taboo_control:fixture-control@127.0.0.1:$port/taboo?sslmode=disable"
 export TABOO_REQUIRE_POSTGRES=1
+# Separate target engine fixture; never used by the application storage pool.
+export TABOO_TEST_DYNAMIC_POSTGRES_DSN="postgres://postgres:fixture-admin@127.0.0.1:$port/taboo?sslmode=disable"
 (cd apps/server-go && go test -race ./... -count=1 -timeout 180s)
 if [ "${TABOO_TEST_WITH_KEYCLOAK:-0}" = 1 ]; then
   ./scripts/test-federation.sh

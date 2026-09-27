@@ -30,6 +30,7 @@ import (
 )
 
 type Deps struct {
+	AccountDB       *sql.DB // Trusted local account operations, always bound to the authenticated user.
 	LookupLocalUser func(string) (string, error)
 	Workloads       *workload.Service
 	PublicOrigin    string
@@ -54,6 +55,9 @@ type Deps struct {
 func New(d *Deps) *chi.Mux {
 	copy := *d
 	d = &copy
+	if d.AccountDB == nil {
+		d.AccountDB = d.DB
+	}
 	if d.LookupLocalUser == nil && d.DB != nil {
 		control := d.DB
 		d.LookupLocalUser = func(email string) (string, error) {
@@ -80,7 +84,7 @@ func New(d *Deps) *chi.Mux {
 		DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword,
 	}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
-	totps := &totpsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
+	totps := &totpsvc.Service{DB: d.AccountDB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
 	loginRate := d.LoginRate
 	if loginRate <= 0 {
 		loginRate = 5
@@ -203,7 +207,8 @@ func projectCtx(db *sql.DB) func(http.Handler) http.Handler {
 				writeErr(w, apperr.NotFound)
 				return
 			}
-			if !auth.Require(db, w, r, p.OrgID, p.ID, "read", "") {
+			if !auth.ProjectVisible(db, auth.From(r), p.OrgID, p.ID) {
+				auth.Deny(db, w, r, p.OrgID, "read", "project/"+p.Slug)
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(project.With(r.Context(), p)))
@@ -225,7 +230,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	folders := &folder.Service{DB: d.DB}
 	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs, Events: d.Events}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
-	totps := &totpsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
+	totps := &totpsvc.Service{DB: d.AccountDB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
 	syncs := &syncsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
 	webhooks := &whsvc.Service{DB: d.DB, MasterKey: d.MasterKey}
 	dyn := d.Dynamic.WithDB(d.DB)

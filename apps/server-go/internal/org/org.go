@@ -140,8 +140,13 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
 	userID := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO users (id, email, name, password_hash, auth_source) VALUES (?, ?, ?, ?, 'local')`,
+	if _, err := tx.Exec(`INSERT INTO users (id, email, name, password_hash, auth_source) VALUES (?, ?, ?, ?, 'local')`,
 		userID, email, b.Name, hash); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -151,7 +156,7 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 	slug := slugify(strings.Split(email, "@")[0])
 	for {
 		var x string
-		if err := s.DB.QueryRow(`SELECT id FROM orgs WHERE slug = ?`, slug).Scan(&x); err != nil {
+		if err := tx.QueryRow(`SELECT id FROM orgs WHERE slug = ?`, slug).Scan(&x); err != nil {
 			break
 		}
 		slug += "-" + tc.NewID()[:4]
@@ -162,17 +167,17 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "DEK encryption failed"))
 		return
 	}
-	if _, err := s.DB.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, ?, ?, ?)`,
+	if _, err := tx.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, ?, ?, ?)`,
 		orgID, email+"'s org", slug, dekPlain); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if _, err := s.DB.Exec(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')`, orgID, userID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')`, orgID, userID); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	projectID := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'default', 'default')`, projectID, orgID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'default', 'default')`, projectID, orgID); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
@@ -182,21 +187,24 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		if env == "prod" {
 			prot = 1
 		}
-		if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
+		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
 			envID, projectID, env, env, i, prot); err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
 		}
-		ensureRootFolder(s.DB, envID)
+		if err := ensureRootFolder(tx, envID); err != nil {
+			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+			return
+		}
 	}
 	u := &auth.Actor{ID: userID, Email: email, Name: b.Name, Kind: auth.KindUser}
-	if err := auth.AuditReq(s.DB, r, orgID, u, "auth.register", "user/"+email, nil); err != nil {
+
+	tk, err := auth.IssueTokens(tx, s.JWTSecret, u)
+	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	tk, err := auth.IssueTokens(s.DB, s.JWTSecret, u)
-	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	if !auth.CommitMutation(tx, w, r, orgID, u, "auth.register", "user/"+email, nil) {
 		return
 	}
 	writeJSON(w, 201, map[string]any{"user": u, "tokens": tk})
@@ -209,9 +217,12 @@ func randomBytes(n int) []byte {
 }
 
 // ensureRootFolder 为环境补建根文件夹（幂等，已存在则忽略冲突）
-func ensureRootFolder(db *sql.DB, envID string) {
-	_, _ = db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/') ON CONFLICT(env_id,path) DO NOTHING`,
+func ensureRootFolder(db interface {
+	Exec(string, ...any) (sql.Result, error)
+}, envID string) error {
+	_, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/') ON CONFLICT(env_id,path) DO NOTHING`,
 		tc.NewID(), envID)
+	return err
 }
 
 func hexEncode(b []byte) string {
@@ -425,8 +436,13 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		slug += "-" + tc.NewID()[:4]
 	}
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
 	pid := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, ?, ?)`,
+	if _, err := tx.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, ?, ?)`,
 		pid, orgID, b.Name, slug); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -437,12 +453,18 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 		if env == "prod" {
 			prot = 1
 		}
-		_, _ = s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
-			envID, pid, env, env, i, prot)
-		ensureRootFolder(s.DB, envID)
+		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
+			envID, pid, env, env, i, prot); err != nil {
+			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+			return
+		}
+		if err := ensureRootFolder(tx, envID); err != nil {
+			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+			return
+		}
 	}
-	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "project.create", "project/"+slug, nil); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+
+	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "project.create", "project/"+slug, nil) {
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": pid, "name": b.Name, "slug": slug})
@@ -457,7 +479,7 @@ func (s *Service) projectOf(w http.ResponseWriter, r *http.Request) (secret.Proj
 		return p, false
 	}
 	u := auth.From(r)
-	if !auth.Can(s.DB, u, p.OrgID, p.ID, "read", "") {
+	if !auth.ProjectVisible(s.DB, u, p.OrgID, p.ID) {
 		auth.Deny(s.DB, w, r, p.OrgID, "read", "project/"+p.Slug)
 		return p, false
 	}
@@ -518,15 +540,22 @@ func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
 	if b.Protected || slug == "prod" {
 		prot = 1
 	}
-	if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
 		id, p.ID, b.Name, slug, maxSort+1, prot); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	ensureRootFolder(s.DB, id)
-	if err := auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "env.create", "project/"+p.Slug+"/env/"+slug,
-		map[string]any{"protected": prot == 1}); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	if err := ensureRootFolder(tx, id); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+		return
+	}
+
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "env.create", "project/"+p.Slug+"/env/"+slug, map[string]any{"protected": prot == 1}) {
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "slug": slug, "protected": prot == 1})

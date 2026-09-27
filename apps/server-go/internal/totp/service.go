@@ -6,7 +6,7 @@
 //	POST /auth/totp/login    （公开，限流）challenge + TOTP 码/恢复码 → 换正式 token
 //
 // 安全要点：secret 以 Master Key 加密落库；防重放（totp_last_step 单调递增）；
-// 恢复码仅存 sha256 哈希、用后即废；challenge JWT 独立 typ=totp、TTL 5min、一次性语义（用完即过期由 exp 保证）。
+// 恢复码仅存 sha256 哈希、用后即废；challenge JWT 独立 typ=totp、TTL 5min；动态码按时间步 CAS 消费，恢复码原子消费。
 package totp
 
 import (
@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skip2/go-qrcode"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 )
@@ -60,10 +61,10 @@ func (s *Service) Routes(r chi.Router) {
 	})
 }
 
-func (s *Service) audit(u *auth.Actor, action, resource string, r *http.Request) {
-	rows, err := s.DB.Query(`SELECT org_id FROM org_members WHERE user_id = ?`, u.ID)
+func (s *Service) audit(db audit.DBTX, u *auth.Actor, action, resource string, r *http.Request) error {
+	rows, err := db.Query(`SELECT org_id FROM org_members WHERE user_id = ? ORDER BY org_id`, u.ID)
 	if err != nil {
-		return
+		return err
 	}
 	var orgs []string
 	for rows.Next() {
@@ -72,10 +73,20 @@ func (s *Service) audit(u *auth.Actor, action, resource string, r *http.Request)
 			orgs = append(orgs, org)
 		}
 	}
-	rows.Close()
-	for _, org := range orgs {
-		_ = auth.AuditReq(s.DB, r, org, u, action, resource, nil)
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
+	rows.Close()
+	if len(orgs) == 0 {
+		orgs = []string{"-"}
+	}
+	for _, org := range orgs {
+		if err = auth.AuditReq(db, r, org, u, action, resource, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Setup POST /auth/totp/setup —— 生成待激活密钥（旧 pending 直接覆盖）
@@ -91,17 +102,31 @@ func (s *Service) Setup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET totp_pending_enc = ? WHERE id = ?`, enc, u.ID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
 	otpauth := OTPAuthURL(Issuer, u.Email, secret)
 	png, err := qrcode.Encode(otpauth, qrcode.Medium, 200)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	s.audit(u, "auth.totp.setup", "user/"+u.Email, r)
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE users SET totp_pending_enc=? WHERE id=? AND auth_source='local' AND status='active' AND totp_enabled=0`, enc, u.ID)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.New(409, "MFA_ALREADY_ENABLED", "disable the current factor before setting up another"))
+		return
+	}
+	if !s.commit(tx, w, r, u, "auth.totp.setup") {
+		return
+	}
+
 	writeJSON(w, 200, map[string]any{
 		"secret":      secret,
 		"otpauth_url": otpauth,
@@ -131,22 +156,34 @@ func (s *Service) VerifyActivate(w http.ResponseWriter, r *http.Request) {
 	}
 	step, ok := Verify(secret, strings.TrimSpace(b.Code), 0)
 	if !ok {
-		s.audit(u, "auth.totp.verify_fail", "user/"+u.Email, r)
+		_ = s.audit(s.DB, u, "auth.totp.verify_fail", "user/"+u.Email, r)
 		writeErr(w, apperr.New(401, "BAD_CODE", "invalid totp code"))
 		return
 	}
-	codes, err := s.issueRecoveryCodes(u.ID)
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE users SET totp_secret_enc=totp_pending_enc,totp_pending_enc=NULL,totp_enabled=1,totp_last_step=? WHERE id=? AND totp_pending_enc=? AND totp_enabled=0 AND auth_source='local' AND status='active'`, step, u.ID, enc)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
-	// pending → active；激活即消费的码记入 last_step，杜绝同窗口复用
-	if _, err := s.DB.Exec(`UPDATE users SET totp_secret_enc = totp_pending_enc, totp_pending_enc = NULL,
-		totp_enabled = 1, totp_last_step = ? WHERE id = ?`, step, u.ID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.New(409, "MFA_CHANGED", "restart factor setup"))
 		return
 	}
-	s.audit(u, "auth.totp.enable", "user/"+u.Email, r)
+	codes, err := s.issueRecoveryCodes(tx, u.ID)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if !s.commit(tx, w, r, u, "auth.totp.enable") {
+		return
+	}
+
 	writeJSON(w, 200, map[string]any{"enabled": true, "recovery_codes": codes})
 }
 
@@ -167,17 +204,33 @@ func (s *Service) Disable(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, _, _ := tc.CheckPassword(b.Password, hash)
 	if !ok {
-		s.audit(u, "auth.totp.disable_fail", "user/"+u.Email, r)
+		_ = s.audit(s.DB, u, "auth.totp.disable_fail", "user/"+u.Email, r)
 		writeErr(w, apperr.BadCredentials)
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET totp_secret_enc = NULL, totp_pending_enc = NULL,
-		totp_enabled = 0, totp_last_step = 0 WHERE id = ?`, u.ID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
 		return
 	}
-	_, _ = s.DB.Exec(`DELETE FROM recovery_codes WHERE user_id = ?`, u.ID)
-	s.audit(u, "auth.totp.disable", "user/"+u.Email, r)
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE users SET totp_secret_enc=NULL,totp_pending_enc=NULL,totp_enabled=0,totp_last_step=0 WHERE id=? AND password_hash=? AND auth_source='local' AND status='active'`, u.ID, hash)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.Unauthorized)
+		return
+	}
+	if _, err = tx.Exec(`DELETE FROM recovery_codes WHERE user_id=?`, u.ID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if !s.commit(tx, w, r, u, "auth.totp.disable") {
+		return
+	}
+
 	writeJSON(w, 200, map[string]any{"enabled": false})
 }
 
@@ -198,17 +251,32 @@ func (s *Service) Login2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID, _ := claims["sub"].(string)
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE users SET id=id WHERE id=? AND status='active' AND auth_source='local' AND totp_enabled=1`, userID)
+	if err != nil {
+		writeErr(w, apperr.Unauthorized)
+		return
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.Unauthorized)
+		return
+	}
 	var email, name, enc string
 	var enabled int
 	var lastStep int64
-	if err := s.DB.QueryRow(`SELECT email, name, totp_secret_enc, totp_enabled, totp_last_step
-		FROM users WHERE id = ?`, userID).Scan(&email, &name, &enc, &enabled, &lastStep); err != nil || enabled != 1 {
+	if err := tx.QueryRow(`SELECT email, name, totp_secret_enc, totp_enabled, totp_last_step
+		FROM users WHERE id = ? AND auth_source='local' AND status='active'`, userID).Scan(&email, &name, &enc, &enabled, &lastStep); err != nil || enabled != 1 {
 		writeErr(w, apperr.New(401, "BAD_CHALLENGE", "2fa not enabled"))
 		return
 	}
 	code := strings.TrimSpace(b.Code)
 	if strings.Contains(code, "-") {
-		if !s.consumeRecoveryCode(userID, code) {
+		if !s.consumeRecoveryCode(tx, userID, code) {
 			writeErr(w, apperr.New(401, "BAD_CODE", "invalid recovery code"))
 			return
 		}
@@ -223,24 +291,33 @@ func (s *Service) Login2FA(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, apperr.New(401, "BAD_CODE", "invalid totp code"))
 			return
 		}
-		if _, err := s.DB.Exec(`UPDATE users SET totp_last_step = ? WHERE id = ?`, step, userID); err != nil {
+		result, err := tx.Exec(`UPDATE users SET totp_last_step=? WHERE id=? AND totp_last_step=? AND totp_secret_enc=? AND totp_enabled=1`, step, userID, lastStep, enc)
+		if err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		n, _ := result.RowsAffected()
+		if n != 1 {
+			writeErr(w, apperr.New(401, "BAD_CODE", "code already consumed"))
 			return
 		}
 	}
 	u := &auth.Actor{ID: userID, Email: email, Name: name, Kind: auth.KindUser}
-	s.audit(u, "auth.login", "user/"+email, r)
-	tk, err := auth.IssueTokens(s.DB, s.JWTSecret, u)
+	tk, err := auth.IssueTokens(tx, s.JWTSecret, u)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
+	if !s.commit(tx, w, r, u, "auth.login") {
+		return
+	}
+
 	writeJSON(w, 200, map[string]any{"user": u, "tokens": tk})
 }
 
 // issueRecoveryCodes 重新生成 10 个恢复码（xxxx-xxxx-xxxx），仅返回明文这一次
-func (s *Service) issueRecoveryCodes(userID string) ([]string, error) {
-	if _, err := s.DB.Exec(`DELETE FROM recovery_codes WHERE user_id = ?`, userID); err != nil {
+func (s *Service) issueRecoveryCodes(db audit.DBTX, userID string) ([]string, error) {
+	if _, err := db.Exec(`DELETE FROM recovery_codes WHERE user_id = ?`, userID); err != nil {
 		return nil, err
 	}
 	codes := make([]string, 0, recoveryCount)
@@ -252,7 +329,7 @@ func (s *Service) issueRecoveryCodes(userID string) ([]string, error) {
 		c := strings.Join([]string{
 			base32HexLower(raw[0:4]), base32HexLower(raw[4:6]), base32HexLower(raw[6:9]),
 		}, "-")
-		if _, err := s.DB.Exec(`INSERT INTO recovery_codes (id, user_id, code_hash) VALUES (?, ?, ?)`,
+		if _, err := db.Exec(`INSERT INTO recovery_codes (id, user_id, code_hash) VALUES (?, ?, ?)`,
 			tc.NewID(), userID, tc.SHA256(c)); err != nil {
 			return nil, err
 		}
@@ -262,8 +339,8 @@ func (s *Service) issueRecoveryCodes(userID string) ([]string, error) {
 }
 
 // consumeRecoveryCode 原子核销恢复码（UPDATE ... WHERE used_at IS NULL 防并发复用）
-func (s *Service) consumeRecoveryCode(userID, code string) bool {
-	res, err := s.DB.Exec(`UPDATE recovery_codes SET used_at = datetime('now')
+func (s *Service) consumeRecoveryCode(db audit.DBTX, userID, code string) bool {
+	res, err := db.Exec(`UPDATE recovery_codes SET used_at = datetime('now')
 		WHERE user_id = ? AND code_hash = ? AND used_at IS NULL`, userID, tc.SHA256(code))
 	if err != nil {
 		return false
@@ -290,4 +367,16 @@ func base32HexLower(b []byte) string {
 		out = append(out, alphabet[(buf<<(5-nbits))&0x1f])
 	}
 	return string(out)
+}
+
+func (s *Service) commit(tx *sql.Tx, w http.ResponseWriter, r *http.Request, u *auth.Actor, action string) bool {
+	if err := s.audit(tx, u, action, "user/"+u.ID, r); err != nil {
+		writeErr(w, apperr.New(503, "AUDIT_UNAVAILABLE", "change was not committed"))
+		return false
+	}
+	if err := tx.Commit(); err != nil {
+		writeErr(w, apperr.New(503, "COMMIT_UNCONFIRMED", "reload before retrying"))
+		return false
+	}
+	return true
 }

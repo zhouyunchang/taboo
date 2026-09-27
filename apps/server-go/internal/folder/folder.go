@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
@@ -76,7 +77,12 @@ func nameOf(path string) string {
 }
 
 // ResolveID 解析路径 → folder id；create=true 时逐级创建（含根）
-func ResolveID(db *sql.DB, envID, path string, create bool) (string, error) {
+type folderDB interface {
+	Exec(string, ...any) (sql.Result, error)
+	QueryRow(string, ...any) *sql.Row
+}
+
+func ResolveID(db folderDB, envID, path string, create bool) (string, error) {
 	path, err := NormalizePath(path)
 	if err != nil {
 		return "", err
@@ -85,6 +91,9 @@ func ResolveID(db *sql.DB, envID, path string, create bool) (string, error) {
 	err = db.QueryRow(`SELECT id FROM folders WHERE env_id = ? AND path = ?`, envID, path).Scan(&id)
 	if err == nil {
 		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", err
 	}
 	if !create {
 		return "", apperr.NotFound
@@ -181,18 +190,25 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err.(*apperr.Error))
 		return
 	}
-	id, err := ResolveID(s.DB, envID, path, true)
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
+	id, err := ResolveID(tx, envID, path, true)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.create", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path, nil)
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "folders.create", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path, nil) {
+		return
+	}
 	writeJSON(w, 201, map[string]any{"id": id, "path": path})
 }
 
 // Delete DELETE /folders?env=&path= —— 仅空文件夹（无子目录、无直接密钥）
 func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
-	envID, p, ok := s.envOf(w, r, "write")
+	envID, p, ok := s.envOf(w, r, "delete")
 	if !ok {
 		return
 	}
@@ -201,23 +217,36 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "cannot delete root folder"))
 		return
 	}
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
 	var id string
-	if err := s.DB.QueryRow(`SELECT id FROM folders WHERE env_id = ? AND path = ?`, envID, path).Scan(&id); err != nil {
+	if err := tx.QueryRow(`SELECT id FROM folders WHERE env_id = ? AND path = ?`, envID, path).Scan(&id); err != nil {
 		writeErr(w, apperr.NotFound)
 		return
 	}
 	var children, secretsN int
-	_ = s.DB.QueryRow(`SELECT COUNT(*) FROM folders WHERE parent_id = ?`, id).Scan(&children)
-	_ = s.DB.QueryRow(`SELECT COUNT(*) FROM secrets WHERE folder_id = ?`, id).Scan(&secretsN)
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM folders WHERE parent_id = ?`, id).Scan(&children); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM secrets WHERE folder_id = ?`, id).Scan(&secretsN); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
 	if children > 0 || secretsN > 0 {
 		writeErr(w, apperr.New(400, "NOT_EMPTY", "folder is not empty"))
 		return
 	}
-	if _, err := s.DB.Exec(`DELETE FROM folders WHERE id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM folders WHERE id = ?`, id); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.delete", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path, nil)
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "folders.delete", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path, nil) {
+		return
+	}
 	writeJSON(w, 200, map[string]any{"deleted": path})
 }
 
@@ -249,45 +278,41 @@ func (s *Service) Move(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "cannot move into itself"))
 		return
 	}
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
 	var id, parentID string
-	if err := s.DB.QueryRow(`SELECT id, COALESCE(parent_id, '') FROM folders WHERE env_id = ? AND path = ?`, envID, from).
+	if err := tx.QueryRow(`SELECT id, COALESCE(parent_id, '') FROM folders WHERE env_id = ? AND path = ?`, envID, from).
 		Scan(&id, &parentID); err != nil {
 		writeErr(w, apperr.NotFound)
 		return
 	}
-	newParentID, err := ResolveID(s.DB, envID, parentPathOf(to), true)
+	newParentID, err := ResolveID(tx, envID, parentPathOf(to), true)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	defer tx.Rollback()
 	// 级联更新：本节点 + 所有子孙的物化路径前缀替换
 	if _, err := tx.Exec(`UPDATE folders SET path = ? || substr(path, ?), parent_id = ?, name = ? WHERE id = ?`,
-		to, len(from)+1, newParentID, nameOf(to), id); err != nil {
+		to, utf8.RuneCountInString(from)+1, newParentID, nameOf(to), id); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if _, err := tx.Exec(`UPDATE folders SET path = ? || substr(path, ?) WHERE path LIKE ? AND env_id = ?`,
-		to, len(from)+1, from+"%", envID); err != nil {
+	if _, err := tx.Exec(`UPDATE folders SET path = ? || substr(path, ?) WHERE substr(path,1,?)=? AND env_id = ?`,
+		to, utf8.RuneCountInString(from)+1, utf8.RuneCountInString(from), from, envID); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	// secrets.folder 冗余列同步（folder_id 不变，仅展示列）
-	if _, err := tx.Exec(`UPDATE secrets SET folder = ? || substr(folder, ?) WHERE env_id = ? AND folder LIKE ?`,
-		to, len(from)+1, envID, from+"%"); err != nil {
+	if _, err := tx.Exec(`UPDATE secrets SET folder = ? || substr(folder, ?) WHERE env_id = ? AND substr(folder,1,?)=?`,
+		to, utf8.RuneCountInString(from)+1, envID, utf8.RuneCountInString(from), from); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "folders.move", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+from, map[string]any{"to": to}) {
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.move", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+from,
-		map[string]any{"to": to})
 	writeJSON(w, 200, map[string]any{"from": from, "to": to})
 }

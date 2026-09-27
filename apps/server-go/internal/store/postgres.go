@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != 13 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -267,6 +267,24 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 		if err = installBrowserSecurity(tx, owner, role); err != nil {
 			return err
 		}
+	}
+	if v < 15 {
+		for _, table := range []string{"audit_exports", "dynamic_leases"} {
+			if _, err = tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN IF NOT EXISTS lease_token TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS lease_until BIGINT NOT NULL DEFAULT 0`); err != nil {
+				return err
+			}
+		}
+		for _, table := range []string{"sync_runs", "outbox_events"} {
+			if _, err = tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN IF NOT EXISTS event_sequence BIGINT NOT NULL DEFAULT 0`); err != nil {
+				return err
+			}
+		}
+
+		predicate := `current_user=` + pq.QuoteLiteral(owner) + ` OR user_id=nullif(current_setting('taboo.user_id',true),'') OR (user_id IN (SELECT user_id FROM org_members WHERE org_id=nullif(current_setting('taboo.org_id',true),'')) AND EXISTS(SELECT 1 FROM org_members WHERE org_id=nullif(current_setting('taboo.org_id',true),'') AND user_id=nullif(current_setting('taboo.user_id',true),'') AND role='owner'))`
+		if _, err = tx.Exec(`ALTER POLICY tenant_scope ON external_identities USING (` + predicate + `) WITH CHECK (` + predicate + `)`); err != nil {
+			return err
+		}
+
 	}
 	if _, err = tx.Exec(`INSERT INTO schema_version(singleton,version) VALUES(true,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version`, SchemaVersion); err != nil {
 		return err
