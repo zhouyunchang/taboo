@@ -149,11 +149,11 @@ npm run cli -- login you@example.com your-password
 | 阶段 | 内容 |
 |---|---|
 | **M0（已完成）** | Node.js MVP：验证加密架构、API 契约、RBAC、审计 |
-| **M1（进行中）** | Go 后端已落地（Chi + modernc.org/sqlite、Argon2id、embed.FS 单二进制，冒烟全过）；剩余：sqlc 代码生成、PostgreSQL 主模式 |
+| **M1（已实现）** | Go 后端、SQLite 与 PostgreSQL 18、Argon2id、embed.FS 单二进制；当前仓储采用参数化 SQL，未引入 sqlc |
 | M2 | 机器身份（✅ #3）、文件夹多级路径（✅ #5）、TOTP 2FA（✅ #4）—— **M2 全部完成** |
 | M3 | CLI 全命令（scan ✅ #6，Dashboard 报告页遗留）、OpenAPI 契约（✅ #7）、Go SDK（✅ #8）；Python/Node SDK 待 OpenAPI 生成器接入 |
 | M4 | 动态密钥（✅ #9，PostgreSQL lease + worker 回收 + 身份联动）、MCP Server（✅ #10）—— **M4 全部完成** |
-| M5 | **全部完成**：Secret Sync（✅ #11）、Webhooks（✅ #12）、OIDC SSO（✅ #13）、审计导出 + Docker/Helm/GoReleaser（✅ #14）—— **v1.0 发布** |
+| M5 | **全部完成**：Secret Sync（✅ #11）、Webhooks（✅ #12）、OIDC SSO（✅ #13）、审计导出 + Docker/Helm/GoReleaser（✅ #14）；发行以实际 tag/发布记录为准 |
 
 ## 文档
 
@@ -182,6 +182,6 @@ docker compose up -d --build
 
 MIT（v1.0 正式确定；当前代码以 MIT 精神完全开放，无付费墙）
 
-### 标准身份联邦首批实现
+### 标准身份联邦 P0
 
-人员登录使用通用 OIDC BFF，不依赖任何私有身份工程。接口能力、配置升级注意事项、公开 Keycloak/浏览器测试和未完成工作见 [实施记录](docs/design/standard-identity-federation-m0.zh-CN.md)。本批不是 PostgreSQL、外部机器 OAuth 或全部多租户改造完成；Node 参考后端不具备新 BFF 协议。
+Go 版本已实现通用 OIDC BFF、PostgreSQL 多租户、标准 OAuth 工作负载及控制台治理。完成范围、公开夹具和未执行的生产边界见 [验收记录](docs/design/standard-federation-acceptance.zh-CN.md)；Node 参考后端保留原本地模式。

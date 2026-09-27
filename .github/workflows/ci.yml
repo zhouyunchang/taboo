@@ -131,8 +131,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      - name: Validate release configuration
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.0
+          args: check
+      - name: Build archives and release image without publishing or signing
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.0
+          args: release --snapshot --clean --skip=publish,sign,sbom
       - name: Build public standalone image and migration utility
         run: docker build -f apps/server-go/Dockerfile -t taboo:standard-federation-test .
       - name: Fresh install, restart and original-key recovery

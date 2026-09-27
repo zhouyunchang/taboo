@@ -5,9 +5,8 @@ project_name: taboo
 
 before:
   hooks:
-    # 前端构建 + embed 产物（等价 Makefile 的 web 目标）
-    - sh -c 'cd apps/web && npm ci --no-audit --no-fund && npm run build'
-    - sh -c 'rm -rf apps/server-go/cmd/server/web && mkdir -p apps/server-go/cmd/server/web && cp -r apps/web/dist/* apps/server-go/cmd/server/web/ && cp api/openapi.yaml apps/server-go/cmd/server/web/'
+    - npm ci --no-audit --no-fund
+    - make -C apps/server-go web
 
 builds:
   - id: taboo-server
@@ -43,14 +42,17 @@ checksum:
 
 sboms:
   - id: taboo
-    artifacts: [archive, binary]
-    args: ["$@"] # syft 默认参数
+    artifacts: archive
 
 dockers:
   - id: taboo
-    dockerfile: apps/server-go/Dockerfile
+    dockerfile: deploy/Dockerfile.release
+    ids: [taboo-server, taboo-migrate]
+    goos: linux
+    goarch: amd64
     use: docker
     build_flag_templates:
+      - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title=taboo"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.source=https://github.com/zhouyunchang/taboo"
@@ -59,11 +61,17 @@ dockers:
       - "ghcr.io/zhouyunchang/taboo:latest"
 
 signs:
-  - id: cosign
+  - id: cosign-checksums
     cmd: cosign
-    args: ["sign", "--yes", "--recursive", "${artifact}"]
-    artifacts: [all]
-    output: true
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+    artifacts: checksum
+
+docker_signs:
+  - id: cosign-images
+    cmd: cosign
+    args: ["sign", "--yes", "${artifact}@${digest}"]
+    artifacts: images
 
 release:
   github:
@@ -76,5 +84,5 @@ release:
     ## 验证
 
     ```bash
-    cosign verify ghcr.io/zhouyunchang/taboo:{{ .Version }}
+    cosign verify --certificate-identity 'https://github.com/zhouyunchang/taboo/.github/workflows/release.yml@refs/tags/{{ .Tag }}' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' ghcr.io/zhouyunchang/taboo:{{ .Version }}
     ```
