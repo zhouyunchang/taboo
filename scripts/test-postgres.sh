@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Disposable public PostgreSQL 18 fixture. The app never uses a superuser login.
-image='postgres@sha256:cbe15165195f7f2d63885b4d990fdec7b602248533cb05bd992284a45a58fed3'
+# Pin the multi-platform index so ARM development and AMD64 CI use native images.
+image='postgres@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873'
 port="${TABOO_TEST_POSTGRES_PORT:-15439}"
 container="taboo-postgres-test-$$"
 cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
