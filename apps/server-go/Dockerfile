@@ -25,14 +25,15 @@ COPY apps/server-go/ apps/server-go/
 # 前端产物 + API 契约拷入 embed 目录（等价 Makefile 的 web 目标）
 COPY --from=web /repo/apps/web/dist/ apps/server-go/cmd/server/web/
 COPY api/openapi.yaml apps/server-go/cmd/server/web/
-RUN cd apps/server-go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/taboo-server ./cmd/server
+RUN cd apps/server-go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/taboo-server ./cmd/server \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/taboo-migrate ./cmd/taboo-migrate
 
 # ---- 阶段 3：运行时 ----
 FROM alpine:3.21
 RUN apk add --no-cache curl \
     && adduser -D -u 10001 taboo \
     && mkdir -p /data && chown taboo:taboo /data
-COPY --from=server /out/taboo-server /usr/local/bin/taboo-server
+COPY --from=server /out/taboo-server /out/taboo-migrate /usr/local/bin/
 ENV TABOO_PORT=7100 \
     TABOO_DATA_DIR=/data \
     TABOO_CORS_ORIGIN=*

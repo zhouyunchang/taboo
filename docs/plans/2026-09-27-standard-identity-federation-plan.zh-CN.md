@@ -1,9 +1,9 @@
 # taboo 标准身份联邦与多租户改造计划
 
-- 编号：KTI-PLAN；版本：0.4；日期：2026-09-27；状态：已批准，持续实施至全部 P0 完成后合并 develop。
+- 编号：KTI-PLAN；版本：0.5；日期：2026-09-27；状态：P0 实现及公开本地验收收口，分支合并记录见任务结果。
 - 改造对象：开源 taboo 项目；源码核对基线 `d5724d3`。
 - 本版替代此前面向单一 Identity 工程的 v0.1 计划：改为开放标准、提供方无关的产品设计。
-- 架构基准：[OpenVault 功能与详细设计](../../doc/OpenVault_密钥管理平台_功能与详细设计.md)。首批代码与未完成门槛见 [实施记录](../design/standard-identity-federation-m0.zh-CN.md)，以及 [存储、加密与投递记录](../design/standard-identity-storage.zh-CN.md)。仍不代表全部 P0 完成。
+- 架构基准：[OpenVault 功能与详细设计](../../doc/OpenVault_密钥管理平台_功能与详细设计.md)。历史实施检查点见 [实施记录](../design/standard-identity-federation-m0.zh-CN.md)，以及 [存储、加密与投递记录](../design/standard-identity-storage.zh-CN.md)。当前完成范围以 [P0 验收记录](../design/standard-federation-acceptance.zh-CN.md) 为准。
 
 ## 1. 产品目标和不可违反的边界
 
@@ -103,7 +103,7 @@ PostgreSQL 作为多租户生产部署画像；SQLite 保留独立/小型部署�
 
 ## 5. 工作包与依赖
 
-已开始 KTI-00 及人员登录相关的增量实现，各包剩余门槛见实施记录；未整包宣告完成。保留 KTI-00 至 KTI-11 编号但按开放标准重新定义，v0.1 的 ID-01/ID-02/ID-03 私有依赖全部退出公共关键路径。
+KTI-00 至 KTI-11 的实现和本地公开验收已收口，证据与真实部署边界见 [P0 验收记录](../design/standard-federation-acceptance.zh-CN.md)。保留 KTI-00 至 KTI-11 编号但按开放标准重新定义，v0.1 的 ID-01/ID-02/ID-03 私有依赖全部退出公共关键路径。
 
 | 编号 | 主改动位置 | 交付物 | 前置 | 完成门槛 |
 | --- | --- | --- | --- | --- |

@@ -126,3 +126,18 @@ jobs:
       - run: node --test apps/cli/oauth.test.js
       - name: Real SDK, CLI and MCP processes with JWT, opaque and local credentials
         run: ./scripts/test-consumers.sh
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Build public standalone image and migration utility
+        run: docker build -f apps/server-go/Dockerfile -t taboo:standard-federation-test .
+      - name: Fresh install, restart and original-key recovery
+        run: node scripts/test-container-recovery.mjs
+      - name: Upgrade the pinned public pre-federation release
+        run: ./scripts/test-container-upgrade.sh
+      - name: Helm single-instance and shared PostgreSQL profiles
+        run: ./scripts/test-helm.sh

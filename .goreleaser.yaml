@@ -19,6 +19,15 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
 
+  - id: taboo-migrate
+    dir: apps/server-go
+    main: ./cmd/taboo-migrate
+    binary: taboo-migrate
+    env: [CGO_ENABLED=0]
+    ldflags: ["-s", "-w"]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
 archives:
   - id: taboo
     formats: [tar.gz]

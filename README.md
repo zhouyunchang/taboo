@@ -10,7 +10,7 @@
 
 修仙小说里，藏有重宝的洞府必有禁制：外人不可见、不可触，擅动者必被察觉。密钥管理的本质一样——**高价值数据 + 严格访问控制 + 全程留痕**。
 
-## 当前状态：v1.0（Go 后端，功能全量落地）
+## 当前状态：Go 后端与标准身份联邦 P0
 
 > 当前版本为 **Go 后端 + React 前端**（设计文档 §3 目标架构），单二进制 embed.FS 交付；
 > Node MVP 保留在 `apps/server` 仅作契约回归参考。v1.0 发布说明见 [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md)。
@@ -40,7 +40,9 @@
 - [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export、folders；`examples/basic` 集成示例已对真实服务跑通
 - [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份 scope 限定（dev 身份访问 prod 即拒）、吊销立即断连；11 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档
 - [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 动态引擎 —— 机器身份申请短期账号 lease（`taboo_` 前缀随机用户名，CREATE USER … VALID UNTIL + 最小只读授权），到期/吊销自动 DROP（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请；17 项 mock 冒烟 + **10 项真实 PostgreSQL 联调全过**（podman 容器 `taboo-pg-test`，pg_roles 侧验证创建/登录/续期/DROP；修复 lib/pq 无占位语句误传参导致回收失败的问题）
-- [ ] Secret Sync、Webhooks、OIDC → 见路线图
+- [x] 标准身份联邦 P0：OIDC BFF、独立 OAuth 工作负载、显式秘密动作授权、PostgreSQL 18/RLS、事务审计及持久任务、控制台治理和公开迁移恢复。Secret Sync、Webhooks 与审计导出支持外部 owner 治理。
+
+当前范围和验证入口见 [P0 验收记录](docs/design/standard-federation-acceptance.zh-CN.md) 与 [升级恢复手册](docs/runbooks/standard-federation-release.zh-CN.md)。本地公开夹具验证不代表生产发布；SCIM、AuthZEN、Back-Channel Logout 保持独立 P1。
 
 ## 双后端说明
 

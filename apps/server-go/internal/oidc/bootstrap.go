@@ -41,8 +41,8 @@ func BootstrapFromEnv(db *sql.DB, masterKey []byte) {
 		return
 	}
 	allowed := false
-	for _, candidate := range strings.Split(os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ",") {
-		if candidate == issuer {
+	for _, candidate := range strings.Split(os.Getenv("TABOO_ISSUER_ALLOWLIST")+","+os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ",") {
+		if strings.TrimSpace(candidate) == issuer {
 			allowed = true
 		}
 	}

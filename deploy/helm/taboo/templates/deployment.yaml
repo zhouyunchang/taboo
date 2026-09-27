@@ -1,6 +1,18 @@
 {{- if not .Values.existingSecret }}
 {{- fail "existingSecret is required: create a Secret with TABOO_MASTER_KEY and TABOO_JWT_SECRET (see values.yaml)" }}
 {{- end }}
+{{- if not (has .Values.database.mode (list "sqlite" "postgres")) }}
+{{- fail "database.mode must be sqlite or postgres" }}
+{{- end }}
+{{- if and (eq .Values.database.mode "sqlite") (gt (int .Values.replicaCount) 1) }}
+{{- fail "SQLite requires replicaCount=1" }}
+{{- end }}
+{{- if and (eq .Values.database.mode "postgres") (not .Values.database.existingSecret) }}
+{{- fail "PostgreSQL requires database.existingSecret with TABOO_DATABASE_URL" }}
+{{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) (or (not .Values.persistence.enabled) (ne .Values.persistence.accessMode "ReadWriteMany")) }}
+{{- fail "Multiple replicas require a shared ReadWriteMany export volume" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,6 +21,9 @@ metadata:
     {{- include "taboo.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if eq .Values.database.mode "sqlite" }}
+  strategy: { type: Recreate }
+  {{- end }}
   selector:
     matchLabels:
       {{- include "taboo.selectorLabels" . | nindent 6 }}
@@ -32,7 +47,31 @@ spec:
           ports:
             - name: http
               containerPort: 7100
+          {{- if .Values.federation.bootstrapSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.federation.bootstrapSecret | quote }}
+          {{- end }}
           env:
+            {{- if eq .Values.database.mode "postgres" }}
+            - name: TABOO_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret | quote }}
+                  key: TABOO_DATABASE_URL
+            - name: TABOO_DATABASE_RUNTIME_ROLE
+              value: {{ .Values.database.runtimeRole | quote }}
+            {{- end }}
+            - name: TABOO_PUBLIC_ORIGIN
+              value: {{ .Values.federation.publicOrigin | quote }}
+            - name: TABOO_CORS_ORIGIN
+              value: {{ .Values.federation.publicOrigin | default "*" | quote }}
+            - name: TABOO_ISSUER_ALLOWLIST
+              value: {{ join "," .Values.federation.issuerAllowlist | quote }}
+            - name: TABOO_DISABLE_REGISTER
+              value: {{ .Values.federation.disableRegister | quote }}
+            - name: TABOO_DISABLE_PASSWORD
+              value: {{ .Values.federation.disablePassword | quote }}
             - name: TABOO_DATA_DIR
               value: /data
             - name: TABOO_MASTER_KEY

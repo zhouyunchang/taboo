@@ -1,5 +1,7 @@
 # 标准身份联邦：首批实现与验证
 
+> 本文件保留分阶段实施检查点；其中的剩余工作已由后续提交推进，当前范围见 [P0 验收记录](standard-federation-acceptance.zh-CN.md)。
+
 日期：2026-09-27。对应 [KTI 实施计划](../plans/2026-09-27-standard-identity-federation-plan.zh-CN.md)。这是已批准 P0 计划的首批代码，**不是全部 P0 完成或生产验收**。实现位于 Go 服务；没有闭源工程、私有 SDK、权限目录或提供方专用 Claim 依赖。
 
 > 这是第一批实现快照。后续 PostgreSQL、AAD 信封、幂等写入、事务投递和恢复工具进展见 [存储实施记录](standard-identity-storage.zh-CN.md)；下面“未实现”条目以较新实施记录为准。
