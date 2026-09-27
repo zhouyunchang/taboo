@@ -10,3 +10,7 @@ data/
 *.log
 .DS_Store
 .env
+
+# Ephemeral browser verification output
+apps/web/test-results/
+apps/web/playwright-report/

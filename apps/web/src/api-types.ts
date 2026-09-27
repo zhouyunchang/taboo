@@ -712,6 +712,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 检查 BFF 会话；不创建或刷新会话 */
+        get: operations["getBrowserSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 删除本地 BFF 会话并清除 Cookie（不结束上游会话） */
+        post: operations["logoutBrowserSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/oidc/{slug}/login": {
         parameters: {
             query?: never;
@@ -736,7 +770,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** OIDC callback（code 换 id_token，验签 + JIT 入组 + 发本地会话） */
+        /** OIDC callback（code 换 id_token，验签 + 显式 JIT 准入 + HttpOnly BFF 会话） */
         get: operations["oidcCallback"];
         put?: never;
         post?: never;
@@ -876,11 +910,11 @@ export interface components {
             login_url?: string;
         };
         OrgMembership: {
-            id?: string;
-            name?: string;
-            slug?: string;
+            id: string;
+            name: string;
+            slug: string;
             /** @enum {string} */
-            role?: "owner" | "admin" | "developer" | "viewer";
+            role: "owner" | "admin" | "developer" | "viewer";
             restricted?: boolean;
         };
         OrgMember: {
@@ -899,45 +933,45 @@ export interface components {
             }[];
         };
         Project: {
-            id?: string;
-            name?: string;
-            slug?: string;
+            id: string;
+            name: string;
+            slug: string;
             /** Format: date-time */
             created_at?: string;
         };
         Environment: {
-            id?: string;
-            name?: string;
-            slug?: string;
+            id: string;
+            name: string;
+            slug: string;
             sort_order?: number;
             protected?: boolean;
         };
         Folder: {
-            id?: string;
+            id: string;
             /** @description 根目录为空串 */
-            parent_id?: string;
-            name?: string;
+            parent_id: string;
+            name: string;
             /** @example /db/mysql/ */
-            path?: string;
+            path: string;
         };
         SecretMeta: {
-            id?: string;
-            folder?: string;
-            key?: string;
-            comment?: string;
-            tags?: string[];
-            version?: number;
-            updated_at?: string;
-            canReveal?: boolean;
-            canWrite?: boolean;
+            id: string;
+            folder: string;
+            key: string;
+            comment: string;
+            tags: string[];
+            version: number;
+            updated_at: string;
+            canReveal: boolean;
+            canWrite: boolean;
         };
         SecretValue: components["schemas"]["SecretMeta"] & {
-            value?: string;
+            value: string;
         };
         SecretVersion: {
-            version?: number;
-            created_by?: string;
-            created_at?: string;
+            version: number;
+            created_by: string;
+            created_at: string;
         };
         SecretUpsertRequest: {
             /** @description 单段 key，禁止包含 /（folder 与 key 分离，#16） */
@@ -1003,13 +1037,13 @@ export interface components {
             updated_at?: string;
         };
         Webhook: {
-            id?: string;
-            url?: string;
+            id: string;
+            url: string;
             /** @description 仅创建响应返回一次 */
             secret?: string;
-            events?: string[];
-            active?: boolean;
-            created_at?: string;
+            events: string[];
+            active: boolean;
+            created_at: string;
         };
         OIDCProvider: {
             id?: string;
@@ -1027,7 +1061,7 @@ export interface components {
             /** @description 在登录页展示为实例级 Realm */
             public_login?: boolean;
             autocreate?: boolean;
-            /** @description 每次 SSO 登录按组映射同步角色（不降级最后一名 owner） */
+            /** @description 仅同步仍由此连接管理的角色；不覆盖本地显式赋权 */
             sync_role?: boolean;
             enabled?: boolean;
             created_at?: string;
@@ -1035,7 +1069,7 @@ export interface components {
         };
         OIDCProviderInput: {
             name?: string;
-            /** @example https://keycloak.example.com/realms/company */
+            /** @example https://idp.example.org */
             issuer?: string;
             client_id?: string;
             /** @description Master Key 加密落库，不回显；PATCH 时可省略 */
@@ -1047,9 +1081,12 @@ export interface components {
              * @default groups
              */
             role_claim: string;
-            /** @default email */
-            username_claim: string;
-            /** @description claim 值 → 角色；Keycloak 组路径会匹配末段 */
+            /**
+             * @deprecated
+             * @description 兼容旧配置；新身份键固定为 issuer 与 sub
+             */
+            username_claim?: string;
+            /** @description claim 完整值精确匹配 → 角色；不匹配路径末段 */
             role_map?: {
                 [key: string]: string;
             };
@@ -1057,7 +1094,7 @@ export interface components {
             default_role: string;
             /** @default true */
             public_login: boolean;
-            /** @default true */
+            /** @default false */
             autocreate: boolean;
             /** @default true */
             sync_role: boolean;
@@ -1083,14 +1120,14 @@ export interface components {
             permission?: "read" | "reveal" | "write";
         };
         Identity: {
-            id?: string;
-            name?: string;
-            client_id?: string;
+            id: string;
+            name: string;
+            client_id: string;
             /** @enum {string} */
-            status?: "active" | "revoked";
-            token_ttl?: number;
-            created_at?: string;
-            scopes?: components["schemas"]["IdentityScope"][];
+            status: "active" | "revoked";
+            token_ttl: number;
+            created_at: string;
+            scopes: components["schemas"]["IdentityScope"][];
         };
         IdentityWithSecret: components["schemas"]["Identity"] & {
             /** @description 仅此一次展示 */
@@ -2741,6 +2778,56 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    getBrowserSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description authenticated=false 或当前组织及内存 CSRF 凭据；Cache-Control no-store */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        authenticated: boolean;
+                        csrf_token?: string;
+                        organization_id?: string;
+                        /** @enum {string} */
+                        authentication?: "oidc";
+                        /** @enum {string} */
+                        revocation_profile?: "BOUNDED";
+                    };
+                };
+            };
+        };
+    };
+    logoutBrowserSession: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 会话已删除 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     oidcLogin: {
         parameters: {
             query?: {
@@ -2780,8 +2867,8 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description HTML 中间页：token 写入 localStorage 后跳转 / */
-            200: {
+            /** @description 设置 HttpOnly taboo.session Cookie 后跳转 /；不向浏览器暴露 Token */
+            303: {
                 headers: {
                     [name: string]: unknown;
                 };

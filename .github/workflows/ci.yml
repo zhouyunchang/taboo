@@ -82,3 +82,20 @@ jobs:
             sleep 1
           done
           npm run smoke:node
+
+  federation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm exec --workspace=@taboo/web -- playwright install --with-deps chromium
+      - run: npm run types && git diff --exit-code -- apps/web/src/api-types.ts
+      - run: npm exec --workspace=@taboo/web -- tsc --noEmit
+      - name: Public Keycloak, negative protocol tests and real browser
+        run: TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh

@@ -1,0 +1,9 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["apps/web/src"],
+  "locale": "zh-CN",
+  "canonicalMap": "UX-CONTRACT.md",
+  "ownership": {"Select/Listbox": "native"},
+  "commands": {"typecheck": "npm exec --workspace=@taboo/web -- tsc --noEmit", "browser": "TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh"},
+  "evidence": {"failurePaths": "apps/web/tests/federation.spec.ts"}
+}

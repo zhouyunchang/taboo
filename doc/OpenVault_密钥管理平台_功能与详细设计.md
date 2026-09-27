@@ -1,5 +1,7 @@
 # OpenVault（代号）— 开源自部署密钥管理平台 · 功能与详细设计
 
+> 2026-09-27 身份集成更新：以 [标准身份联邦计划](../docs/plans/2026-09-27-standard-identity-federation-plan.zh-CN.md) 和 [首批实现记录](../docs/design/standard-identity-federation-m0.zh-CN.md) 为当前身份边界。业务组织、权限和秘密属于 taboo；提供方通过标准协议接入。历史路线图不是当前功能验收证明。
+
 > 定位：Infisical / HashiCorp Vault 的开源平替。**单一许可证完全开源（MIT/Apache 2.0）**，无 open-core 付费墙，Go 后端 + TypeScript/React 前端，可私有化部署。
 > 核心原则：密钥永不落盘明文、永不进 Git 仓库、全操作可审计。
 

@@ -33,12 +33,12 @@ type Service struct {
 }
 
 type Meta struct {
-	ID      string   `json:"id"`
-	Folder  string   `json:"folder"`
-	Key     string   `json:"key"`
-	Comment string   `json:"comment"`
-	Tags    []string `json:"tags"`
-	Version int      `json:"version"`
+	ID       string   `json:"id"`
+	Folder   string   `json:"folder"`
+	Key      string   `json:"key"`
+	Comment  string   `json:"comment"`
+	Tags     []string `json:"tags"`
+	Version  int      `json:"version"`
 	Updated  string   `json:"updated_at"`
 	CanRev   bool     `json:"canReveal"`
 	CanWrite bool     `json:"canWrite"`
@@ -438,7 +438,7 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := chi.URLParam(r, "key")
-	folderID, _, ferr := s.folderRef(envID, q(r, "path", "/"), false)
+	folderID, norm, ferr := s.folderRef(envID, q(r, "path", "/"), false)
 	if ferr != nil {
 		writeErr(w, apperr.SecretNotFound)
 		return
@@ -478,7 +478,6 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}
-	norm := folderPathOf(r, s, envID)
 	ev, err := s.enqueue(tx, r, p, envSlug, norm, key, next, "rolled_back")
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
@@ -492,16 +491,6 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		s.Events.Publish(ev)
 	}
 	writeJSON(w, 200, map[string]any{"key": key, "version": next, "rolledBackFrom": b.Version})
-}
-
-// folderPathOf 解析当前请求 folder 参数的物化路径（发布事件用）
-func folderPathOf(r *http.Request, s *Service, envID string) string {
-	fid, norm, err := s.folderRef(envID, q(r, "path", "/"), false)
-	_ = fid
-	if err != nil {
-		return "/"
-	}
-	return norm
 }
 
 // DELETE /secrets/{key}?env=dev —— 删除密钥（版本级联删除；事件驱动 webhook/sync 感知）

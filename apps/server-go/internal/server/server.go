@@ -28,6 +28,9 @@ import (
 )
 
 type Deps struct {
+	PublicOrigin    string
+	IssuerAllowlist []string
+	SessionProfile  string
 	DB              *sql.DB
 	MasterKey       []byte
 	JWTSecret       string
@@ -112,12 +115,14 @@ func New(d *Deps) *chi.Mux {
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		})
 		orgs.PublicRoutes(r)
+		r.Get("/auth/session", auth.BrowserSession(d.DB, d.allowedBrowser))
 		// client_credentials 换 token（公开，登录同窗口限流）
 		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/identities/token", identities.Token)
 		// TOTP 2FA 第二步（公开，登录同窗口限流）
 		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/auth/totp/login", totps.Login2FA)
 		// OIDC SSO 登录跳转 + callback（公开，登录同窗口限流；M5 #13）
 		oidcSvc := &oidc.Service{
+			PublicOrigin: d.PublicOrigin, SessionProfile: d.SessionProfile, IssuerAllowlist: d.IssuerAllowlist,
 			DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret,
 			DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword,
 		}
@@ -127,7 +132,9 @@ func New(d *Deps) *chi.Mux {
 			r.Get("/callback", oidcSvc.Callback)
 		})
 		r.Group(func(r chi.Router) {
-			r.Use(auth.Middleware(d.DB, d.JWTSecret))
+			r.Use(auth.Middleware(d.DB, d.JWTSecret, d.allowedBrowser))
+			r.Use(federatedScope(d.DB))
+			r.Post("/auth/logout", auth.BrowserLogout(d.DB))
 			orgs.Routes(r)
 			totps.Routes(r)
 			// 机器身份管理（组织级，需 owner）

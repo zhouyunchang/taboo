@@ -12,6 +12,9 @@ import (
 )
 
 type Config struct {
+	PublicOrigin    string // Exact browser origin for OIDC callbacks.
+	IssuerAllowlist []string
+	SessionProfile  string // Explicit BOUNDED profile; no implicit online assurance.
 	Port            string // TABOO_PORT / PORT，默认 7100
 	DataDir         string // TABOO_DATA_DIR，默认 <exe>/../../data（开发期）或 cwd/data
 	MasterKey       string // TABOO_MASTER_KEY（hex/base64 32B）；空则读/生成 data/master.key
@@ -25,10 +28,13 @@ type Config struct {
 
 func Load() *Config {
 	c := &Config{
-		Port:      getenv("TABOO_PORT", getenv("PORT", "7100")),
-		DataDir:   getenv("TABOO_DATA_DIR", "data"),
-		CORS:      getenv("TABOO_CORS_ORIGIN", "*"),
-		LoginRate: 5,
+		IssuerAllowlist: strings.Split(os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ","),
+		SessionProfile:  os.Getenv("TABOO_OIDC_SESSION_PROFILE"),
+		PublicOrigin:    os.Getenv("TABOO_PUBLIC_ORIGIN"),
+		Port:            getenv("TABOO_PORT", getenv("PORT", "7100")),
+		DataDir:         getenv("TABOO_DATA_DIR", "data"),
+		CORS:            getenv("TABOO_CORS_ORIGIN", "*"),
+		LoginRate:       5,
 	}
 	if v := os.Getenv("TABOO_LOGIN_RATE_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {

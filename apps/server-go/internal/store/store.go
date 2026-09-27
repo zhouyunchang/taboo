@@ -373,6 +373,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 		return err
 	}
 	// schema 版本标记：启动自检 --check 校验迁移是否完整（设计文档 §8）
+	if err := migrateFederation(db); err != nil {
+		return err
+	}
 	// PRAGMA 不支持参数绑定，整数直接内插（值来自本文件常量，无注入面）
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 		return err
@@ -381,7 +384,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 9
+const SchemaVersion = 10
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录

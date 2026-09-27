@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
+import Modal from '../components/Modal';
+import ValidatedForm from '../components/ValidatedForm';
 import type { SyncTarget, SyncRun, Webhook, OIDCProvider } from '../api';
 
 // 组织设置（M5 #11/#12/#13）：Secret Sync / Webhooks / OIDC SSO
@@ -143,7 +145,7 @@ function SyncTargetCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; o
 
   return (
     <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+      <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>添加同步目标</h3>
         <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="prod-github" /></label>
         <label>平台
@@ -155,7 +157,7 @@ function SyncTargetCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; o
         </label>
         <label>环境（'*' 为全部）<input value={envSlug} onChange={(e) => setEnvSlug(e.target.value)} /></label>
         <label>配置（每行 key=value；平台令牌经 Master Key 加密落库）
-          <textarea className="mono" rows={5} value={configText} onChange={(e) => setConfigText(e.target.value)} required
+          <textarea className="mono resize-none" rows={5} value={configText} onChange={(e) => setConfigText(e.target.value)} required
             placeholder={PLATFORM_HINTS[platform]} />
         </label>
         <label className="row"><input type="checkbox" checked={ping} onChange={(e) => setPing(e.target.checked)} /> 创建前测试平台连通性</label>
@@ -164,7 +166,7 @@ function SyncTargetCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; o
           <button type="button" className="ghost" onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
         </div>
-      </form>
+      </ValidatedForm>
     </div>
   );
 }
@@ -277,7 +279,7 @@ function WebhookCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onCl
 
   return (
     <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+      <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>添加 Webhook 订阅</h3>
         <label>接收 URL<input value={url} onChange={(e) => setUrl(e.target.value)} required placeholder="https://hooks.example.com/taboo" /></label>
         <label>签名密钥（留空自动生成）<input value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
@@ -287,7 +289,7 @@ function WebhookCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onCl
           <button type="button" className="ghost" onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
         </div>
-      </form>
+      </ValidatedForm>
     </div>
   );
 }
@@ -298,18 +300,25 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
   const [providers, setProviders] = useState<OIDCProvider[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [error, setError] = useState('');
+  const [removing, setRemoving] = useState<OIDCProvider | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(() => {
-    api.get<{ providers: OIDCProvider[] }>(`/api/v1/orgs/${orgSlug}/oidc`)
+    setLoading(true); setError('');
+    return api.get<{ providers: OIDCProvider[] }>(`/api/v1/orgs/${orgSlug}/oidc`)
       .then((d) => setProviders(d.providers))
-      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)))
+      .finally(() => setLoading(false));
   }, [orgSlug]);
   useEffect(() => { load(); }, [load]);
 
-  async function remove(id: string, name: string) {
-    if (!window.confirm(`删除 IdP「${name}」？已入组用户保留成员关系。`)) return;
-    try { await api.del(`/api/v1/orgs/${orgSlug}/oidc/${id}`); load(); }
+  async function remove() {
+    if (!removing?.id || busy) return;
+    setBusy(true); setError('');
+    try { await api.del(`/api/v1/orgs/${orgSlug}/oidc/${removing.id}`); setRemoving(null); await load(); }
     catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+    finally { setBusy(false); }
   }
 
   async function toggle(p: OIDCProvider, field: 'public_login' | 'sync_role', value: boolean) {
@@ -323,16 +332,16 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
   return (
     <>
       <div className="panel-head">
-        <h3>外部用户源（OIDC Realm）</h3>
+        <h3>身份连接（OpenID Connect）</h3>
         <div className="spacer" />
-        {canManage && <button onClick={() => setShowNew(true)}>＋ 接入 Keycloak / OIDC</button>}
+        {canManage && <button onClick={() => setShowNew(true)}>＋ 添加身份连接</button>}
       </div>
       <p className="muted">
-        对标 Proxmox Realm：把 Keycloak（或 Authentik、Google）当作用户目录。勾选「登录页显示」后，无需输入组织 slug 即可一键跳转。
-        组 claim 默认 <code>groups</code>（也可用 <code>realm_access.roles</code>）；每次登录可同步角色。新用户不会被映射成 owner。
+        连接标准身份提供方；组和角色字段均为可选映射，只匹配明确登记的完整值。
+        外部身份不会按邮箱合并本地账号；本地管理员明确设置的角色不被登录同步覆盖。
       </p>
-      {error && <div className="error">{error}</div>}
-      <table className="table">
+      {error && <div className="error" role="alert">{error} <button className="ghost" onClick={load}>重试</button></div>}
+      <div className="table-scroll" tabIndex={0} aria-label="身份连接列表"><table className="table">
         <thead><tr><th>名称</th><th>Issuer</th><th>默认角色</th><th>登录页</th><th>同步角色</th><th /></tr></thead>
         <tbody>
           {providers.map((p) => (
@@ -349,13 +358,20 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
                   </button>
                 )}
                 <a className="btn ghost" href={p.login_url ?? '#'}>登录链接</a>
-                {canManage && <button className="ghost" onClick={() => p.id && remove(p.id, p.name ?? p.id)}>删除</button>}
+                {canManage && <button className="ghost" onClick={() => setRemoving(p)}>删除</button>}
               </td>
             </tr>
           ))}
-          {providers.length === 0 && <tr><td colSpan={6} className="muted center">尚未接入外部用户源</td></tr>}
+          {loading && <tr><td colSpan={6} role="status">加载中…</td></tr>}
+          {!loading && !error && providers.length === 0 && <tr><td colSpan={6} className="muted center">尚未接入外部用户源</td></tr>}
         </tbody>
-      </table>
+      </table></div>
+      {removing && <Modal title="删除身份连接" onClose={() => setRemoving(null)} busy={busy}>
+        <p>删除「{removing.name}」将终止该连接的登录和浏览器会话；组织、成员及秘密仍保留。</p>
+        {error && <p className="error" role="alert">{error}</p>}
+        <div className="drawer-actions"><button className="ghost" disabled={busy} onClick={() => setRemoving(null)}>取消</button>
+          <button disabled={busy} onClick={remove}>{busy ? '删除中…' : '删除连接'}</button></div>
+      </Modal>}
       {showNew && <OidcCreator orgSlug={orgSlug} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); load(); }} />}
     </>
   );
@@ -363,24 +379,24 @@ function SsoTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean })
 
 function OidcCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onClose: () => void; onCreated: () => void }) {
   const [form, setForm] = useState({
-    name: 'Keycloak',
+    name: 'OpenID Connect',
     issuer: '',
     client_id: '',
     client_secret: '',
     role_claim: 'groups',
-    username_claim: 'email',
     default_role: 'viewer',
     public_login: true,
-    autocreate: true,
+    autocreate: false,
     sync_role: true,
   });
-  const [roleMapText, setRoleMapText] = useState('admins=admin\ndevelopers=developer');
+  const [roleMapText, setRoleMapText] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true); setErr('');
     const role_map: Record<string, string> = {};
     for (const line of roleMapText.split('\n')) {
@@ -395,39 +411,37 @@ function OidcCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onClose
   }
 
   return (
-    <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
-        <h3>接入 Keycloak / OIDC</h3>
+    <Modal title="添加身份连接" onClose={onClose} busy={busy}>
+      <ValidatedForm className="identity-form" onSubmit={save}>
         <p className="muted">
-          Keycloak：创建 Confidential Client，打开 Standard flow，Valid redirect URIs 填下方回调地址。
-          在 Client scopes 给 access token / ID token 加上 Group Membership（claim <code>groups</code>）或 realm roles。
+          登记支持授权码、S256、RS256 和 Client Secret Basic 的客户端，并登记下方精确回调地址。
+          会话最长 15 分钟，不超过登录凭据有效期；上游停用可能在会话到期后生效。
         </p>
-        <label>名称<input value={form.name} onChange={set('name')} required placeholder="Keycloak" /></label>
+        <label>名称<input value={form.name} onChange={set('name')} required placeholder="公司登录" /></label>
         <label>Issuer URL<input className="mono" value={form.issuer} onChange={set('issuer')} required
-          placeholder="https://keycloak.example.com/realms/company" /></label>
+          placeholder="https://idp.example.org" /></label>
         <label>Client ID<input value={form.client_id} onChange={set('client_id')} required /></label>
         <label>Client Secret<input type="password" value={form.client_secret} onChange={set('client_secret')} required /></label>
-        <label>角色 Claim<input value={form.role_claim} onChange={set('role_claim')} placeholder="groups 或 realm_access.roles" /></label>
-        <label>用户名 Claim<input value={form.username_claim} onChange={set('username_claim')} /></label>
+        <label>角色 Claim<input value={form.role_claim} onChange={set('role_claim')} placeholder="可选，例如 groups" /></label>
         <label>默认角色
           <select value={form.default_role} onChange={set('default_role')}>
             {['viewer', 'developer', 'admin'].map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </label>
         <label>角色映射（每行 claim值=角色，如 admins=admin）
-          <textarea className="mono" rows={3} value={roleMapText} onChange={(e) => setRoleMapText(e.target.value)} />
+          <textarea className="mono resize-none" rows={3} value={roleMapText} onChange={(e) => setRoleMapText(e.target.value)} />
         </label>
-        <label className="check"><input type="checkbox" checked={form.public_login} onChange={(e) => setForm({ ...form, public_login: e.target.checked })} /> 显示在登录页（实例级 Realm）</label>
-        <label className="check"><input type="checkbox" checked={form.autocreate} onChange={(e) => setForm({ ...form, autocreate: e.target.checked })} /> 首次登录自动创建用户并入组</label>
-        <label className="check"><input type="checkbox" checked={form.sync_role} onChange={(e) => setForm({ ...form, sync_role: e.target.checked })} /> 每次登录按组同步角色</label>
+        <label className="check"><input type="checkbox" checked={form.public_login} onChange={(e) => setForm({ ...form, public_login: e.target.checked })} /> 在登录页显示此连接</label>
+        <label className="check"><input type="checkbox" checked={form.autocreate} onChange={(e) => setForm({ ...form, autocreate: e.target.checked })} /> 允许此提供方的任意已认证用户首次登录时加入本组织</label>
+        <label className="check"><input type="checkbox" checked={form.sync_role} onChange={(e) => setForm({ ...form, sync_role: e.target.checked })} /> 同步由此连接授予且未经本地修改的角色</label>
         <p className="muted">回调地址：<code>{typeof window !== 'undefined' ? window.location.origin : '{部署域名}'}/api/v1/auth/oidc/{orgSlug}/callback</code></p>
-        {err && <div className="error">{err}</div>}
+        {err && <div className="error" role="alert">{err}</div>}
         <div className="drawer-actions">
-          <button type="button" className="ghost" onClick={onClose}>取消</button>
+          <button type="button" className="ghost" disabled={busy} onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '接入中…' : '接入'}</button>
         </div>
-      </form>
-    </div>
+      </ValidatedForm>
+    </Modal>
   );
 }
 
@@ -504,13 +518,13 @@ function MembersTab({ orgSlug }: { orgSlug: string }) {
   return (
     <div>
       <p className="muted">admin 可管配置；仅 owner 可邀请、改角色、移除成员。restricted 成员只能访问授权矩阵中的项目。</p>
-      <form className="inline" onSubmit={invite}>
+      <ValidatedForm className="inline" onSubmit={invite}>
         <input type="email" required placeholder="邀请邮箱" value={email} onChange={(e) => setEmail(e.target.value)} />
         <select value={role} onChange={(e) => setRole(e.target.value)}>
           {['viewer', 'developer', 'admin', 'owner'].map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
         <button type="submit">生成邀请链接</button>
-      </form>
+      </ValidatedForm>
       {inviteUrl && (
         <p className="card once-secret">邀请链接（仅此一次）：<input readOnly value={inviteUrl} onFocus={(e) => e.target.select()} /></p>
       )}

@@ -16,13 +16,13 @@ import (
 )
 
 type memberOut struct {
-	UserID     string       `json:"user_id"`
-	Email      string       `json:"email"`
-	Name       string       `json:"name"`
-	Role       string       `json:"role"`
-	Restricted bool         `json:"restricted"`
-	JoinedAt   string       `json:"joined_at"`
-	Grants     []grantOut   `json:"grants"`
+	UserID     string     `json:"user_id"`
+	Email      string     `json:"email"`
+	Name       string     `json:"name"`
+	Role       string     `json:"role"`
+	Restricted bool       `json:"restricted"`
+	JoinedAt   string     `json:"joined_at"`
+	Grants     []grantOut `json:"grants"`
 }
 
 type grantOut struct {
@@ -189,13 +189,28 @@ func (s *Service) PatchMember(w http.ResponseWriter, r *http.Request) {
 		args = append(args, v)
 	}
 	args = append(args, orgID, userID)
-	if _, err := s.DB.Exec(`UPDATE org_members SET `+strings.Join(sets, ", ")+` WHERE org_id = ? AND user_id = ?`, args...); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
-	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "members.update", "org/"+slug+"/members/"+userID,
-		map[string]any{"role": role}); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE org_members SET `+strings.Join(sets, ", ")+` WHERE org_id = ? AND user_id = ?`, args...); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if b.Role != nil {
+		if _, err = tx.Exec(`UPDATE federation_admissions SET last_role='' WHERE org_id=? AND user_id=?`, orgID, userID); err != nil {
+			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+			return
+		}
+	}
+	if err = auth.AuditReq(tx, r, orgID, auth.From(r), "members.update", "org/"+slug+"/members/"+userID, map[string]any{"role": role}); err != nil {
+		writeErr(w, apperr.New(503, "AUDIT_UNAVAILABLE", "try again"))
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
 	writeJSON(w, 200, map[string]any{"user_id": userID, "role": role})

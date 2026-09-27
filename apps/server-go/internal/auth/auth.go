@@ -22,10 +22,13 @@ type ctxKey string
 const UserKey ctxKey = "taboo.user"
 
 type Actor struct {
-	ID    string `json:"id"`
-	Email string `json:"email,omitempty"`
-	Name  string `json:"name"`
-	Kind  string `json:"kind"` // "user" | "identity"
+	ID                   string `json:"id"`
+	Email                string `json:"email,omitempty"`
+	Name                 string `json:"name"`
+	Kind                 string `json:"kind"` // "user" | "identity"
+	OrganizationID       string `json:"-"`
+	AuthenticationSource string `json:"-"`
+	BrowserOrigin        string `json:"-"`
 }
 
 const (
@@ -71,6 +74,9 @@ func projectGrant(db *sql.DB, projectID, userID string) (role string, ok bool) {
 // Can 策略求值：action ∈ read | reveal | write | admin | members | audit.* | manage
 func Can(db *sql.DB, actor *Actor, orgID, projectID, action, envSlug string) bool {
 	if actor == nil {
+		return false
+	}
+	if actor.OrganizationID != "" && actor.OrganizationID != orgID {
 		return false
 	}
 	if actor.Kind == KindIdentity {
@@ -122,6 +128,9 @@ func recOf(orgID string, actor *Actor, action, resource string, metadata map[str
 	actorID, actorName, actorType := "system", "", KindUser
 	if actor != nil {
 		actorID, actorName, actorType = actor.ID, actor.Name, actor.Kind
+		if actor.AuthenticationSource != "" {
+			metadata["authentication_source"] = actor.AuthenticationSource
+		}
 		if actor.Kind == KindIdentity {
 			actorName = "identity:" + actor.Name
 		}
@@ -155,9 +164,9 @@ func failClosed(action string) bool {
 		return true
 	case strings.HasPrefix(action, "identity.") && action != "identity.list":
 		return true
-	case strings.HasPrefix(action, "members."):
+	case strings.HasPrefix(action, "members."), strings.HasPrefix(action, "oidc."):
 		return true
-	case action == "auth.login", action == "auth.register", action == "project.create", action == "env.create":
+	case action == "auth.oidc.login", action == "auth.login", action == "auth.register", action == "project.create", action == "env.create":
 		return true
 	}
 	return false
@@ -209,9 +218,28 @@ func IssueTokens(db *sql.DB, secret string, u *Actor) (*TokenPair, error) {
 	return &TokenPair{Access: access, Refresh: refresh, TokenType: "Bearer", ExpiresIn: 900}, nil
 }
 
-func Middleware(db *sql.DB, jwtSecret string) func(http.Handler) http.Handler {
+func Middleware(db *sql.DB, jwtSecret string, policies ...func(*Actor) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, err := r.Cookie(BrowserCookie); err == nil && r.Header.Get("Authorization") == "" {
+				a, err := browserActor(db, r)
+				if err != nil {
+					if e, ok := err.(*apperr.Error); ok {
+						writeErr(w, e)
+					} else {
+						writeErr(w, apperr.Unauthorized)
+					}
+					return
+				}
+				for _, allowed := range policies {
+					if !allowed(a) {
+						writeErr(w, apperr.Unauthorized)
+						return
+					}
+				}
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), UserKey, a)))
+				return
+			}
 			token := bearer(r)
 			if token == "" {
 				writeErr(w, apperr.Unauthorized)
@@ -227,8 +255,18 @@ func Middleware(db *sql.DB, jwtSecret string) func(http.Handler) http.Handler {
 			var actor *Actor
 			if typ == KindIdentity {
 				actor, err = loadIdentity(db, sub)
-			} else {
+			} else if typ == KindUser {
 				actor, err = loadUser(db, sub)
+				var source string
+				if err == nil {
+					err = db.QueryRow(`SELECT auth_source FROM users WHERE id=?`, sub).Scan(&source)
+					if source != "local" {
+						err = apperr.Unauthorized
+					}
+				}
+			} else {
+				writeErr(w, apperr.Unauthorized)
+				return
 			}
 			if err != nil {
 				writeErr(w, apperr.Unauthorized)

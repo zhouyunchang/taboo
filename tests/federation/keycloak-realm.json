@@ -1,0 +1,43 @@
+{
+  "realm": "taboo-test",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "taboo-test",
+      "secret": "fixture-secret",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1:18888/api/v1/auth/oidc/a/callback",
+        "http://127.0.0.1:18888/api/v1/auth/oidc/b/callback"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": [],
+      "optionalClientScopes": []
+    }
+  ],
+  "users": [
+    {
+      "username": "fixture-user",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "fixture-password",
+          "temporary": false
+        }
+      ],
+      "firstName": "Fixture",
+      "lastName": "User",
+      "email": "fixture@example.test",
+      "emailVerified": true
+    }
+  ]
+}

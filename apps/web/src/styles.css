@@ -153,3 +153,41 @@ label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--f
 .totp-setup { display: flex; flex-direction: column; gap: 12px; }
 .recovery-codes { columns: 2; font-size: 13px; padding-left: 20px; }
 .recovery-codes li { margin: 2px 0; }
+
+/* Existing runtime tokens remain the canonical palette. */
+:root { --scrollbar-thumb: var(--muted); --scrollbar-track: var(--bg); }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border: 2px solid var(--scrollbar-track); border-radius: 6px; }
+*::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.modal { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg2); color: var(--fg); overflow: auto; scrollbar-gutter: stable; }
+.modal::backdrop { background: rgb(0 0 0 / 65%); }
+.modal h3 { margin-top: 0; }
+.identity-form { display: flex; flex-direction: column; gap: 14px; }
+.identity-form code, .modal p { overflow-wrap: anywhere; }
+.identity-form input, .identity-form select, .identity-form textarea { min-width: 0; max-width: 100%; }
+.table-scroll { overflow: auto; max-width: 100%; }
+.session-notice { margin: 0; padding: 8px 20px; color: var(--muted); border-bottom: 1px solid var(--border); }
+button.nav-item { background: transparent; color: var(--fg); text-align: left; font-weight: 400; }
+button.nav-item.active { background: var(--accent2); color: #fff; }
+.auth-card { max-width: calc(100vw - 24px); }
+@media (max-width: 640px) {
+  .topbar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .body { flex-direction: column; }
+  .sidebar { width: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+  .main { padding: 12px; }
+  .tabs { flex-wrap: wrap; }
+}
+@media (forced-colors: active) { * { scrollbar-color: auto; } }
+.split > .grow { overflow-x: auto; }
+@media (max-width: 640px) {
+  .split { flex-direction: column; }
+  .folder-tree { width: 100%; max-height: 180px; }
+  .panel-head { flex-wrap: wrap; }
+  .panel-head input { width: 100%; }
+  .topbar > span { overflow-wrap: anywhere; min-width: 0; }
+}
+
+select { color-scheme: dark; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font: inherit; }
+.resize-none { resize: none; min-height: 80px; }

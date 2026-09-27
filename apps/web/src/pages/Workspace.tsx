@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError } from '../api';
+import { api, ApiError, hasBrowserSession } from '../api';
 import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
 import SettingsPanel from './Settings';
+import ValidatedForm from '../components/ValidatedForm';
 
 interface Props {
   user: User;
   orgs: Org[];
   onOrgChange: (orgs: Org[]) => void;
   onLogout: () => void;
+  logoutError?: string;
 }
 
-export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) {
+export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutError }: Props) {
   const org = orgs[0];
+  const federated = hasBrowserSession();
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [envs, setEnvs] = useState<Env[]>([]);
@@ -61,11 +64,13 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
         </div>
         <span className="muted">{org.name} <em>({org.role})</em></span>
         <div className="spacer" />
-        <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>
+        {!federated && <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>}
         <span>{user.name || user.email}</span>
         <button className="ghost" onClick={onLogout}>退出</button>
       </header>
 
+      {federated && <p className="session-notice" role="status">外部登录 · 当前组织：{org.name} · 会话最长 15 分钟。退出仅结束本系统会话。</p>}
+      {logoutError && <p className="error" role="alert">{logoutError}</p>}
       <div className="body">
         <aside className="sidebar">
           <div className="sidebar-title">
@@ -73,9 +78,9 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
             {canAdmin && <button className="ghost" onClick={createProject} title="新建项目">＋</button>}
           </div>
           {projects.map((p) => (
-            <div key={p.id} className={`nav-item ${project?.id === p.id ? 'active' : ''}`} onClick={() => { setProject(p); setTab('secrets'); }}>
+            <button key={p.id} className={`nav-item ${project?.id === p.id ? 'active' : ''}`} onClick={() => { setProject(p); setTab('secrets'); }}>
               {p.name}
-            </div>
+            </button>
           ))}
           {error && <div className="error">{error}</div>}
         </aside>
@@ -88,10 +93,10 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
               </button>
             ))}
             <div className="spacer" />
-            {canAdmin && <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>}
-            {canAdmin && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
-            {canAudit && <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>}
-            <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>组织设置</button>
+            {canAdmin && !federated && <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>}
+            {canAdmin && !federated && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
+            {canAudit && !federated && <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>}
+            {!federated && <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>组织设置</button>}
           </div>
           {tab === 'secrets'
             ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} canWrite={(org.role === 'developer' && !envProtected) || canAdmin} />
@@ -170,7 +175,7 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
         )}
 
         {enabled === false && setup && (
-          <form onSubmit={verify} className="totp-setup">
+          <ValidatedForm onSubmit={verify} className="totp-setup">
             <p>用验证器扫描下方二维码，或手动录入密钥：</p>
             <img className="qr" src={setup.qr_png} alt="TOTP QR Code" />
             <label>密钥（base32）<input readOnly value={setup.secret} onFocus={(e) => e.target.select()} /></label>
@@ -179,7 +184,7 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
               <button type="button" className="ghost" onClick={() => setSetup(null)}>取消</button>
               <button type="submit" disabled={busy}>{busy ? '激活中…' : '验证并开启'}</button>
             </div>
-          </form>
+          </ValidatedForm>
         )}
 
         {codes && (
@@ -193,14 +198,14 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
         )}
 
         {enabled === true && !codes && (
-          <form onSubmit={disable}>
+          <ValidatedForm onSubmit={disable}>
             <p><span className="tag ok">已开启</span> <span className="muted">登录需密码 + 动态码。</span></p>
             <label>输入密码确认关闭<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
             <div className="drawer-actions">
               <button type="button" className="ghost" onClick={onClose}>关闭</button>
               <button type="submit" disabled={busy}>关闭两步验证</button>
             </div>
-          </form>
+          </ValidatedForm>
         )}
       </div>
     </div>
@@ -274,14 +279,14 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: st
         <aside className="folder-tree">
           <FolderTree folders={folders} cur={cur} onSelect={setCur} />
         </aside>
-        <div className="grow">
+        <div className="grow" tabIndex={0} role="region" aria-label="密钥列表">
           <table className="table">
             <thead>
               <tr><th>Key</th><th>值</th><th>标签</th><th>版本</th><th>更新时间</th><th /></tr>
             </thead>
             <tbody>
               {secrets.map((s) => (
-                <SecretRow key={s.id} s={s} projectId={projectId} env={env} canWrite={canWrite && (s.canWrite !== false)}
+                <SecretRow key={`${s.id}:${s.version}`} s={s} projectId={projectId} env={env} canWrite={canWrite && (s.canWrite !== false)}
                   onChanged={load} onEdit={() => setEditing(s.key)} onDetail={() => setDetail(s)} />
               ))}
               {secrets.length === 0 && <tr><td colSpan={6} className="muted center">此文件夹还没有密钥</td></tr>}
@@ -363,7 +368,7 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
 
   async function copy() {
     try {
-      const d = value ?? await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`).then((x) => x.value);
+      const d: string = value !== null ? value : (await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`)).value;
       await navigator.clipboard.writeText(d);
       setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 20_000); // 20s 自动清空剪贴板
     } catch { setErr('复制失败'); }
@@ -427,10 +432,10 @@ function SecretEditor({ projectId, env, path, secretKey, onClose, onSaved }: {
 
   return (
     <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+      <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>{secretKey ? `更新密钥 — ${secretKey}` : `新建密钥 — ${path}`}</h3>
         <label>Key<input value={key} onChange={(e) => setKey(e.target.value)} required disabled={!!secretKey} /></label>
-        <label>值<textarea value={value} onChange={(e) => setValue(e.target.value)} required rows={4} /></label>
+        <label>值<textarea className="resize-none" value={value} onChange={(e) => setValue(e.target.value)} required rows={4} /></label>
         <label>备注<input value={comment} onChange={(e) => setComment(e.target.value)} /></label>
         <label>标签（逗号分隔）<input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="db, prod" /></label>
         {err && <div className="error">{err}</div>}
@@ -438,7 +443,7 @@ function SecretEditor({ projectId, env, path, secretKey, onClose, onSaved }: {
           <button type="button" className="ghost" onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '保存中…' : '保存（产生新版本）'}</button>
         </div>
-      </form>
+      </ValidatedForm>
     </div>
   );
 }
@@ -662,7 +667,7 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
 
   return (
     <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+      <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>创建机器身份</h3>
         <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="ci-runner" /></label>
         <label>Token TTL（秒，≤3600）<input type="number" value={ttl} onChange={(e) => setTtl(Number(e.target.value))} min={60} max={3600} /></label>
@@ -689,7 +694,7 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
           <button type="button" className="ghost" onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
         </div>
-      </form>
+      </ValidatedForm>
     </div>
   );
 }
@@ -797,7 +802,7 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
 
   return (
     <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+      <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>接入数据库引擎（PostgreSQL）</h3>
         <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="pg-main" /></label>
         <label>高权限连接串<input className="mono" value={conn} onChange={(e) => setConn(e.target.value)} required
@@ -811,7 +816,7 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
           <button type="button" className="ghost" onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '接入中…' : '接入'}</button>
         </div>
-      </form>
+      </ValidatedForm>
     </div>
   );
 }

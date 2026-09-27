@@ -101,6 +101,9 @@ func main() {
 	ob := &outbox.Service{DB: db, Bus: bus}
 
 	r := server.New(&server.Deps{
+		PublicOrigin:    cfg.PublicOrigin,
+		SessionProfile:  cfg.SessionProfile,
+		IssuerAllowlist: cfg.IssuerAllowlist,
 		DB:              db,
 		MasterKey:       masterKey,
 		JWTSecret:       cfg.JWTSecret,

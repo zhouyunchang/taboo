@@ -90,11 +90,15 @@ npm run smoke
 | `TABOO_JWT_SECRET` | 随机（重启失效） | 生产必须显式设置 |
 | `TABOO_CORS_ORIGIN` | `*` | 开发跨域来源 |
 | `TABOO_LOGIN_RATE_LIMIT` | `5` | 登录类接口（login / totp/login / identities/token）每 IP 每窗口上限 |
-| `TABOO_OIDC_ISSUER` | 空 | 启动时自动登记 OIDC Realm（须与 CLIENT_ID/SECRET/ORG 同时设置） |
-| `TABOO_OIDC_CLIENT_ID` | 空 | Keycloak Confidential Client ID |
+| `TABOO_PUBLIC_ORIGIN` | 空 | 精确部署 origin；OIDC 必填，生产使用 HTTPS |
+| `TABOO_OIDC_SESSION_PROFILE` | 空 | 首批只接受显式 `BOUNDED`；最长 15 分钟，不宣称上游即时撤权 |
+| `TABOO_OIDC_ISSUER_ALLOWLIST` | 空 | 部署管理员允许的精确 issuer，多个用逗号分隔；空则拒绝外部登录 |
+| `TABOO_OIDC_AUTOCREATE` | `false` | 环境引导新连接时显式开启 JIT；已有配置不自动修改 |
+| `TABOO_OIDC_ISSUER` | 空 | 启动时自动登记 OIDC 连接（须与 CLIENT_ID/SECRET/ORG 同时设置） |
+| `TABOO_OIDC_CLIENT_ID` | 空 | 标准 OIDC Confidential Client ID |
 | `TABOO_OIDC_CLIENT_SECRET` | 空 | Client Secret（加密落库） |
 | `TABOO_OIDC_ORG` | 空 | 已有组织 slug（JIT 入组目标） |
-| `TABOO_OIDC_NAME` | `Keycloak` | 登录页按钮名称 |
+| `TABOO_OIDC_NAME` | `OpenID Connect` | 登录页按钮名称 |
 | `TABOO_DISABLE_REGISTER` | 关 | `1/true` 关闭邮箱注册 |
 | `TABOO_DISABLE_PASSWORD` | 关 | `1/true` 关闭密码登录，仅外部 Realm |
 
@@ -175,3 +179,7 @@ docker compose up -d --build
 ## 许可
 
 MIT（v1.0 正式确定；当前代码以 MIT 精神完全开放，无付费墙）
+
+### 标准身份联邦首批实现
+
+人员登录使用通用 OIDC BFF，不依赖任何私有身份工程。接口能力、配置升级注意事项、公开 Keycloak/浏览器测试和未完成工作见 [实施记录](docs/design/standard-identity-federation-m0.zh-CN.md)。本批不是 PostgreSQL、外部机器 OAuth 或全部多租户改造完成；Node 参考后端不具备新 BFF 协议。

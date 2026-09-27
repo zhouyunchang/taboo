@@ -219,7 +219,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	email := strings.ToLower(strings.TrimSpace(b.Email))
 	var userID, name, hash, status string
-	err := s.DB.QueryRow(`SELECT id, name, password_hash, status FROM users WHERE email = ?`, email).
+	err := s.DB.QueryRow(`SELECT id, name, password_hash, status FROM users WHERE email = ? AND auth_source='local'`, email).
 		Scan(&userID, &name, &hash, &status)
 	ok, needsRehash := false, false
 	if err == nil {
@@ -280,7 +280,7 @@ func (s *Service) Refresh(w http.ResponseWriter, r *http.Request) {
 	_, _ = s.DB.Exec(`DELETE FROM refresh_tokens WHERE id = ?`, id) // 旋转
 	var u auth.Actor
 	u.Kind = auth.KindUser
-	if err := s.DB.QueryRow(`SELECT id, email, name FROM users WHERE id = ?`, userID).
+	if err := s.DB.QueryRow(`SELECT id, email, name FROM users WHERE id = ? AND auth_source='local' AND status='active'`, userID).
 		Scan(&u.ID, &u.Email, &u.Name); err != nil {
 		writeErr(w, apperr.InvalidRefresh)
 		return
@@ -317,8 +317,12 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		var rest int
 		_ = rows.Scan(&o.ID, &o.Name, &o.Slug, &o.Role, &rest)
 		o.Restricted = rest == 1
+		if u.OrganizationID != "" && u.OrganizationID != o.ID {
+			continue
+		}
 		orgs = append(orgs, o)
 	}
+	rows.Close() // release the single SQLite connection before the next query
 	writeJSON(w, 200, map[string]any{"user": u, "orgs": orgs, "totp_enabled": totpEnabledOf(s.DB, u.ID)})
 }
 

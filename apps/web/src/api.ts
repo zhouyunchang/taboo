@@ -21,33 +21,69 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+let browserCSRF = '';
+let browserSession = false;
+let refreshRequest: Promise<boolean> | null = null;
+export const hasBrowserSession = () => browserSession;
+
+export async function initializeBrowserSession(): Promise<boolean> {
+  const res = await fetch('/api/v1/auth/session', { credentials: 'same-origin', cache: 'no-store' });
+  if (res.status === 404) { browserSession = false; browserCSRF = ''; return false; } // Legacy Node local-account UI.
+  if (!res.ok) throw new ApiError(res.status, 'SESSION_UNAVAILABLE', '暂时无法检查登录状态，请重试。');
+  const data = await res.json();
+  browserSession = data.authenticated === true;
+  browserCSRF = browserSession ? data.csrf_token : '';
+  if (browserSession || data.authentication === 'oidc') {
+    clearTokens();
+    localStorage.removeItem('taboo.idp_logout');
+  }
+  return browserSession;
+}
+
+export async function logout(): Promise<void> {
+  if (browserSession) await request<void>('POST', '/api/v1/auth/logout');
+  browserCSRF = '';
+  browserSession = false;
+  clearTokens();
+  localStorage.removeItem('taboo.idp_logout');
+  window.dispatchEvent(new Event('taboo:logout'));
+}
+
+async function refreshLocal(): Promise<boolean> {
+  const refresh = localStorage.getItem(REFRESH_KEY);
+  if (!refresh) return false;
+  const res = await fetch('/api/v1/auth/refresh', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh }),
+  });
+  if (!res.ok) return false;
+  const data = await res.json();
+  setTokens(data.tokens);
+  return true;
+}
+
+async function request<T>(method: string, path: string, body?: unknown, retried = false): Promise<T> {
+  const token = browserSession ? null : getToken();
   const res = await fetch(path, {
-    method,
+    method, credentials: 'same-origin', cache: 'no-store',
     headers: {
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(browserSession && method !== 'GET' ? { 'X-CSRF-Token': browserCSRF } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 401 && getToken()) {
-    // 尝试 refresh 一次
-    const refresh = localStorage.getItem(REFRESH_KEY);
-    if (refresh) {
-      const r = await fetch('/api/v1/auth/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh }),
-      });
-      if (r.ok) {
-        const data = await r.json();
-        setTokens(data.tokens);
-        return request<T>(method, path, body);
-      }
-    }
+  if (res.status === 401 && token && !retried) {
+    if (!refreshRequest) refreshRequest = refreshLocal().finally(() => { refreshRequest = null; });
+    if (await refreshRequest) return request<T>(method, path, body, true);
+  }
+  if (res.status === 401 && (token || browserSession)) {
+    browserSession = false;
+    browserCSRF = '';
     clearTokens();
     window.dispatchEvent(new Event('taboo:logout'));
   }
+  if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data.code ?? 'ERROR', data.message ?? res.statusText);
   return data as T;
