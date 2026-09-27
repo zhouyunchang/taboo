@@ -13,3 +13,5 @@ Dense, readable operational screens with clear organization context and explicit
 ## Scope and migration ledger
 
 This change covers login/session recovery, external-session workspace chrome and the identity connection form. Other legacy secret/editor/member workflows still contain custom drawers and browser confirmations; their full migration remains part of KTI-07. No claim is made that this whole application has completed an accessibility audit. Browser checks and static audit evidence are recorded in the federation implementation document.
+
+Identity replacement is a separate native dialog available to each member. It names the target connection, requires an explicit acknowledgement, and asks local users for fresh password/TOTP proof. The server keeps IDs and grants but unbinds the previous identity and ends prior sessions. The UI does not imply account merging or automatic inheritance of secret access. Escape and cancel restore focus; pending navigation prevents duplicate submission. Mobile overflow and the actual Keycloak replacement path are covered by the browser suite.

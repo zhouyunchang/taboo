@@ -275,7 +275,7 @@ func MiddlewareWithExternal(db *sql.DB, jwtSecret string, external ExternalAuthe
 				return
 			}
 			if _, err := r.Cookie(BrowserCookie); err == nil && r.Header.Get("Authorization") == "" {
-				a, err := browserActor(db, r)
+				a, err := BrowserActor(db, r)
 				if err != nil {
 					if e, ok := err.(*apperr.Error); ok {
 						writeErr(w, e)

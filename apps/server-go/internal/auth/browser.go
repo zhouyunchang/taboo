@@ -65,7 +65,7 @@ func SetBrowserCookie(w http.ResponseWriter, raw, origin string, expires time.Ti
 	http.SetCookie(w, &http.Cookie{Name: BrowserCookie, Value: raw, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(origin, "https://"), SameSite: http.SameSiteLaxMode, Expires: expires, MaxAge: int(time.Until(expires).Seconds())})
 }
 
-func browserActor(db *sql.DB, r *http.Request) (*Actor, error) {
+func BrowserActor(db *sql.DB, r *http.Request) (*Actor, error) {
 	c, err := r.Cookie(BrowserCookie)
 	if err != nil || len(c.Value) != 43 {
 		return nil, apperr.Unauthorized
@@ -99,7 +99,7 @@ func BrowserSession(db *sql.DB, policies ...BrowserPolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
-		a, err := browserActor(db, r)
+		a, err := BrowserActor(db, r)
 		if err == nil {
 			for _, allowed := range policies {
 				if err = allowed(r, a); err != nil {

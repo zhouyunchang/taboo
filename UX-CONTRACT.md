@@ -37,3 +37,5 @@ Identity connection forms fit a 390px viewport without horizontal content loss. 
 | Scrollbar | Global styles.css | Runtime CSS tokens | Stable dialog gutter, scrollable table | Narrow viewport tests |
 | Toast | Inline role=alert and role=status | App and identity form | No toast provider introduced | Browser recovery tests |
 | CRUD | Identity form and Modal | Server-confirmed create/delete | Legacy non-identity dialogs pending KTI-07 | Escape/focus and mutation checks |
+
+Identity replacement must explain that old sign-in credentials stop working. Disable submission until a registered target and acknowledgement are selected. Clear local password/TOTP fields after either success or failure; never persist them or copy them into navigation parameters. Existing-member data survives only after both identity proofs and the atomic audit commit succeed.

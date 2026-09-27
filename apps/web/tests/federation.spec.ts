@@ -153,3 +153,34 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
   await page.getByRole('button', { name: '退出', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
 });
+
+test('identity replacement proves both sign-ins and preserves membership and secret versions', async ({ page, request }) => {
+  const headers = { Authorization: `Bearer ${localTokens.access}` };
+  const response = await request.post('/api/v1/orgs/a/oidc', { headers, data: {
+    name: 'Replacement connection', issuer, client_id: 'taboo-test', client_secret: 'fixture-secret', scopes: 'openid', autocreate: false, public_login: false, default_role: 'admin', role_map: {},
+  }});
+  expect(response.status()).toBe(201); const replacement = (await response.json()).id;
+  await page.goto(`/api/v1/auth/oidc/a/login?pid=${providerID}`);
+  await page.getByLabel('Username').fill('fixture-user');
+  await page.getByLabel('Password', { exact: true }).fill('fixture-password');
+  await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await expect(page.getByRole('button', { name: '登录身份', exact: true })).toBeVisible();
+  const original = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()));
+  await page.getByRole('button', { name: '登录身份', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '更换登录身份' });
+  await dialog.getByLabel('新的身份连接').selectOption(replacement);
+  await expect(dialog.getByRole('button', { name: '验证新身份并更换', exact: true })).toBeDisabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await dialog.getByLabel('我确认解除旧身份关联，并验证新身份').check();
+  await dialog.getByRole('button', { name: '验证新身份并更换', exact: true }).click();
+  await page.getByLabel('Password', { exact: true }).fill('fixture-password');
+  await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  const current = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()));
+  expect(current.user.id).toBe(original.user.id); expect(current.orgs).toEqual(original.orgs);
+  const row = page.getByRole('row').filter({ hasText: 'PUBLIC_FIXTURE' }); await expect(row).toContainText('v3');
+  expect(await page.evaluate(() => localStorage.getItem('taboo.access'))).toBeNull();
+  expect((await request.patch(`/api/v1/orgs/a/oidc/${providerID}`, { headers, data: { enabled: false } })).status()).toBe(200);
+  await page.reload(); await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+});

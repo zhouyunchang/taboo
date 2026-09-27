@@ -4,6 +4,126 @@
  */
 
 export interface paths {
+    "/api/v1/auth/oidc/{slug}/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        /** List registered sign-in choices for the current organization member */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    slug: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Public connection identifiers and current authentication source */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            authentication: "local" | "oidc";
+                            connections: {
+                                id: string;
+                                name: string;
+                                issuer: string;
+                                current: boolean;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/{slug}/replace": {
+        parameters: {
+            query: {
+                pid: string;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin explicit proof of a replacement sign-in identity
+         * @description Requires exact Origin, current membership and either a recent BFF session with CSRF or local password plus enabled TOTP. The browser-bound one-use OIDC callback preserves local IDs and grants, rejects an identity already owned by another account, unbinds the old identity and revokes old sessions. It never merges by email or copies legacy plaintext permissions.
+         */
+        post: {
+            parameters: {
+                query: {
+                    pid: string;
+                };
+                header?: never;
+                path: {
+                    slug: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: password */
+                        password?: string;
+                        code?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Browser flow cookie set; navigate to the registered authorization endpoint */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            authorization_url: string;
+                        };
+                    };
+                };
+                /** @description Old identity proof is invalid or expired */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Organization policy or required authentication strength is not satisfied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/healthz": {
         parameters: {
             query?: never;

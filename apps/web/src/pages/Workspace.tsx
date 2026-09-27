@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, hasBrowserSession, getBrowserSessionInfo } from '../api';
 import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
 import SettingsPanel from './Settings';
+import IdentityReplacement from '../components/IdentityReplacement';
 import ValidatedForm from '../components/ValidatedForm';
 
 interface Props {
@@ -22,6 +23,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
   const [env, setEnv] = useState('dev');
   const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings'>('secrets');
   const [show2FA, setShow2FA] = useState(false);
+ const [showIdentity, setShowIdentity] = useState(false);
   const [error, setError] = useState('');
 
   const loadProjects = useCallback(async () => {
@@ -67,6 +69,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
         <div className="spacer" />
         {!federated && <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>}
         <span>{user.name || user.email}</span>
+ <button className="ghost" onClick={() => setShowIdentity(true)}>登录身份</button>
         <button className="ghost" onClick={onLogout}>退出</button>
       </header>
 
@@ -114,7 +117,8 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
                   : canAudit ? <AuditPanel orgSlug={org.slug} /> : <p className="muted">没有审计权限</p>}
         </main>
       </div>
-      {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
+      {showIdentity && <IdentityReplacement key={org.id} orgSlug={org.slug} onClose={() => setShowIdentity(false)} />}
+ {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
     </div>
   );
 }

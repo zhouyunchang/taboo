@@ -131,6 +131,8 @@ func New(d *Deps) *chi.Mux {
 		r.Route("/auth/oidc/{slug}", func(r chi.Router) {
 			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/login", oidcSvc.Login)
 			r.Get("/callback", oidcSvc.Callback)
+			r.With(auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Get("/connections", oidcSvc.Connections)
+			r.With(auth.LoginRateLimit(time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/replace", oidcSvc.Replace)
 		})
 		r.Group(func(r chi.Router) {
 			r.Use(auth.MiddlewareWithExternal(d.DB, d.JWTSecret, d.Workloads.Authenticate, oidcSvc.CheckSession))

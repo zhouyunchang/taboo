@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -29,7 +30,9 @@ func (s *Service) origin() (string, error) {
 	return u.Scheme + "://" + u.Host, nil
 }
 
-func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
+func (s *Service) Login(w http.ResponseWriter, r *http.Request) { s.startLogin(w, r, nil) }
+
+func (s *Service) startLogin(w http.ResponseWriter, r *http.Request, replacement *replacementProof) {
 	w.Header().Set("Cache-Control", "no-store")
 	origin, err := s.origin()
 	if err != nil {
@@ -72,7 +75,17 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
 		return
 	}
-	enc, err := tc.Seal(s.MasterKey, verifier, tc.Context{Purpose: "oidc-pkce", Org: p.OrgID, Object: tc.SHA256(state), Version: 1})
+	payload := verifier
+	if replacement != nil {
+		replacement.Verifier = verifier
+		encoded, e := json.Marshal(replacement)
+		if e != nil {
+			writeErr(w, apperr.InvalidInput)
+			return
+		}
+		payload = string(encoded)
+	}
+	enc, err := tc.Seal(s.MasterKey, payload, tc.Context{Purpose: "oidc-pkce", Org: p.OrgID, Object: tc.SHA256(state), Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
 		return
@@ -95,10 +108,15 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	if len(policy.RequiredACR) > 0 {
 		q.Set("acr_values", strings.Join(policy.RequiredACR, " "))
 	}
-	if r.URL.Query().Get("reauth") == "1" {
+	if r.URL.Query().Get("reauth") == "1" || replacement != nil {
 		q.Set("prompt", "login")
 	}
-	http.Redirect(w, r, doc.AuthorizationEndpoint+"?"+q.Encode(), http.StatusFound)
+	destination := doc.AuthorizationEndpoint + "?" + q.Encode()
+	if replacement != nil {
+		writeJSON(w, 200, map[string]string{"authorization_url": destination})
+		return
+	}
+	http.Redirect(w, r, destination, http.StatusFound)
 }
 
 func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +170,16 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 		bad()
 		return
 	}
+	var replacement *replacementProof
+	if strings.HasPrefix(verifier, "{") {
+		var proof replacementProof
+		if json.Unmarshal([]byte(verifier), &proof) != nil || proof.User == "" || proof.Verifier == "" || s.validateReplacement(r, p, &proof) != nil {
+			bad()
+			return
+		}
+		replacement = &proof
+		verifier = proof.Verifier
+	}
 	doc, _, err := discoCache.getContext(r.Context(), p.ID, p.Issuer)
 	if err != nil {
 		writeErr(w, apperr.New(502, "IDP_UNREACHABLE", "identity provider unavailable"))
@@ -198,8 +226,25 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 		bad()
 		return
 	}
-	uid, err := bindIdentity(tx, p, identity.Subject, identity.Claims)
+	var uid string
+	if replacement != nil {
+		if !policy.sensitive(sessionCredentials{AuthTime: authTime, ACR: claimString(identity.Claims, "acr"), AMR: claimAMR(identity.Claims)}) {
+			writeErr(w, apperr.Forbidden)
+			return
+		}
+		uid, err = s.replaceIdentity(tx, r, p, replacement, identity.Subject)
+	} else {
+		uid, err = bindIdentity(tx, p, identity.Subject, identity.Claims)
+	}
 	if err != nil {
+		if replacement != nil {
+			if e, ok := err.(*apperr.Error); ok {
+				writeErr(w, e)
+			} else {
+				writeErr(w, apperr.New(503, "IDENTITY_REPLACEMENT_FAILED", "identity unchanged; start again"))
+			}
+			return
+		}
 		writeErr(w, apperr.New(403, "OIDC_ADMISSION_REQUIRED", "ask an organization administrator to authorize this identity"))
 		return
 	}
