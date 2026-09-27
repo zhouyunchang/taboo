@@ -74,7 +74,7 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.From(r)
-	if !auth.Require(s.DB, w, r, orgID, "", rbac.Admin, "") {
+	if !auth.Require(s.DB, w, r, orgID, "", auth.DelegationAction(auth.From(r)), "") {
 		return
 	}
 	var b struct {
@@ -138,19 +138,13 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, rs := range resolvedScopes {
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO identity_scopes (identity_id, project_id, env_id, permission)
-			VALUES (?, ?, ?, ?)`, id, rs.projectID, rs.envID, rs.permission); err != nil {
+		if _, err := tx.Exec(`INSERT INTO identity_scopes (identity_id, project_id, env_id, permission)
+			VALUES (?, ?, ?, ?) ON CONFLICT(identity_id,project_id,env_id) DO UPDATE SET permission=excluded.permission`, id, rs.projectID, rs.envID, rs.permission); err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	if err := auth.AuditReq(s.DB, r, orgID, u, "identity.create", "org/"+slug+"/identity/"+b.Name,
-		map[string]any{"client_id": clientID, "scopes": len(resolvedScopes)}); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
+	if !auth.CommitMutation(tx, w, r, orgID, u, "identity.create", "org/"+slug+"/identity/"+b.Name, map[string]any{"client_id": clientID, "scopes": len(resolvedScopes)}) {
 		return
 	}
 	// client_secret 仅本次响应返回一次
@@ -209,7 +203,7 @@ func (s *Service) Revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.From(r)
-	if !auth.Require(s.DB, w, r, orgID, "", rbac.Admin, "") {
+	if !auth.Require(s.DB, w, r, orgID, "", auth.DelegationAction(auth.From(r)), "") {
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -219,12 +213,16 @@ func (s *Service) Revoke(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.NotFound)
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE machine_identities SET status = 'revoked' WHERE id = ?`, id); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
 		return
 	}
-	if err := auth.AuditReq(s.DB, r, orgID, u, "identity.revoke", "org/"+slug+"/identity/"+name, nil); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE machine_identities SET status='revoked' WHERE id=? AND org_id=?`, id, orgID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+		return
+	}
+	if !auth.CommitMutation(tx, w, r, orgID, u, "identity.revoke", "org/"+slug+"/identity/"+name, nil) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"id": id, "status": "revoked"})
@@ -241,7 +239,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 	var status string
 	var ttl int
 	err := s.DB.QueryRow(`SELECT id, org_id, name, secret_hash, status, token_ttl
-		FROM machine_identities WHERE client_id = ?`, b.ClientID).
+		FROM machine_identities WHERE client_id = ? AND auth_type='client_credentials'`, b.ClientID).
 		Scan(&id, &orgID, &name, &secretHash, &status, &ttl)
 	// 统一错误，不区分“不存在”与“秘密错误”
 	if err != nil || status != "active" || !auth.CheckIdentitySecret(b.ClientSecret, secretHash) {

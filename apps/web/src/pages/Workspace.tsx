@@ -1,23 +1,33 @@
-import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError } from '../api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api, ApiError, hasBrowserSession, getBrowserSessionInfo } from '../api';
 import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
 import SettingsPanel from './Settings';
+import { OrganizationSwitcher } from '../components/Governance';
+import IdentityReplacement from '../components/IdentityReplacement';
+import useSecretMutation from '../components/useSecretMutation';
+import Modal from '../components/Modal';
+import ValidatedForm from '../components/ValidatedForm';
 
 interface Props {
   user: User;
   orgs: Org[];
   onOrgChange: (orgs: Org[]) => void;
   onLogout: () => void;
+  logoutError?: string;
 }
 
-export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) {
+export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutError }: Props) {
   const org = orgs[0];
+  const federated = hasBrowserSession();
+  const session = getBrowserSessionInfo();
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [envs, setEnvs] = useState<Env[]>([]);
   const [env, setEnv] = useState('dev');
   const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings'>('secrets');
+  const [switchOrg,setSwitchOrg] = useState(false);
   const [show2FA, setShow2FA] = useState(false);
+ const [showIdentity, setShowIdentity] = useState(false);
   const [error, setError] = useState('');
 
   const loadProjects = useCallback(async () => {
@@ -30,10 +40,13 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
   useEffect(() => { loadProjects().catch((e) => setError(String(e))); }, [loadProjects]);
 
   useEffect(() => {
+    let live = true;
+    setEnvs([]);
     if (!project) return;
     api.get<{ environments: Env[] }>(`/api/v1/projects/${project.id}/environments`)
-      .then((d) => setEnvs(d.environments))
-      .catch((e) => setError(String(e)));
+      .then((d) => { if (live) { setEnvs(d.environments); setEnv(d.environments[0]?.slug ?? 'dev'); } })
+      .catch((e) => { if (live) setError(String(e)); });
+    return () => { live = false; };
   }, [project?.id]);
 
   async function createProject() {
@@ -48,6 +61,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
   if (!org) return <div className="center-screen">没有组织</div>;
 
   const canAdmin = org.role === 'owner' || org.role === 'admin';
+  const canDelegate = org.role === 'owner' || (!federated && org.role === 'admin');
   const canAudit = org.role === 'owner' || org.role === 'admin';
   const envMeta = envs.find((e) => e.slug === env);
   const envProtected = Boolean(envMeta && 'protected' in envMeta && (envMeta as { protected?: boolean }).protected);
@@ -59,13 +73,21 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
           <span className="brand-mark">禁</span>
           <strong>taboo · 禁制</strong>
         </div>
-        <span className="muted">{org.name} <em>({org.role})</em></span>
+        <label className="org-switch">组织<select aria-label="当前组织" value={org.id} onChange={e=>onOrgChange([...orgs.filter(o=>o.id===e.target.value),...orgs.filter(o=>o.id!==e.target.value)])}>{orgs.map(o=><option key={o.id} value={o.id}>{o.name} ({o.role})</option>)}</select></label>
         <div className="spacer" />
-        <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>
+        {federated && <button className="ghost" onClick={() => setSwitchOrg(true)}>切换组织</button>}
+        {!federated && <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>}
         <span>{user.name || user.email}</span>
+ <button className="ghost" onClick={() => setShowIdentity(true)}>登录身份</button>
         <button className="ghost" onClick={onLogout}>退出</button>
       </header>
 
+      {federated && <p className="session-notice" role="status">外部登录 · 当前组织：{org.name} · {session?.revocation_profile === 'ONLINE_REQUIRED' ? '每次访问检查上游状态，故障时拒绝访问。' : '会话有效期内使用已验证身份，上游停用最迟在会话到期时生效。'}
+        {session?.expires_at && <> 会话到期：{new Date(session.expires_at * 1000).toLocaleTimeString()}。</>}
+        {session?.rp_logout ? ' 退出时同时前往身份提供方结束会话。' : ' 退出仅结束本系统会话。'}
+        {session?.sensitive_operations_allowed === false && <> 当前认证未满足敏感操作要求。<a href={session.reauthentication_url}>重新验证身份</a></>}
+      </p>}
+      {logoutError && <p className="error" role="alert">{logoutError}</p>}
       <div className="body">
         <aside className="sidebar">
           <div className="sidebar-title">
@@ -73,9 +95,9 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
             {canAdmin && <button className="ghost" onClick={createProject} title="新建项目">＋</button>}
           </div>
           {projects.map((p) => (
-            <div key={p.id} className={`nav-item ${project?.id === p.id ? 'active' : ''}`} onClick={() => { setProject(p); setTab('secrets'); }}>
+            <button key={p.id} className={`nav-item ${project?.id === p.id ? 'active' : ''}`} onClick={() => { setProject(p); setTab('secrets'); }}>
               {p.name}
-            </div>
+            </button>
           ))}
           {error && <div className="error">{error}</div>}
         </aside>
@@ -88,10 +110,10 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
               </button>
             ))}
             <div className="spacer" />
-            {canAdmin && <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>}
-            {canAdmin && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
+            {canDelegate && <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>}
+            {canDelegate && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
             {canAudit && <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>}
-            <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>组织设置</button>
+            {<button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>组织设置</button>}
           </div>
           {tab === 'secrets'
             ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} canWrite={(org.role === 'developer' && !envProtected) || canAdmin} />
@@ -104,7 +126,9 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout }: Props) 
                   : canAudit ? <AuditPanel orgSlug={org.slug} /> : <p className="muted">没有审计权限</p>}
         </main>
       </div>
-      {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
+      {switchOrg && <OrganizationSwitcher onClose={() => setSwitchOrg(false)} />}
+      {showIdentity && <IdentityReplacement key={org.id} orgSlug={org.slug} onClose={() => setShowIdentity(false)} />}
+ {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
     </div>
   );
 }
@@ -156,7 +180,7 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="drawer" onClick={onClose}>
+    <Modal title="两步验证（TOTP）" onClose={onClose} busy={busy}>
       <div className="drawer-inner" onClick={(e) => e.stopPropagation()}>
         <h3>两步验证（TOTP）</h3>
         {err && <div className="error">{err}</div>}
@@ -170,7 +194,7 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
         )}
 
         {enabled === false && setup && (
-          <form onSubmit={verify} className="totp-setup">
+          <ValidatedForm onSubmit={verify} className="totp-setup">
             <p>用验证器扫描下方二维码，或手动录入密钥：</p>
             <img className="qr" src={setup.qr_png} alt="TOTP QR Code" />
             <label>密钥（base32）<input readOnly value={setup.secret} onFocus={(e) => e.target.select()} /></label>
@@ -179,7 +203,7 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
               <button type="button" className="ghost" onClick={() => setSetup(null)}>取消</button>
               <button type="submit" disabled={busy}>{busy ? '激活中…' : '验证并开启'}</button>
             </div>
-          </form>
+          </ValidatedForm>
         )}
 
         {codes && (
@@ -193,27 +217,30 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
         )}
 
         {enabled === true && !codes && (
-          <form onSubmit={disable}>
+          <ValidatedForm onSubmit={disable}>
             <p><span className="tag ok">已开启</span> <span className="muted">登录需密码 + 动态码。</span></p>
             <label>输入密码确认关闭<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
             <div className="drawer-actions">
-              <button type="button" className="ghost" onClick={onClose}>关闭</button>
+              <button type="button" className="ghost" disabled={busy} onClick={onClose}>关闭</button>
               <button type="submit" disabled={busy}>关闭两步验证</button>
             </div>
-          </form>
+          </ValidatedForm>
         )}
       </div>
-    </div>
+    </Modal>
   );
 }
 
-function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: string; env: string; projectSlug: string; canWrite: boolean }) {
+function SecretsPanel({ projectId, env, projectSlug, canWrite: legacyCanWrite }: { projectId: string; env: string; projectSlug: string; canWrite: boolean }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
   const [cur, setCur] = useState('/'); // 当前文件夹路径（物化路径 /a/b/）
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<string | null>(null); // key 或 '__new__'
   const [detail, setDetail] = useState<SecretMeta | null>(null);
+  const [permissions, setPermissions] = useState<{write:boolean;delete:boolean;rollback:boolean;export:boolean} | null>(null);
+  const canWrite = permissions?.write ?? (!hasBrowserSession() && legacyCanWrite);
+
 
   const loadFolders = useCallback(() => {
     api.get<{ folders: Folder[] }>(`/api/v1/projects/${projectId}/folders?env=${env}`)
@@ -221,13 +248,17 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: st
       .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
   }, [projectId, env]);
 
+  const listGeneration = useRef(0);
+  const selectFolder = (path:string) => { listGeneration.current++; setSecrets([]);setEditing(null);setDetail(null);setCur(path); };
   const load = useCallback(() => {
-    api.get<{ secrets: SecretMeta[] }>(`/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(cur)}`)
-      .then((d) => setSecrets(d.secrets))
-      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+    const started = ++listGeneration.current;
+    api.get<{ secrets: SecretMeta[]; permissions?: {write:boolean;delete:boolean;rollback:boolean;export:boolean} }>(`/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(cur)}`)
+      .then((d) => { if(started !== listGeneration.current)return; setError(''); setSecrets(d.secrets); setPermissions(d.permissions ?? null); if(hasBrowserSession() && !d.permissions?.write)setEditing(null); })
+      .catch((e) => { if(started !== listGeneration.current)return; setSecrets([]); setPermissions({write:false,delete:false,rollback:false,export:false}); setEditing(null); setDetail(null); setError(e instanceof ApiError ? e.message : String(e)); });
   }, [projectId, env, cur]);
 
   useEffect(load, [load]);
+  useEffect(() => { const refresh = () => {load();}; window.addEventListener('taboo:permissions-refresh',refresh); return () => window.removeEventListener('taboo:permissions-refresh',refresh); },[load]);
   useEffect(loadFolders, [loadFolders]);
 
   async function createFolder() {
@@ -246,7 +277,7 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: st
     if (!window.confirm(`删除空文件夹 ${cur}？（仅空文件夹可删除）`)) return;
     try {
       await api.del(`/api/v1/projects/${projectId}/folders?env=${env}&path=${encodeURIComponent(cur)}`);
-      setCur(parentOf(cur));
+      selectFolder(parentOf(cur));
       loadFolders();
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
   }
@@ -258,30 +289,30 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: st
       <div className="panel-head">
         <h2>{projectSlug} / {env}</h2>
         {canWrite && <button className="ghost" onClick={createFolder}>＋ 新建文件夹</button>}
-        {canWrite && cur !== '/' && <button className="ghost" onClick={deleteFolder}>删除此空文件夹</button>}
+        {(permissions?.delete ?? (!hasBrowserSession() && canWrite)) && cur !== '/' && <button className="ghost" onClick={deleteFolder}>删除此空文件夹</button>}
         {canWrite && <button onClick={() => setEditing('__new__')}>＋ 新建密钥</button>}
       </div>
       <div className="crumbs mono">
-        <span className={`crumb ${cur === '/' ? 'active' : ''}`} onClick={() => setCur('/')}>根目录</span>
+        <button className={`crumb ghost ${cur === '/' ? 'active' : ''}`} onClick={() => selectFolder('/')}>根目录</button>
         {crumbs.map((c, i) => {
           const p = '/' + crumbs.slice(0, i + 1).join('/') + '/';
           return <span key={p}><span className="muted"> / </span>
-            <span className={`crumb ${cur === p ? 'active' : ''}`} onClick={() => setCur(p)}>{c}</span></span>;
+            <button className={`crumb ghost ${cur === p ? 'active' : ''}`} onClick={() => selectFolder(p)}>{c}</button></span>;
         })}
       </div>
       {error && <div className="error">{error}</div>}
       <div className="split">
         <aside className="folder-tree">
-          <FolderTree folders={folders} cur={cur} onSelect={setCur} />
+          <FolderTree folders={folders} cur={cur} onSelect={selectFolder} />
         </aside>
-        <div className="grow">
+        <div className="grow" tabIndex={0} role="region" aria-label="密钥列表">
           <table className="table">
             <thead>
               <tr><th>Key</th><th>值</th><th>标签</th><th>版本</th><th>更新时间</th><th /></tr>
             </thead>
             <tbody>
               {secrets.map((s) => (
-                <SecretRow key={s.id} s={s} projectId={projectId} env={env} canWrite={canWrite && (s.canWrite !== false)}
+                <SecretRow key={`${s.id}:${s.version}`} s={s} projectId={projectId} env={env} canWrite={canWrite && (s.canWrite !== false)}
                   onChanged={load} onEdit={() => setEditing(s.key)} onDetail={() => setDetail(s)} />
               ))}
               {secrets.length === 0 && <tr><td colSpan={6} className="muted center">此文件夹还没有密钥</td></tr>}
@@ -290,11 +321,11 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: st
         </div>
       </div>
       {editing && (
-        <SecretEditor projectId={projectId} env={env} path={cur} secretKey={editing === '__new__' ? '' : editing}
+        <SecretEditor projectId={projectId} env={env} path={cur} secretKey={editing === '__new__' ? '' : editing} expectedVersion={editing === '__new__' ? 0 : secrets.find(s=>s.key===editing)?.version}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
       )}
       {detail && (
-        <DetailDrawer projectId={projectId} env={env} meta={detail}
+        <DetailDrawer projectId={projectId} env={env} meta={detail} onChanged={load}
           onClose={() => setDetail(null)} />
       )}
     </div>
@@ -331,11 +362,11 @@ function TreeNode({ f, byParent, cur, onSelect }: {
   const kids = byParent.get(f.id) ?? [];
   return (
     <li>
-      <div className={`tree-item ${cur === f.path ? 'active' : ''}`} onClick={() => onSelect(f.path)}>
+      <div className={`tree-item ${cur === f.path ? 'active' : ''}`}>
         {kids.length > 0
-          ? <span className="tree-toggle" onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>{open ? '▾' : '▸'}</span>
+          ? <button className="tree-toggle ghost" aria-label={`${open ? '收起' : '展开'} ${f.name}`} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'}</button>
           : <span className="tree-toggle" />}
-        📁 {f.name}
+        <button className="ghost" onClick={() => onSelect(f.path)}>📁 {f.name}</button>
       </div>
       {open && kids.length > 0 && (
         <ul className="tree">
@@ -350,20 +381,28 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
   s: SecretMeta; projectId: string; env: string; canWrite: boolean;
   onChanged: () => void; onEdit: () => void; onDetail: () => void;
 }) {
+  const mutate=useSecretMutation();
   const [value, setValue] = useState<string | null>(null);
+  const revealGeneration=useRef(0);
+  useEffect(() => { setValue(null); }, [s.canReveal]);
+  useEffect(() => { const clear = () => { revealGeneration.current++; setValue(null); }; window.addEventListener('blur', clear); window.addEventListener('taboo:verification-unavailable',clear); return () => {window.removeEventListener('blur', clear);window.removeEventListener('taboo:verification-unavailable',clear);}; }, []);
+
   const [err, setErr] = useState('');
 
   async function reveal() {
     if (value !== null) { setValue(null); return; }
+    const started=++revealGeneration.current;
     try {
       const d = await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`);
-      setValue(d.value);
+      if(started===revealGeneration.current && document.hasFocus())setValue(d.value);
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
 
   async function copy() {
+    const started=revealGeneration.current;
     try {
-      const d = value ?? await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`).then((x) => x.value);
+      const d: string = value !== null ? value : (await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`)).value;
+      if(started!==revealGeneration.current || !document.hasFocus())return;
       await navigator.clipboard.writeText(d);
       setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 20_000); // 20s 自动清空剪贴板
     } catch { setErr('复制失败'); }
@@ -372,14 +411,14 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
   async function remove() {
     if (!window.confirm(`删除密钥 ${s.key}？（版本历史一并删除，不可恢复）`)) return;
     try {
-      await api.del(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`);
+      await mutate('del', `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}&expectedVersion=${s.version}`);
       onChanged();
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
 
   return (
     <tr>
-      <td className="mono key" onClick={onDetail} title="查看详情/版本">{s.key}</td>
+      <td className="mono key"><button className="ghost" onClick={onDetail} title="查看详情/版本">{s.key}</button></td>
       <td className="mono">
         {value === null ? '••••••••' : value}
         {err && <span className="error"> {err}</span>}
@@ -391,15 +430,16 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
         {s.canReveal && <button className="ghost" onClick={reveal}>{value === null ? '显示' : '隐藏'}</button>}
         {s.canReveal && <button className="ghost" onClick={copy}>复制</button>}
         {canWrite && <button className="ghost" onClick={onEdit}>编辑</button>}
-        {canWrite && <button className="ghost" onClick={remove}>删除</button>}
+        {(s.canDelete ?? (!hasBrowserSession() && canWrite)) && <button className="ghost" onClick={remove}>删除</button>}
       </td>
     </tr>
   );
 }
 
-function SecretEditor({ projectId, env, path, secretKey, onClose, onSaved }: {
-  projectId: string; env: string; path: string; secretKey: string; onClose: () => void; onSaved: () => void;
+function SecretEditor({ projectId, env, path, secretKey, expectedVersion, onClose, onSaved }: {
+  projectId: string; env: string; path: string; secretKey: string; expectedVersion?:number; onClose: () => void; onSaved: () => void;
 }) {
+  const mutate=useSecretMutation();
   const [key, setKey] = useState(secretKey);
   const [value, setValue] = useState('');
   const [comment, setComment] = useState('');
@@ -416,8 +456,8 @@ function SecretEditor({ projectId, env, path, secretKey, onClose, onSaved }: {
     setBusy(true);
     setErr('');
     try {
-      await api.post(`/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(path)}`, {
-        key, value, comment,
+      await mutate('post', `/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(path)}`, {
+        key, value, comment, expectedVersion,
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
       });
       onSaved();
@@ -426,50 +466,52 @@ function SecretEditor({ projectId, env, path, secretKey, onClose, onSaved }: {
   }
 
   return (
-    <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+    <Modal title="编辑密钥" onClose={onClose} busy={busy}>
+      <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>{secretKey ? `更新密钥 — ${secretKey}` : `新建密钥 — ${path}`}</h3>
         <label>Key<input value={key} onChange={(e) => setKey(e.target.value)} required disabled={!!secretKey} /></label>
-        <label>值<textarea value={value} onChange={(e) => setValue(e.target.value)} required rows={4} /></label>
+        <label>值<textarea className="resize-none" value={value} onChange={(e) => setValue(e.target.value)} required rows={4} /></label>
         <label>备注<input value={comment} onChange={(e) => setComment(e.target.value)} /></label>
         <label>标签（逗号分隔）<input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="db, prod" /></label>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">
-          <button type="button" className="ghost" onClick={onClose}>取消</button>
+          <button type="button" className="ghost" disabled={busy} onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '保存中…' : '保存（产生新版本）'}</button>
         </div>
-      </form>
-    </div>
+      </ValidatedForm>
+    </Modal>
   );
 }
 
-function DetailDrawer({ projectId, env, meta, onClose }: {
-  projectId: string; env: string; meta: SecretMeta; onClose: () => void;
+function DetailDrawer({ projectId, env, meta, onClose, onChanged }: {
+  projectId: string; env: string; meta: SecretMeta; onClose: () => void; onChanged: () => void;
 }) {
   const secretKey = meta.key;
+  const mutate=useSecretMutation();
   const folder = meta.folder;
   const [versions, setVersions] = useState<Version[]>([]);
   const [latest, setLatest] = useState(0);
+  const [canRollback, setCanRollback] = useState(false);
   const [err, setErr] = useState('');
 
   const load = useCallback(() => {
-    api.get<{ versions: Version[]; latest: number }>(
+    api.get<{ versions: Version[]; latest: number; canRollback?: boolean }>(
       `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/versions?env=${env}&path=${encodeURIComponent(folder)}`)
-      .then((d) => { setVersions(d.versions); setLatest(d.latest); })
+      .then((d) => { setVersions(d.versions); setLatest(d.latest); setCanRollback(d.canRollback ?? (!hasBrowserSession() && meta.canWrite !== false)); })
       .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
-  }, [projectId, env, secretKey, folder]);
+  }, [projectId, env, secretKey, folder, meta.canWrite]);
   useEffect(load, [load]);
 
   async function rollback(v: number) {
     if (!window.confirm(`回滚 ${secretKey} 到 v${v}？（将产生新版本）`)) return;
     try {
-      await api.post(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rollback?env=${env}&path=${encodeURIComponent(folder)}`, { version: v });
-      load();
+      await mutate('post', `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rollback?env=${env}&path=${encodeURIComponent(folder)}`, { version: v, expectedVersion:latest });
+      load(); onChanged();
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
 
   return (
-    <div className="drawer" onClick={onClose}>
+    <Modal title="版本历史" onClose={onClose}>
       <div className="drawer-inner" onClick={(e) => e.stopPropagation()}>
         <h3>{secretKey} — 版本历史 <span className="muted mono">{folder}</span></h3>
         {err && <div className="error">{err}</div>}
@@ -481,14 +523,14 @@ function DetailDrawer({ projectId, env, meta, onClose }: {
                 <td>v{v.version}{v.version === latest && '（当前）'}</td>
                 <td className="muted">{v.created_by.slice(0, 8)}</td>
                 <td className="muted">{v.created_at}</td>
-                <td>{v.version !== latest && <button className="ghost" onClick={() => rollback(v.version)}>回滚到此</button>}</td>
+                <td>{canRollback && v.version !== latest && <button className="ghost" onClick={() => rollback(v.version)}>回滚到此</button>}</td>
               </tr>
             ))}
           </tbody>
         </table>
         <div className="drawer-actions"><button className="ghost" onClick={onClose}>关闭</button></div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -508,22 +550,21 @@ function AuditPanel({ orgSlug }: { orgSlug: string }) {
     return p.toString();
   };
 
+  const auditGeneration = useRef(0);
   const load = useCallback(() => {
+    const started=++auditGeneration.current;
     api.get<{ logs: AuditLog[] }>(`/api/v1/orgs/${orgSlug}/audit?${qs()}`)
-      .then((d) => setLogs(d.logs))
-      .catch(() => {});
+      .then((d) => {if(started===auditGeneration.current)setLogs(d.logs);})
+      .catch(e => setVerify(e instanceof Error ? e.message : String(e)));
     api.get<{ exports: { id: string; status: string; format: string }[] }>(`/api/v1/orgs/${orgSlug}/audit/exports`)
-      .then((d) => setJobs(d.exports ?? []))
-      .catch(() => {});
+      .then((d) => {if(started===auditGeneration.current)setJobs(d.exports ?? []);})
+      .catch(e => setVerify(e instanceof Error ? e.message : String(e)));
   }, [orgSlug, action, actor, resource]);
   useEffect(load, [load]);
 
   async function download(format: string) {
-    const res = await fetch(`/api/v1/orgs/${orgSlug}/audit/export?format=${format}&async=1&${qs()}`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('taboo.access') ?? ''}` },
-    });
-    if (!res.ok) { alert('导出失败'); return; }
-    load();
+    try { await api.get(`/api/v1/orgs/${orgSlug}/audit/export?format=${format}&async=1&${qs()}`); load(); }
+    catch(e) { setVerify(e instanceof Error ? e.message : String(e)); }
   }
 
   async function checkChain() {
@@ -546,7 +587,7 @@ function AuditPanel({ orgSlug }: { orgSlug: string }) {
       </div>
       {verify && <p className="muted">{verify}</p>}
       {jobs.length > 0 && (
-        <p className="muted">导出任务：{jobs.map((j) => `${j.format} ${j.status}`).join(' · ')}</p>
+        <div>导出任务：{jobs.map(j=><p key={j.id}>{j.format} · {j.status} {j.status==='done'&&<button className="ghost" onClick={()=>api.download(`/api/v1/orgs/${orgSlug}/audit/exports/${j.id}`, `audit.${j.format}`).catch(e=>setVerify(String(e)))}>下载</button>} {j.status==='failed'&&<button className="ghost" onClick={()=>api.post(`/api/v1/orgs/${orgSlug}/audit/exports/${j.id}/retry`).then(load).catch(e=>setVerify(String(e)))}>重新生成</button>}</p>)}<button className="ghost" onClick={load}>刷新任务</button></div>
       )}
       <table className="table">
         <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>资源</th><th>IP</th></tr></thead>
@@ -661,8 +702,8 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
   }
 
   return (
-    <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+    <Modal title="创建机器身份" onClose={onClose} busy={busy}>
+      <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>创建机器身份</h3>
         <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="ci-runner" /></label>
         <label>Token TTL（秒，≤3600）<input type="number" value={ttl} onChange={(e) => setTtl(Number(e.target.value))} min={60} max={3600} /></label>
@@ -686,11 +727,11 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
         </div>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">
-          <button type="button" className="ghost" onClick={onClose}>取消</button>
+          <button type="button" className="ghost" disabled={busy} onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
         </div>
-      </form>
-    </div>
+      </ValidatedForm>
+    </Modal>
   );
 }
 
@@ -736,7 +777,7 @@ function DynamicPanel({ projectId, projectSlug }: { projectId: string; projectSl
       </div>
       <p className="muted">
         为数据库配置动态引擎后，机器身份可用 <code>POST /projects/{'{pid}'}/dynamic-engines/{'{eid}'}/lease</code> 申请短期账号（自动创建、到期回收）。
-        lease 仅机器身份可申请；此处供 owner/admin 管理引擎与手动回收。
+        lease 仅本地机器身份可申请；外部登录由 owner 管理引擎与手动回收。失败的回收任务可在此重新发起。
       </p>
       {error && <div className="error">{error}</div>}
       {engines.length === 0 && <p className="muted">尚未接入任何数据库引擎。</p>}
@@ -755,7 +796,7 @@ function DynamicPanel({ projectId, projectSlug }: { projectId: string; projectSl
                   <td><span className={`tag ${l.status === 'active' ? 'ok' : ''}`}>{l.status}</span></td>
                   <td className="mono">{fmtLeft(l)}</td>
                   <td className="muted nowrap">{l.expires_at ? new Date(l.expires_at * 1000).toLocaleString() : ''}</td>
-                  <td>{l.status === 'active' && <button className="ghost" onClick={() => l.id && revokeLease(l.id, l.username ?? '')}>回收</button>}</td>
+                  <td>{(l.status === 'active' || l.status === 'failed') && <button className="ghost" onClick={() => l.id && revokeLease(l.id, l.username ?? '')}>回收</button>}</td>
                 </tr>
               ))}
               {(e.leases ?? []).length === 0 && <tr><td colSpan={5} className="muted center">当前无活跃 lease</td></tr>}
@@ -796,8 +837,8 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
   }
 
   return (
-    <div className="drawer" onClick={onClose}>
-      <form className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+    <Modal title="接入数据库引擎" onClose={onClose} busy={busy}>
+      <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>接入数据库引擎（PostgreSQL）</h3>
         <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="pg-main" /></label>
         <label>高权限连接串<input className="mono" value={conn} onChange={(e) => setConn(e.target.value)} required
@@ -808,10 +849,10 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
         <p className="muted">连接串用 Master Key 加密落库，列表不回显。lease 到期后账号自动 DROP。</p>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">
-          <button type="button" className="ghost" onClick={onClose}>取消</button>
+          <button type="button" className="ghost" disabled={busy} onClick={onClose}>取消</button>
           <button type="submit" disabled={busy}>{busy ? '接入中…' : '接入'}</button>
         </div>
-      </form>
-    </div>
+      </ValidatedForm>
+    </Modal>
   );
 }

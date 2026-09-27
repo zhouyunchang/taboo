@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,15 +26,17 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
-	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
 )
 
 // 退避序列（秒）：第 N 次失败后调度第 N 次重试，共 6 次尝试后 dead
 var backoffSec = []int{30, 120, 600, 1800, 3600, 7200}
+
 const maxAttempts = 6
 
 // 事件名映射：SecretEvent.Action → webhook 事件类型
@@ -62,33 +65,37 @@ func ipOf(r *http.Request) string { return httpx.ClientIP(r) }
 
 // Subscribe 订阅密钥变更事件 → 为每个匹配的订阅生成投递记录（至少一次）
 func (s *Service) Subscribe(bus *events.Bus) {
-	bus.Subscribe(func(e events.SecretEvent) {
+	bus.Subscribe(func(tx *sql.Tx, e events.SecretEvent) error {
 		eventName, ok := eventNames[e.Action]
 		if !ok {
-			return
+			return fmt.Errorf("unknown event action")
 		}
-		rows, err := s.DB.Query(`SELECT id, secret_enc, events FROM webhooks
-			WHERE org_id = ? AND active = 1`, e.OrgID)
+		rows, err := tx.Query(`SELECT id,events FROM webhooks WHERE org_id=? AND active=1`, e.OrgID)
 		if err != nil {
-			return
+			return err
 		}
-		type sub struct {
-			id, secretEnc, eventsFilter string
-		}
-		subs := []sub{}
+		var ids []string
 		for rows.Next() {
-			var x sub
-			if err := rows.Scan(&x.id, &x.secretEnc, &x.eventsFilter); err == nil {
-				subs = append(subs, x)
+			var id, filter string
+			if err = rows.Scan(&id, &filter); err != nil {
+				rows.Close()
+				return err
+			}
+			if matchEvents(filter, eventName) {
+				ids = append(ids, id)
 			}
 		}
+		err = rows.Err()
 		rows.Close()
-		for _, w := range subs {
-			if !matchEvents(w.eventsFilter, eventName) {
-				continue
-			}
-			s.enqueue(w.id, e, eventName)
+		if err != nil {
+			return err
 		}
+		for _, id := range ids {
+			if err = enqueue(tx, id, e, eventName); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -110,7 +117,7 @@ func matchEvents(filterJSON, eventName string) bool {
 }
 
 // enqueue 幂等：同一事件同一订阅只保留一条 pending
-func (s *Service) enqueue(webhookID string, e events.SecretEvent, eventName string) {
+func enqueue(tx *sql.Tx, webhookID string, e events.SecretEvent, eventName string) error {
 	payload, _ := json.Marshal(map[string]any{
 		"id":        e.EventID,
 		"type":      eventName,
@@ -125,13 +132,8 @@ func (s *Service) enqueue(webhookID string, e events.SecretEvent, eventName stri
 			"id": e.ActorID, "name": e.ActorName, "kind": e.ActorKind,
 		},
 	})
-	_, err := s.DB.Exec(`INSERT INTO webhook_deliveries
-		(id, webhook_id, org_id, event_id, event, payload, status, next_attempt_at, created_at)
-		SELECT ?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now')
-		WHERE NOT EXISTS (SELECT 1 FROM webhook_deliveries WHERE webhook_id = ? AND event_id = ? AND status = 'pending')`,
-		tc.NewID(), webhookID, e.OrgID, e.EventID, eventName, string(payload),
-		time.Now().Unix(), webhookID, e.EventID)
-	_ = err
+	_, err := tx.Exec(`INSERT INTO webhook_deliveries(id,webhook_id,org_id,event_id,event,payload,status,next_attempt_at) VALUES(?,?,?,?,?,?,'pending',?) ON CONFLICT(id) DO NOTHING`, tc.SHA256(webhookID+"\x00"+e.EventID), webhookID, e.OrgID, e.EventID, eventName, string(payload), time.Now().Unix())
+	return err
 }
 
 // StartWorker 后台投递：轮询到期 pending → POST → 记录结果
@@ -178,9 +180,19 @@ func (s *Service) drain() {
 
 // deliver 单次投递尝试；失败按退避序列调度重试，超限 dead
 func (s *Service) deliver(id, orgID, event, payload string, attempts int, targetURL, secretEnc string) {
-	secret, err := tc.Decrypt(s.MasterKey, secretEnc)
+	lease, err := outbox.Claim(s.DB, "webhook_deliveries", id)
+	if err != nil || lease == "" {
+		return
+	}
+
+	var webhookID string
+	if err := s.DB.QueryRow(`SELECT d.webhook_id FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id AND w.org_id=d.org_id WHERE d.id=? AND d.org_id=? AND w.active=1`, id, orgID).Scan(&webhookID); err != nil {
+		s.finishFail(id, lease, orgID, event, attempts, "webhook unavailable")
+		return
+	}
+	secret, err := tc.Open(s.MasterKey, secretEnc, tc.Context{Purpose: "webhook", Org: orgID, Object: webhookID, Version: 1})
 	if err != nil {
-		s.finishFail(id, orgID, event, attempts, "decrypt webhook secret failed")
+		s.finishFail(id, lease, orgID, event, attempts, "decrypt webhook secret failed")
 		return
 	}
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
@@ -190,39 +202,38 @@ func (s *Service) deliver(id, orgID, event, payload string, attempts int, target
 
 	req, err := http.NewRequest("POST", targetURL, bytes.NewBufferString(payload))
 	if err != nil {
-		s.finishFail(id, orgID, event, attempts, err.Error())
+		s.finishFail(id, lease, orgID, event, attempts, err.Error())
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Taboo-Signature", "t="+ts+",v1="+sig)
 	req.Header.Set("X-Taboo-Event", event)
+	req.Header.Set("X-Taboo-Delivery", id)
 	req.Header.Set("User-Agent", "taboo-webhook/1.0")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	res, err := client.Do(req)
 	if err != nil {
-		s.finishFail(id, orgID, event, attempts, err.Error())
+		s.finishFail(id, lease, orgID, event, attempts, err.Error())
 		return
 	}
 	defer res.Body.Close()
 	if res.StatusCode/100 == 2 {
-		_, _ = s.DB.Exec(`UPDATE webhook_deliveries SET status = 'success', http_code = ?,
-			attempts = attempts + 1, delivered_at = datetime('now') WHERE id = ?`, res.StatusCode, id)
-		auth.Audit(s.DB, orgID, nil, "webhook.deliver", "webhook/"+id,
-			map[string]any{"event": event, "http_code": res.StatusCode, "attempts": attempts + 1}, "")
+		_ = outbox.Complete(s.DB, `UPDATE webhook_deliveries SET status='success',http_code=?,attempts=attempts+1,delivered_at=datetime('now'),lease_token='',lease_until=0 WHERE id=? AND lease_token=? AND lease_until>?`, []any{res.StatusCode, id, lease, time.Now().Unix()}, audit.Rec{OrgID: orgID, ActorID: "system", ActorType: "system", Action: "webhook.deliver", Resource: "webhook/" + id, Metadata: map[string]any{"event": event, "http_code": res.StatusCode, "attempts": attempts + 1}})
+
 		return
 	}
-	s.finishFail(id, orgID, event, attempts, "HTTP "+strconv.Itoa(res.StatusCode))
+	s.finishFail(id, lease, orgID, event, attempts, "HTTP "+strconv.Itoa(res.StatusCode))
 }
 
-func (s *Service) finishFail(id, orgID, event string, attempts int, cause string) {
+func (s *Service) finishFail(id, lease, orgID, event string, attempts int, cause string) {
 	attempts++
-	status, nextAt := retryAfterFail(attempts)
+	status, next := retryAfterFail(attempts)
+	action := "webhook.retry"
 	if status == "dead" {
-		_ = auth.Audit(s.DB, orgID, nil, "webhook.dead", "webhook/"+id,
-			map[string]any{"event": event, "error": cause, "attempts": attempts}, "")
+		action = "webhook.dead"
 	}
-	_, _ = s.DB.Exec(`UPDATE webhook_deliveries SET status = ?, attempts = ?, next_attempt_at = ?,
-		error = ? WHERE id = ?`, status, attempts, nextAt, cause, id)
+	_ = outbox.Complete(s.DB, `UPDATE webhook_deliveries SET status=?,attempts=?,next_attempt_at=?,error='webhook attempt failed',lease_token='',lease_until=0 WHERE id=? AND lease_token=? AND lease_until>?`, []any{status, attempts, next, id, lease, time.Now().Unix()}, audit.Rec{OrgID: orgID, ActorID: "system", ActorType: "system", Action: action, Resource: "webhook/" + id, Metadata: map[string]any{"event": event, "attempts": attempts}})
+
 }
 
 // ---------- HTTP ----------
@@ -247,8 +258,8 @@ func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (orgID, slug str
 
 func manageOnly(db *sql.DB, w http.ResponseWriter, r *http.Request, orgID string) bool {
 	u := auth.From(r)
-	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", rbac.Admin, "") {
-		auth.Deny(db, w, r, orgID, rbac.Admin, "org/webhooks")
+	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", auth.DelegationAction(u), "") {
+		auth.Deny(db, w, r, orgID, auth.DelegationAction(u), "org/webhooks")
 		return false
 	}
 	return true
@@ -331,20 +342,26 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	secretEnc, err := tc.Encrypt(s.MasterKey, b.Secret)
+	id := tc.NewID()
+	secretEnc, err := tc.Seal(s.MasterKey, b.Secret, tc.Context{Purpose: "webhook", Org: orgID, Object: id, Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	evJSON, _ := json.Marshal(b.Events)
-	id := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO webhooks (id, org_id, url, secret_enc, events)
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO webhooks (id, org_id, url, secret_enc, events)
 		VALUES (?, ?, ?, ?, ?)`, id, orgID, b.URL, secretEnc, string(evJSON)); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "webhook.create", "org/"+slug+"/webhook/"+id,
-		map[string]any{"url": b.URL, "events": b.Events}, ipOf(r))
+	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "webhook.create", "org/"+slug+"/webhook/"+id, map[string]any{"events": b.Events}) {
+		return
+	}
 	writeJSON(w, 201, map[string]any{"id": id, "url": b.URL, "secret": b.Secret, "events": b.Events})
 }
 
@@ -367,11 +384,18 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if _, err := s.DB.Exec(`DELETE FROM webhooks WHERE id = ? AND org_id = ?`, id, orgID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, ok := auth.BeginMutation(s.DB, w, r)
+	if !ok {
 		return
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "webhook.delete", "org/"+slug+"/webhook/"+id, nil, ipOf(r))
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM webhooks WHERE id=? AND org_id=?`, id, orgID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+		return
+	}
+	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "webhook.delete", "org/"+slug+"/webhook/"+id, nil) {
+		return
+	}
 	writeJSON(w, 200, map[string]any{"id": id, "deleted": true})
 }
 

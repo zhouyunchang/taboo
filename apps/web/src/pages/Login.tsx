@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
+import ValidatedForm from '../components/ValidatedForm';
 import type { User } from '../api';
 
 interface Tokens { access: string; refresh: string }
@@ -67,7 +68,7 @@ export default function Login({ onSuccess }: Props) {
   if (challenge) {
     return (
       <div className="center-screen">
-        <form className="card auth-card" onSubmit={submit2FA}>
+        <ValidatedForm className="card auth-card" onSubmit={submit2FA}>
           <div className="brand">
             <span className="brand-mark">禁</span>
             <div>
@@ -80,12 +81,12 @@ export default function Login({ onSuccess }: Props) {
             <input value={code} onChange={(e) => setCode(e.target.value)} required autoFocus
               placeholder="123456 或 abcd-efgh-ijkl" autoComplete="one-time-code" />
           </label>
-          {error && <div className="error">{error}</div>}
+          {error && <div className="error" role="alert">{error}</div>}
           <button type="submit" disabled={busy}>{busy ? '验证中…' : '验证并登录'}</button>
-          <p className="muted switch" onClick={() => { setChallenge(''); setCode(''); setError(''); }}>
+          <button type="button" className="ghost switch" onClick={() => { setChallenge(''); setCode(''); setError(''); }}>
             返回重新登录
-          </p>
-        </form>
+          </button>
+        </ValidatedForm>
       </div>
     );
   }
@@ -95,7 +96,7 @@ export default function Login({ onSuccess }: Props) {
 
   return (
     <div className="center-screen">
-      <form className="card auth-card" onSubmit={submit}>
+      <ValidatedForm className="card auth-card" onSubmit={submit}>
         <div className="brand">
           <span className="brand-mark">禁</span>
           <div>
@@ -131,14 +132,14 @@ export default function Login({ onSuccess }: Props) {
               密码
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
             </label>
-            {error && <div className="error">{error}</div>}
+            {error && <div className="error" role="alert">{error}</div>}
             <button type="submit" disabled={busy}>{busy ? '处理中…' : mode === 'login' ? '登录' : '注册'}</button>
           </>
         )}
 
-        {!showPassword && error && <div className="error">{error}</div>}
+        {!showPassword && error && <div className="error" role="alert">{error}</div>}
         {!passwordEnabled && sources.length === 0 && (
-          <p className="muted">未配置外部用户源，且已关闭密码登录。请联系管理员接入 Keycloak 等 IdP。</p>
+          <p className="muted">未配置外部用户源，且已关闭密码登录。请联系管理员配置身份连接。</p>
         )}
 
         {mode === 'login' && passwordEnabled && (
@@ -156,11 +157,11 @@ export default function Login({ onSuccess }: Props) {
         )}
 
         {showRegisterToggle && (
-          <p className="muted switch" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
+          <button type="button" className="ghost switch" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
             {mode === 'login' ? '没有账号？注册（自动创建个人组织）' : '已有账号？去登录'}
-          </p>
+          </button>
         )}
-      </form>
+      </ValidatedForm>
     </div>
   );
 }

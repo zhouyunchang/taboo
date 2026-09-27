@@ -14,7 +14,7 @@ import (
 // 需 TABOO_OIDC_ISSUER + TABOO_OIDC_CLIENT_ID + TABOO_OIDC_CLIENT_SECRET + TABOO_OIDC_ORG（已有组织 slug）。
 // 已存在相同 issuer 的配置则跳过，避免覆盖手工修改。
 func BootstrapFromEnv(db *sql.DB, masterKey []byte) {
-	issuer := strings.TrimSuffix(os.Getenv("TABOO_OIDC_ISSUER"), "/")
+	issuer := os.Getenv("TABOO_OIDC_ISSUER")
 	clientID := os.Getenv("TABOO_OIDC_CLIENT_ID")
 	secret := os.Getenv("TABOO_OIDC_CLIENT_SECRET")
 	orgSlug := os.Getenv("TABOO_OIDC_ORG")
@@ -40,18 +40,29 @@ func BootstrapFromEnv(db *sql.DB, masterKey []byte) {
 		log.Printf("[taboo] OIDC bootstrap: %v", err)
 		return
 	}
+	allowed := false
+	for _, candidate := range strings.Split(os.Getenv("TABOO_ISSUER_ALLOWLIST")+","+os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ",") {
+		if strings.TrimSpace(candidate) == issuer {
+			allowed = true
+		}
+	}
+	if !allowed {
+		log.Println("[taboo] OIDC bootstrap: issuer is not in operator allowlist")
+		return
+	}
 	if _, _, err := discoCache.get("probe-"+tc.NewID(), issuer); err != nil {
 		log.Printf("[taboo] OIDC bootstrap: discovery failed for %s: %v", issuer, err)
 		return
 	}
-	enc, err := tc.Encrypt(masterKey, secret)
+	id := tc.NewID()
+	enc, err := tc.Seal(masterKey, secret, tc.Context{Purpose: "oidc-client", Org: orgID, Object: id, Version: 1})
 	if err != nil {
 		log.Printf("[taboo] OIDC bootstrap: encrypt secret: %v", err)
 		return
 	}
 	name := os.Getenv("TABOO_OIDC_NAME")
 	if name == "" {
-		name = "Keycloak"
+		name = "OpenID Connect"
 	}
 	roleClaim := os.Getenv("TABOO_OIDC_ROLE_CLAIM")
 	if roleClaim == "" {
@@ -66,12 +77,11 @@ func BootstrapFromEnv(db *sql.DB, masterKey []byte) {
 		_ = json.Unmarshal([]byte(raw), &roleMap)
 	}
 	roleJSON, _ := json.Marshal(roleMap)
-	id := tc.NewID()
 	if _, err := db.Exec(`INSERT INTO oidc_providers
 		(id, org_id, name, issuer, client_id, client_secret_enc, scopes, role_claim, role_map, default_role,
 		 username_claim, public_login, autocreate, sync_role, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'email', 1, 1, 1, 1)`,
-		id, orgID, name, issuer, clientID, enc, "openid,email,profile", roleClaim, string(roleJSON), defRole); err != nil {
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'email', 1, ?, 1, 1)`,
+		id, orgID, name, issuer, clientID, enc, "openid,email,profile", roleClaim, string(roleJSON), defRole, btoi(os.Getenv("TABOO_OIDC_AUTOCREATE") == "true")); err != nil {
 		log.Printf("[taboo] OIDC bootstrap insert: %v", err)
 		return
 	}

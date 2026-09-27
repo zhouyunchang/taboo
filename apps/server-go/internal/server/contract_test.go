@@ -33,6 +33,21 @@ func TestRoutesDocumentedInOpenAPI(t *testing.T) {
 		t.Fatalf("read openapi.yaml: %v", err)
 	}
 
+	documented := map[string]bool{}
+	currentPath := ""
+	for _, line := range strings.Split(string(spec), "\n") {
+		if strings.HasPrefix(line, "  /api/") {
+			currentPath = strings.TrimSuffix(strings.TrimSpace(line), ":")
+			continue
+		}
+		if strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "     ") {
+			method := strings.TrimSuffix(strings.TrimSpace(line), ":")
+			switch method {
+			case "get", "post", "put", "patch", "delete", "options", "head":
+				documented[strings.ToUpper(method)+" "+currentPath] = true
+			}
+		}
+	}
 	var undocumented []string
 	err = chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if method == "*" {
@@ -43,7 +58,7 @@ func TestRoutesDocumentedInOpenAPI(t *testing.T) {
 			return nil
 		}
 		normalized := strings.TrimSuffix(route, "/")
-		if normalized != "/" && !strings.Contains(string(spec), normalized+":") {
+		if normalized != "/" && !documented[method+" "+normalized] {
 			undocumented = append(undocumented, method+" "+route)
 		}
 		return nil

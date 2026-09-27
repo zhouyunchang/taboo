@@ -100,10 +100,11 @@ func NewDEKCache() *DEKCache { return &DEKCache{deks: map[string][]byte{}} }
 func (c *DEKCache) Get(masterKey []byte, orgID, dekEncrypted string) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if dek, ok := c.deks[orgID]; ok {
-		return dek, nil
+	cacheKey := SHA256(orgID + "\x00" + dekEncrypted + "\x00" + hex.EncodeToString(masterKey))
+	if dek, ok := c.deks[cacheKey]; ok {
+		return append([]byte(nil), dek...), nil
 	}
-	hexDEK, err := Decrypt(masterKey, dekEncrypted)
+	hexDEK, err := Open(masterKey, dekEncrypted, DEKContext(orgID))
 	if err != nil {
 		return nil, fmt.Errorf("unwrap org DEK: %w", err)
 	}
@@ -111,8 +112,15 @@ func (c *DEKCache) Get(masterKey []byte, orgID, dekEncrypted string) ([]byte, er
 	if err != nil || len(dek) != KeyLen {
 		return nil, errors.New("invalid org DEK")
 	}
-	c.deks[orgID] = dek
-	return dek, nil
+	// Bounded cache; replacement envelopes and master-key changes miss automatically.
+	if len(c.deks) >= 256 {
+		for k, v := range c.deks {
+			clear(v)
+			delete(c.deks, k)
+		}
+	}
+	c.deks[cacheKey] = dek
+	return append([]byte(nil), dek...), nil
 }
 
 // ---------- 密码哈希：Argon2id（新）+ scrypt（旧校验/迁移） ----------

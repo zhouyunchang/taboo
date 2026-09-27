@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -15,6 +16,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 )
 
 // validKey：key 为单段标识（folder 与 key 分离，见 #16）—— 禁 '/'、'.'/'..'、首尾空白与控制字符
@@ -33,15 +35,17 @@ type Service struct {
 }
 
 type Meta struct {
-	ID      string   `json:"id"`
-	Folder  string   `json:"folder"`
-	Key     string   `json:"key"`
-	Comment string   `json:"comment"`
-	Tags    []string `json:"tags"`
-	Version int      `json:"version"`
-	Updated  string   `json:"updated_at"`
-	CanRev   bool     `json:"canReveal"`
-	CanWrite bool     `json:"canWrite"`
+	ID          string   `json:"id"`
+	Folder      string   `json:"folder"`
+	Key         string   `json:"key"`
+	Comment     string   `json:"comment"`
+	Tags        []string `json:"tags"`
+	Version     int      `json:"version"`
+	Updated     string   `json:"updated_at"`
+	CanRev      bool     `json:"canReveal"`
+	CanWrite    bool     `json:"canWrite"`
+	CanDelete   bool     `json:"canDelete"`
+	CanRollback bool     `json:"canRollback"`
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -53,12 +57,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, e *apperr.Error) { writeJSON(w, e.Status, e) }
 
-func (s *Service) enqueue(tx outbox.DBTX, r *http.Request, p ProjectCtx, envSlug, folder, key string, version int, action string) (events.SecretEvent, error) {
+func (s *Service) enqueue(tx outbox.DBTX, r *http.Request, p ProjectCtx, envSlug, folder, key string, version int, action, secretID, envID string) (events.SecretEvent, error) {
 	u := auth.From(r)
 	e := events.SecretEvent{
 		EventID: tc.NewID(), OrgID: p.OrgID, ProjectID: p.ID, ProjectSlug: p.Slug,
 		EnvSlug: envSlug, Folder: folder, Key: key, Version: version, Action: action,
-		ActorID: u.ID, ActorName: u.Name, ActorKind: u.Kind,
+		ActorID: u.ID, ActorName: u.Name, ActorKind: u.Kind, SecretID: secretID, EnvironmentID: envID,
+	}
+	if action != "deleted" {
+		if err := tx.QueryRow(`SELECT ciphertext FROM secret_versions WHERE secret_id=? AND version=?`, secretID, version).Scan(&e.Ciphertext); err != nil {
+			return e, err
+		}
 	}
 	if err := outbox.Insert(tx, e); err != nil {
 		return e, err
@@ -109,7 +118,7 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "reveal", envSlug) {
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "export", envSlug) {
 		return
 	}
 	envID, err := s.envOf(p.ID, envSlug)
@@ -122,7 +131,7 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "dek unwrap failed"))
 		return
 	}
-	rows, err := s.DB.Query(`SELECT s.key, v.ciphertext FROM secrets s
+	rows, err := s.DB.Query(`SELECT s.key, v.ciphertext,s.id,s.latest_version FROM secrets s
 		JOIN secret_versions v ON v.secret_id = s.id AND v.version = s.latest_version
 		WHERE s.env_id = ? ORDER BY s.key`, envID)
 	if err != nil {
@@ -130,12 +139,27 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	type kv struct{ k, ct string }
+	type kv struct {
+		k, ct, id, value string
+		version          int
+	}
 	var list []kv
 	for rows.Next() {
 		var x kv
-		_ = rows.Scan(&x.k, &x.ct)
+		if err := rows.Scan(&x.k, &x.ct, &x.id, &x.version); err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", "export read failed"))
+			return
+		}
 		list = append(list, x)
+	}
+	rows.Close()
+	for i := range list {
+		value, err := tc.Open(dek, list[i].ct, tc.SecretContext(p.OrgID, p.ID, envID, list[i].id, list[i].version))
+		if err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", "export decryption failed"))
+			return
+		}
+		list[i].value = value
 	}
 	if err := auth.AuditReq(s.DB, r, p.OrgID, u, "secrets.export", "project/"+p.Slug+"/env/"+envSlug,
 		map[string]any{"count": len(list)}); err != nil {
@@ -146,11 +170,7 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+p.Slug+"-"+envSlug+".env\"")
 	w.Header().Set("Cache-Control", "no-store")
 	for _, x := range list {
-		val, err := tc.Decrypt(dek, x.ct)
-		if err != nil {
-			continue
-		}
-		_, _ = w.Write([]byte(x.k + "=" + val + "\n"))
+		_, _ = w.Write([]byte(x.k + "=" + x.value + "\n"))
 	}
 }
 
@@ -169,6 +189,9 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	}
 	canRev := auth.Can(s.DB, u, p.OrgID, p.ID, "reveal", envSlug)
 	canWrite := auth.Can(s.DB, u, p.OrgID, p.ID, "write", envSlug)
+	canDelete := auth.Can(s.DB, u, p.OrgID, p.ID, "delete", envSlug)
+	canRollback := auth.Can(s.DB, u, p.OrgID, p.ID, "rollback", envSlug)
+	permissions := map[string]bool{"write": canWrite, "reveal": canRev, "delete": canDelete, "rollback": canRollback, "export": auth.Can(s.DB, u, p.OrgID, p.ID, "export", envSlug)}
 	// 支持 ?path=/a/b/ 按文件夹过滤；缺省列出整个环境
 	sql := `SELECT s.id, f.path, s.key, s.comment, s.tags, s.latest_version, s.updated_at
 		FROM secrets s JOIN folders f ON f.id = s.folder_id WHERE s.env_id = ?`
@@ -176,7 +199,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("path") != "" {
 		fid, _, ferr := s.folderRef(envID, r.URL.Query().Get("path"), false)
 		if ferr != nil {
-			writeJSON(w, 200, map[string]any{"secrets": []Meta{}})
+			writeJSON(w, 200, map[string]any{"secrets": []Meta{}, "permissions": permissions})
 			return
 		}
 		sql += ` AND s.folder_id = ?`
@@ -198,11 +221,13 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(tags), &m.Tags)
 		m.CanRev = canRev
 		m.CanWrite = canWrite
+		m.CanDelete = canDelete
+		m.CanRollback = canRollback
 		out = append(out, m)
 		count++
 	}
 	_ = count
-	writeJSON(w, 200, map[string]any{"secrets": out})
+	writeJSON(w, 200, map[string]any{"secrets": out, "permissions": permissions})
 }
 
 // POST /secrets?env=dev —— 创建/更新（产生新版本）
@@ -219,13 +244,17 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var b struct {
-		Key     string   `json:"key"`
-		Value   *string  `json:"value"`
-		Comment *string  `json:"comment"`
-		Tags    []string `json:"tags"`
+		Key             string   `json:"key"`
+		Value           *string  `json:"value"`
+		Comment         *string  `json:"comment"`
+		Tags            []string `json:"tags"`
+		ExpectedVersion *int     `json:"expectedVersion,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil || b.Key == "" || b.Value == nil {
 		writeErr(w, apperr.InvalidInput)
+		return
+	}
+	if s.checkReplay(w, r, p.OrgID, b) {
 		return
 	}
 	// #16：key 与 folder 分离设计 —— 禁止路径分隔符，否则写入后无法经 {key} 路由读取
@@ -243,11 +272,6 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "dek unwrap failed"))
 		return
 	}
-	ct, err := tc.Encrypt(dek, *b.Value)
-	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", "encrypt failed"))
-		return
-	}
 	// 事务：读旧版本 → 写新版本 → 推进 latest_version
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -255,6 +279,9 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if s.replayMutation(tx, w, r, p.OrgID, b) {
+		return
+	}
 	var secretID string
 	var latest int
 	var oldComment, oldTags string
@@ -265,10 +292,18 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
+	if b.ExpectedVersion != nil && *b.ExpectedVersion != latest {
+		writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
+		return
+	}
 	if isCreate {
 		secretID = tc.NewID()
 		if _, err := tx.Exec(`INSERT INTO secrets (id, env_id, folder, folder_id, key, comment, tags) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			secretID, envID, normPath, folderID, b.Key, strOr(b.Comment, ""), tagsOr(b.Tags)); err != nil {
+			if store.IsUniqueViolation(err) {
+				writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret was created concurrently; reload before retrying"))
+				return
+			}
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
 		}
@@ -280,15 +315,21 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	next := latest + 1
+	ct, err := tc.Seal(dek, *b.Value, tc.SecretContext(p.OrgID, p.ID, envID, secretID, next))
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "encrypt failed"))
+		return
+	}
+	if res, err := tx.Exec(`UPDATE secrets SET latest_version = ? WHERE id = ? AND latest_version=?`, next, secretID, latest); !updatedOne(res, err) {
+		writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
+		return
+	}
 	if _, err := tx.Exec(`INSERT INTO secret_versions (id, secret_id, version, ciphertext, created_by) VALUES (?, ?, ?, ?, ?)`,
 		tc.NewID(), secretID, next, ct, u.ID); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if _, err := tx.Exec(`UPDATE secrets SET latest_version = ? WHERE id = ?`, next, secretID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
+
 	action := "secrets.update"
 	eventAction := "updated"
 	if isCreate {
@@ -300,17 +341,18 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}
-	ev, err := s.enqueue(tx, r, p, envSlug, normPath, b.Key, next, eventAction)
+	_, err = s.enqueue(tx, r, p, envSlug, normPath, b.Key, next, eventAction, secretID, envID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if err := saveMutation(tx, r, p.OrgID, map[string]any{"key": b.Key, "version": next}); err != nil {
+		writeErr(w, apperr.New(503, "MUTATION_UNAVAILABLE", "retry with the same idempotency key"))
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
-	}
-	if s.Events != nil {
-		s.Events.Publish(ev)
 	}
 	writeJSON(w, 200, map[string]any{"key": b.Key, "version": next})
 }
@@ -354,7 +396,7 @@ func (s *Service) Reveal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "dek unwrap failed"))
 		return
 	}
-	val, err := tc.Decrypt(dek, ct)
+	val, err := tc.Open(dek, ct, tc.SecretContext(p.OrgID, p.ID, envID, secretID, latest))
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "decrypt failed"))
 		return
@@ -396,6 +438,7 @@ func (s *Service) Versions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.SecretNotFound)
 		return
 	}
+	canRollback := auth.Can(s.DB, auth.From(r), p.OrgID, p.ID, "rollback", envSlug)
 	rows, err := s.DB.Query(`SELECT version, created_by, created_at FROM secret_versions
 		WHERE secret_id = ? ORDER BY version DESC`, secretID)
 	if err != nil {
@@ -414,7 +457,7 @@ func (s *Service) Versions(w http.ResponseWriter, r *http.Request) {
 		_ = rows.Scan(&x.Version, &x.CreatedBy, &x.CreatedAt)
 		out = append(out, x)
 	}
-	writeJSON(w, 200, map[string]any{"key": key, "latest": latest, "versions": out})
+	writeJSON(w, 200, map[string]any{"key": key, "latest": latest, "versions": out, "canRollback": canRollback})
 }
 
 // POST /secrets/{key}/rollback {version}
@@ -422,7 +465,7 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "write", envSlug) {
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "rollback", envSlug) {
 		return
 	}
 	envID, err := s.envOf(p.ID, envSlug)
@@ -431,14 +474,18 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var b struct {
-		Version int `json:"version"`
+		Version         int  `json:"version"`
+		ExpectedVersion *int `json:"expectedVersion,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil || b.Version < 1 {
 		writeErr(w, apperr.InvalidInput)
 		return
 	}
+	if s.checkReplay(w, r, p.OrgID, b) {
+		return
+	}
 	key := chi.URLParam(r, "key")
-	folderID, _, ferr := s.folderRef(envID, q(r, "path", "/"), false)
+	folderID, norm, ferr := s.folderRef(envID, q(r, "path", "/"), false)
 	if ferr != nil {
 		writeErr(w, apperr.SecretNotFound)
 		return
@@ -456,6 +503,21 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.VersionNotFound)
 		return
 	}
+	dek, err := s.orgDEK(p.OrgID)
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "DEK unavailable"))
+		return
+	}
+	value, err := tc.Open(dek, ct, tc.SecretContext(p.OrgID, p.ID, envID, secretID, b.Version))
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "decrypt failed"))
+		return
+	}
+	ct, err = tc.Seal(dek, value, tc.SecretContext(p.OrgID, p.ID, envID, secretID, latest+1))
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "encrypt failed"))
+		return
+	}
 	next := latest + 1
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -463,45 +525,43 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if s.replayMutation(tx, w, r, p.OrgID, b) {
+		return
+	}
+	if b.ExpectedVersion != nil && *b.ExpectedVersion != latest {
+		writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
+		return
+	}
+	if res, err := tx.Exec(`UPDATE secrets SET latest_version = ?, updated_at = datetime('now') WHERE id = ? AND latest_version=?`,
+		next, secretID, latest); !updatedOne(res, err) {
+		writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
+		return
+	}
 	if _, err := tx.Exec(`INSERT INTO secret_versions (id, secret_id, version, ciphertext, created_by) VALUES (?, ?, ?, ?, ?)`,
 		tc.NewID(), secretID, next, ct, u.ID); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if _, err := tx.Exec(`UPDATE secrets SET latest_version = ?, updated_at = datetime('now') WHERE id = ?`,
-		next, secretID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
+
 	if err := auth.AuditReq(tx, r, p.OrgID, u, "secrets.rollback", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key,
 		map[string]any{"from": b.Version, "to": next}); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}
-	norm := folderPathOf(r, s, envID)
-	ev, err := s.enqueue(tx, r, p, envSlug, norm, key, next, "rolled_back")
+	_, err = s.enqueue(tx, r, p, envSlug, norm, key, next, "rolled_back", secretID, envID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if err := saveMutation(tx, r, p.OrgID, map[string]any{"key": key, "version": next, "rolledBackFrom": b.Version}); err != nil {
+		writeErr(w, apperr.New(503, "MUTATION_UNAVAILABLE", "retry with the same idempotency key"))
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if s.Events != nil {
-		s.Events.Publish(ev)
-	}
 	writeJSON(w, 200, map[string]any{"key": key, "version": next, "rolledBackFrom": b.Version})
-}
-
-// folderPathOf 解析当前请求 folder 参数的物化路径（发布事件用）
-func folderPathOf(r *http.Request, s *Service, envID string) string {
-	fid, norm, err := s.folderRef(envID, q(r, "path", "/"), false)
-	_ = fid
-	if err != nil {
-		return "/"
-	}
-	return norm
 }
 
 // DELETE /secrets/{key}?env=dev —— 删除密钥（版本级联删除；事件驱动 webhook/sync 感知）
@@ -509,12 +569,15 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "write", envSlug) {
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "delete", envSlug) {
 		return
 	}
 	envID, err := s.envOf(p.ID, envSlug)
 	if err != nil {
 		writeErr(w, apperr.EnvNotFound)
+		return
+	}
+	if s.checkReplay(w, r, p.OrgID, nil) {
 		return
 	}
 	key := chi.URLParam(r, "key")
@@ -530,14 +593,28 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.SecretNotFound)
 		return
 	}
+	if expected := r.URL.Query().Get("expectedVersion"); expected != "" {
+		version, e := strconv.Atoi(expected)
+		if e != nil || version < 1 {
+			writeErr(w, apperr.InvalidInput)
+			return
+		}
+		if version != latest {
+			writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
+			return
+		}
+	}
 	tx, err := s.DB.Begin()
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM secrets WHERE id = ?`, secretID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	if s.replayMutation(tx, w, r, p.OrgID, nil) {
+		return
+	}
+	if res, err := tx.Exec(`DELETE FROM secrets WHERE id = ? AND latest_version=?`, secretID, latest); !updatedOne(res, err) {
+		writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
 		return
 	}
 	if err := auth.AuditReq(tx, r, p.OrgID, u, "secrets.delete", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key,
@@ -545,17 +622,18 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}
-	ev, err := s.enqueue(tx, r, p, envSlug, normPath, key, latest, "deleted")
+	_, err = s.enqueue(tx, r, p, envSlug, normPath, key, latest, "deleted", secretID, envID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if err := saveMutation(tx, r, p.OrgID, map[string]any{"key": key, "deleted": true}); err != nil {
+		writeErr(w, apperr.New(503, "MUTATION_UNAVAILABLE", "retry with the same idempotency key"))
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
-	}
-	if s.Events != nil {
-		s.Events.Publish(ev)
 	}
 	writeJSON(w, 200, map[string]any{"key": key, "deleted": true})
 }
@@ -594,4 +672,12 @@ func tagsOrDefault(tags []string, old string) string {
 		return old
 	}
 	return tagsOr(tags)
+}
+
+func updatedOne(result sql.Result, err error) bool {
+	if err != nil {
+		return false
+	}
+	n, err := result.RowsAffected()
+	return err == nil && n == 1
 }

@@ -4,6 +4,126 @@
  */
 
 export interface paths {
+    "/api/v1/auth/oidc/{slug}/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        /** List registered sign-in choices for the current organization member */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    slug: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Public connection identifiers and current authentication source */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            authentication: "local" | "oidc";
+                            connections: {
+                                id: string;
+                                name: string;
+                                issuer: string;
+                                current: boolean;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/{slug}/replace": {
+        parameters: {
+            query: {
+                pid: string;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin explicit proof of a replacement sign-in identity
+         * @description Requires exact Origin, current membership and either a recent BFF session with CSRF or local password plus enabled TOTP. The browser-bound one-use OIDC callback preserves local IDs and grants, rejects an identity already owned by another account, unbinds the old identity and revokes old sessions. It never merges by email or copies legacy plaintext permissions.
+         */
+        post: {
+            parameters: {
+                query: {
+                    pid: string;
+                };
+                header?: never;
+                path: {
+                    slug: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: password */
+                        password?: string;
+                        code?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Browser flow cookie set; navigate to the registered authorization endpoint */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            authorization_url: string;
+                        };
+                    };
+                };
+                /** @description Old identity proof is invalid or expired */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Organization policy or required authentication strength is not satisfied */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/healthz": {
         parameters: {
             query?: never;
@@ -296,6 +416,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/oidc/{id}/security": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取连接会话与敏感操作策略 */
+        get: operations["getOIDCSecurity"];
+        /** 替换连接会话与敏感操作策略 */
+        put: operations["putOIDCSecurity"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/security": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getOrganizationSecurity */
+        get: operations["getOrganizationSecurity"];
+        /** putOrganizationSecurity */
+        put: operations["putOrganizationSecurity"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/members/{userId}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getMemberActions */
+        get: operations["getMemberActions"];
+        /** putMemberActions */
+        put: operations["putMemberActions"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{slug}/invites": {
         parameters: {
             query?: never;
@@ -465,7 +639,8 @@ export interface paths {
         get: operations["revealSecret"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** 删除密钥和历史版本（独立 delete 权限，事务审计） */
+        delete: operations["deleteSecret"];
         options?: never;
         head?: never;
         patch?: never;
@@ -583,7 +758,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 手动回收 lease（立即 DROP USER；lease 所属身份或 owner/admin） */
+        /** 持久化回收 lease；失败保留任务并重试（外部登录仅 owner） */
         post: operations["revokeLease"];
         delete?: never;
         options?: never;
@@ -712,6 +887,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 当前外部用户已加入的组织及匹配 issuer 的登录连接；切换需要重新验证 */
+        get: operations["listBrowserOrganizations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 检查 BFF 会话；必要时刷新上游 Token，但不延长本地会话绝对期限 */
+        get: operations["getBrowserSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 删除本地 BFF 会话并清除 Cookie；已启用 RP Logout 时返回发现的上游退出 URL */
+        post: operations["logoutBrowserSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/oidc/{slug}/login": {
         parameters: {
             query?: never;
@@ -736,7 +962,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** OIDC callback（code 换 id_token，验签 + JIT 入组 + 发本地会话） */
+        /** OIDC callback（code 换 id_token，验签 + 显式 JIT 准入 + HttpOnly BFF 会话） */
         get: operations["oidcCallback"];
         put?: never;
         post?: never;
@@ -850,6 +1076,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/oauth-trusts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取机器 OAuth 信任连接（组织 owner） */
+        get: operations["listOAuthTrusts"];
+        put?: never;
+        /** 登记机器 OAuth 信任连接（组织 owner） */
+        post: operations["createOAuthTrust"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/oauth-trusts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** 删除信任并撤销其工作负载（组织 owner） */
+        delete: operations["deleteOAuthTrust"];
+        options?: never;
+        head?: never;
+        /** 更新或停用机器 OAuth 信任连接（组织 owner） */
+        patch: operations["updateOAuthTrust"];
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/workloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取外部工作负载与权限（组织 owner） */
+        get: operations["listWorkloads"];
+        put?: never;
+        /** 显式绑定外部机器主体（组织 owner） */
+        post: operations["createWorkload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/workloads/{id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 替换工作负载显式权限（组织 owner） */
+        put: operations["putWorkloadGrants"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/workloads/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 撤销工作负载绑定（组织 owner） */
+        post: operations["revokeWorkload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -876,11 +1190,11 @@ export interface components {
             login_url?: string;
         };
         OrgMembership: {
-            id?: string;
-            name?: string;
-            slug?: string;
+            id: string;
+            name: string;
+            slug: string;
             /** @enum {string} */
-            role?: "owner" | "admin" | "developer" | "viewer";
+            role: "owner" | "admin" | "developer" | "viewer";
             restricted?: boolean;
         };
         OrgMember: {
@@ -899,50 +1213,153 @@ export interface components {
             }[];
         };
         Project: {
-            id?: string;
-            name?: string;
-            slug?: string;
+            id: string;
+            name: string;
+            slug: string;
             /** Format: date-time */
             created_at?: string;
         };
         Environment: {
-            id?: string;
-            name?: string;
-            slug?: string;
+            id: string;
+            name: string;
+            slug: string;
             sort_order?: number;
             protected?: boolean;
         };
         Folder: {
-            id?: string;
+            id: string;
             /** @description 根目录为空串 */
-            parent_id?: string;
-            name?: string;
+            parent_id: string;
+            name: string;
             /** @example /db/mysql/ */
-            path?: string;
+            path: string;
+        };
+        SecretPermissions: {
+            write: boolean;
+            reveal: boolean;
+            export: boolean;
+            rollback: boolean;
+            delete: boolean;
         };
         SecretMeta: {
-            id?: string;
-            folder?: string;
-            key?: string;
-            comment?: string;
-            tags?: string[];
-            version?: number;
-            updated_at?: string;
-            canReveal?: boolean;
-            canWrite?: boolean;
+            id: string;
+            folder: string;
+            key: string;
+            comment: string;
+            tags: string[];
+            version: number;
+            updated_at: string;
+            canReveal: boolean;
+            canWrite: boolean;
+            canDelete?: boolean;
+            canRollback?: boolean;
         };
         SecretValue: components["schemas"]["SecretMeta"] & {
-            value?: string;
+            value: string;
         };
         SecretVersion: {
-            version?: number;
-            created_by?: string;
-            created_at?: string;
+            version: number;
+            created_by: string;
+            created_at: string;
+        };
+        OIDCSecurity: {
+            /** @enum {string} */
+            profile: "BOUNDED" | "ONLINE_REQUIRED";
+            session_ttl: number;
+            max_auth_age: number;
+            /** @description 可接受的精确 acr 值，满足任一项 */
+            required_acr: string[];
+            /** @description 必须同时存在的精确 amr 值 */
+            required_amr: string[];
+            /** @description ONLINE_REQUIRED 必填；上游内省必须返回此 audience */
+            online_audience: string;
+            /** @description 显式启用发现的 RP-Initiated Logout */
+            rp_logout: boolean;
+        };
+        OrganizationSecurity: {
+            /** @enum {string} */
+            login_policy: "LOCAL_OR_EXTERNAL" | "EXTERNAL_REQUIRED";
+            /** @enum {string} */
+            readonly external_secret_permissions?: "EXPLICIT_ACTIONS";
+        };
+        MemberActionGrant: {
+            project_id: string;
+            environment_id: string;
+            /** @enum {string} */
+            action: "read" | "write" | "reveal" | "export" | "rollback" | "delete";
+        };
+        MemberActions: {
+            grants: components["schemas"]["MemberActionGrant"][];
+        };
+        OAuthTrustInput: {
+            name?: string;
+            /** @description 操作员允许的精确 issuer；已有信任不允许更换 issuer */
+            issuer?: string;
+            /** @description 必须在资源 Token 中验证的 audience */
+            audience?: string;
+            /**
+             * @default oauth
+             * @enum {string}
+             */
+            metadata_mode: "oauth" | "oidc";
+            /**
+             * @default JWT_RFC9068
+             * @enum {string}
+             */
+            token_profile: "JWT_RFC9068" | "INTROSPECTION_RFC7662";
+            /** @description 内省使用的资源服务器 Client */
+            client_id?: string;
+            client_secret?: string;
+            /** @default 900 */
+            max_lifetime: number;
+            enabled?: boolean;
+        };
+        OAuthTrust: {
+            id: string;
+            name: string;
+            issuer: string;
+            audience: string;
+            /** @enum {string} */
+            metadata_mode: "oauth" | "oidc";
+            /** @enum {string} */
+            token_profile: "JWT_RFC9068" | "INTROSPECTION_RFC7662";
+            client_id?: string;
+            max_lifetime: number;
+            enabled: boolean;
+            /** @enum {string} */
+            revocation_profile: "BOUNDED" | "ONLINE_REQUIRED";
+        };
+        WorkloadGrant: {
+            project_id: string;
+            environment_id: string;
+            /**
+             * @description 六种动作独立，不隐含其他动作
+             * @enum {string}
+             */
+            action: "read" | "reveal" | "write" | "export" | "rollback" | "delete";
+            /** @description 该动作必须在已验证 Token 中出现的精确 scope */
+            required_scope: string;
+        };
+        WorkloadGrantsInput: {
+            grants: components["schemas"]["WorkloadGrant"][];
+        };
+        WorkloadInput: components["schemas"]["WorkloadGrantsInput"] & {
+            name: string;
+            trust_id: string;
+            /** @description 已确认的外部机器 sub，与 client_id 不假定相等 */
+            subject: string;
+            client_id: string;
+        };
+        Workload: components["schemas"]["WorkloadInput"] & {
+            id: string;
+            enabled: boolean;
         };
         SecretUpsertRequest: {
             /** @description 单段 key，禁止包含 /（folder 与 key 分离，#16） */
             key: string;
             value: string;
+            /** @description 当前版本前置条件，0 表示仅创建；不匹配返回 409 */
+            expectedVersion?: number;
             comment?: string;
             tags?: string[];
         };
@@ -1003,13 +1420,13 @@ export interface components {
             updated_at?: string;
         };
         Webhook: {
-            id?: string;
-            url?: string;
+            id: string;
+            url: string;
             /** @description 仅创建响应返回一次 */
             secret?: string;
-            events?: string[];
-            active?: boolean;
-            created_at?: string;
+            events: string[];
+            active: boolean;
+            created_at: string;
         };
         OIDCProvider: {
             id?: string;
@@ -1027,7 +1444,7 @@ export interface components {
             /** @description 在登录页展示为实例级 Realm */
             public_login?: boolean;
             autocreate?: boolean;
-            /** @description 每次 SSO 登录按组映射同步角色（不降级最后一名 owner） */
+            /** @description 仅同步仍由此连接管理的角色；不覆盖本地显式赋权 */
             sync_role?: boolean;
             enabled?: boolean;
             created_at?: string;
@@ -1035,7 +1452,7 @@ export interface components {
         };
         OIDCProviderInput: {
             name?: string;
-            /** @example https://keycloak.example.com/realms/company */
+            /** @example https://idp.example.org */
             issuer?: string;
             client_id?: string;
             /** @description Master Key 加密落库，不回显；PATCH 时可省略 */
@@ -1047,9 +1464,12 @@ export interface components {
              * @default groups
              */
             role_claim: string;
-            /** @default email */
-            username_claim: string;
-            /** @description claim 值 → 角色；Keycloak 组路径会匹配末段 */
+            /**
+             * @deprecated
+             * @description 兼容旧配置；新身份键固定为 issuer 与 sub
+             */
+            username_claim?: string;
+            /** @description claim 完整值精确匹配 → 角色；不匹配路径末段 */
             role_map?: {
                 [key: string]: string;
             };
@@ -1057,7 +1477,7 @@ export interface components {
             default_role: string;
             /** @default true */
             public_login: boolean;
-            /** @default true */
+            /** @default false */
             autocreate: boolean;
             /** @default true */
             sync_role: boolean;
@@ -1083,14 +1503,14 @@ export interface components {
             permission?: "read" | "reveal" | "write";
         };
         Identity: {
-            id?: string;
-            name?: string;
-            client_id?: string;
+            id: string;
+            name: string;
+            client_id: string;
             /** @enum {string} */
-            status?: "active" | "revoked";
-            token_ttl?: number;
-            created_at?: string;
-            scopes?: components["schemas"]["IdentityScope"][];
+            status: "active" | "revoked";
+            token_ttl: number;
+            created_at: string;
+            scopes: components["schemas"]["IdentityScope"][];
         };
         IdentityWithSecret: components["schemas"]["Identity"] & {
             /** @description 仅此一次展示 */
@@ -1161,7 +1581,7 @@ export interface components {
             /** @example taboo_a1b2c3d4e5f6 */
             username?: string;
             /** @enum {string} */
-            status?: "active" | "expired" | "revoked" | "failed";
+            status?: "active" | "revoking" | "expired" | "revoked" | "failed";
             expires_at?: number;
             seconds_left?: number;
             created_at?: string;
@@ -1793,6 +2213,158 @@ export interface operations {
             };
         };
     };
+    getOIDCSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 会话策略；变更使已有会话与登录请求失效 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OIDCSecurity"];
+                };
+            };
+        };
+    };
+    putOIDCSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OIDCSecurity"];
+            };
+        };
+        responses: {
+            /** @description 会话策略；变更使已有会话与登录请求失效 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OIDCSecurity"];
+                };
+            };
+        };
+    };
+    getOrganizationSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationSecurity"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    putOrganizationSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationSecurity"];
+            };
+        };
+        responses: {
+            /** @description 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationSecurity"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getMemberActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberActions"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    putMemberActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberActions"];
+            };
+        };
+        responses: {
+            /** @description 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberActions"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
     createInvite: {
         parameters: {
             query?: never;
@@ -2154,6 +2726,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         secrets?: components["schemas"]["SecretMeta"][];
+                        permissions?: components["schemas"]["SecretPermissions"];
                     };
                 };
             };
@@ -2167,7 +2740,7 @@ export interface operations {
                 path?: string;
             };
             header?: {
-                /** @description 幂等约定（v1.5 强制） */
+                /** @description 可选，最长 128 字符；同一主体和组织内相同请求重放原响应，不同请求复用返回 409 */
                 "Idempotency-Key"?: string;
             };
             path: {
@@ -2224,6 +2797,49 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    deleteSecret: {
+        parameters: {
+            query?: {
+                env?: components["parameters"]["Env"];
+                path?: string;
+                /** @description 当前版本前置条件，不匹配返回 409 */
+                expectedVersion?: number;
+            };
+            header?: {
+                /** @description 同一请求重放原响应，不同请求复用返回 409 */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        key: string;
+                        deleted: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description 版本或幂等键冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     secretVersions: {
         parameters: {
             query?: {
@@ -2248,6 +2864,7 @@ export interface operations {
                     "application/json": {
                         versions?: components["schemas"]["SecretVersion"][];
                         latest?: number;
+                        canRollback?: boolean;
                     };
                 };
             };
@@ -2260,7 +2877,10 @@ export interface operations {
                 env?: components["parameters"]["Env"];
                 path?: string;
             };
-            header?: never;
+            header?: {
+                /** @description 同一请求重放原响应，不同请求复用返回 409 */
+                "Idempotency-Key"?: string;
+            };
             path: {
                 pid: components["parameters"]["Pid"];
                 key: string;
@@ -2271,6 +2891,8 @@ export interface operations {
             content: {
                 "application/json": {
                     version: number;
+                    /** @description 当前版本前置条件，不匹配返回 409 */
+                    expectedVersion?: number;
                 };
             };
         };
@@ -2459,7 +3081,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 已回收（或原本非活跃） */
+            /** @description 已回收 */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2470,6 +3092,20 @@ export interface operations {
                         status?: string;
                     };
                 };
+            };
+            /** @description 已持久化回收请求，后台继续重试 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 回收任务正在执行 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -2741,6 +3377,104 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    listBrowserOrganizations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 仅返回当前用户的组织名称和已登记的登录链接 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        organizations?: {
+                            id?: string;
+                            name?: string;
+                            connection?: string;
+                            current?: boolean;
+                            login_url?: string;
+                        }[];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getBrowserSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description authenticated=false 或当前组织及内存 CSRF 凭据；Cache-Control no-store */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        authenticated: boolean;
+                        csrf_token?: string;
+                        organization_id?: string;
+                        /** @enum {string} */
+                        authentication?: "oidc";
+                        /** @enum {string} */
+                        revocation_profile?: "BOUNDED" | "ONLINE_REQUIRED";
+                        sensitive_operations_allowed?: boolean;
+                        /** Format: int64 */
+                        expires_at?: number;
+                        /** Format: int64 */
+                        auth_valid_until?: number;
+                        reauthentication_url?: string;
+                        rp_logout?: boolean;
+                    };
+                };
+            };
+        };
+    };
+    logoutBrowserSession: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 本地会话已删除；浏览器可导航到上游 RP Logout */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        logout_url: string;
+                    };
+                };
+            };
+            /** @description 会话已删除 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     oidcLogin: {
         parameters: {
             query?: {
@@ -2780,8 +3514,8 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description HTML 中间页：token 写入 localStorage 后跳转 / */
-            200: {
+            /** @description 设置 HttpOnly taboo.session Cookie 后跳转 /；不向浏览器暴露 Token */
+            303: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3026,6 +3760,358 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["NotFound"];
+        };
+    };
+    listOAuthTrusts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 信任连接，不含凭据 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        trusts: components["schemas"]["OAuthTrust"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createOAuthTrust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthTrustInput"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteOAuthTrust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateOAuthTrust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthTrustInput"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listWorkloads: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 外部工作负载 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        workloads: components["schemas"]["Workload"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createWorkload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkloadInput"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putWorkloadGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkloadGrantsInput"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revokeWorkload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                        revoked?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description 绑定冲突或更换 issuer 需要新信任 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 协议、存储或审计不可用 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
 }

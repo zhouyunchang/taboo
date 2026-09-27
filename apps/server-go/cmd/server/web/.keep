@@ -1,0 +1,2 @@
+This directory must exist for Go package tests in a clean checkout.
+Production builds populate it with make web or the Docker frontend stage.

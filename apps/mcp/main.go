@@ -30,13 +30,6 @@ var (
 	envDef  string
 )
 
-func mask(s string) string {
-	if len(s) <= 4 {
-		return "••••"
-	}
-	return s[:2] + strings.Repeat("•", len(s)-4) + s[len(s)-2:]
-}
-
 func dispatch(method string, params json.RawMessage) (any, *rpcError) {
 	switch method {
 	case "initialize":
@@ -118,17 +111,27 @@ func callTool(p toolCallParams) (any, *rpcError) {
 		if args.Key == "" {
 			return errorResult("missing required argument: key"), nil
 		}
+		if !args.Reveal {
+			path := args.Path
+			if path == "" {
+				path = "/"
+			}
+			items, err := client.ListSecrets(ctx, project, e, path)
+			if err != nil {
+				return toolErr(err), nil
+			}
+			for _, item := range items {
+				if item.Key == args.Key {
+					return textResult(fmt.Sprintf("%s=••••\n# folder=%s v%d · value not requested (reveal=false)", item.Key, item.Folder, item.Version)), nil
+				}
+			}
+			return errorResult("secret not found"), nil
+		}
 		sv, err := client.GetSecret(ctx, project, e, args.Path, args.Key)
 		if err != nil {
 			return toolErr(err), nil
 		}
-		value := mask(sv.Value)
-		note := "masked (reveal=false)"
-		if args.Reveal {
-			value = sv.Value
-			note = "REVEALED — 已记审计"
-		}
-		return textResult(fmt.Sprintf("%s=%s\n# folder=%s v%d · %s", sv.Key, value, sv.Folder, sv.Version, note)), nil
+		return textResult(fmt.Sprintf("%s=%s\n# folder=%s v%d · REVEALED — 已记审计", sv.Key, sv.Value, sv.Folder, sv.Version)), nil
 
 	default:
 		return errorResult("unknown tool: %s", p.Name), nil
@@ -180,7 +183,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, "taboo-mcp: TABOO_CLIENT_ID / TABOO_CLIENT_SECRET / TABOO_PROJECT_ID are required")
 		os.Exit(2)
 	}
-	client = taboo.New(base).WithIdentity(cid, csec)
+	mode := getenv("TABOO_AUTH_MODE", "local")
+	if mode == "oauth" {
+		var err error
+		client, err = taboo.New(base).WithOAuthClientCredentials(taboo.OAuthCredentials{Issuer: os.Getenv("TABOO_OAUTH_ISSUER"), MetadataMode: getenv("TABOO_OAUTH_METADATA_MODE", "oauth"), ClientID: cid, ClientSecret: csec, Scopes: strings.Fields(os.Getenv("TABOO_OAUTH_SCOPES")), Resource: os.Getenv("TABOO_OAUTH_RESOURCE"), Organization: os.Getenv("TABOO_ORG"), TrustID: os.Getenv("TABOO_OAUTH_TRUST_ID")})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "taboo-mcp: invalid external OAuth configuration:", err)
+			os.Exit(2)
+		}
+	} else if mode == "local" && os.Getenv("TABOO_OAUTH_ISSUER") == "" {
+		client = taboo.New(base).WithIdentity(cid, csec)
+	} else {
+		fmt.Fprintln(os.Stderr, "taboo-mcp: explicitly select TABOO_AUTH_MODE=oauth for external OAuth")
+		os.Exit(2)
+	}
 	serveStdio(os.Stdin, os.Stdout, dispatch)
 }
 

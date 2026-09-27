@@ -13,9 +13,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { runScan } from './scan.js';
+import { randomUUID } from 'node:crypto';
+import { externalOAuth } from './oauth.js';
 
 const BASE = process.env.TABOO_SERVER || 'http://localhost:7100';
-const SESSION = path.join(os.homedir(), '.taboo', 'session.json');
+const SESSION = process.env.TABOO_SESSION_FILE || path.join(os.homedir(), '.taboo', 'session.json');
 
 const [,, cmd, ...args] = process.argv;
 const flag = (name, def) => {
@@ -23,6 +25,9 @@ const flag = (name, def) => {
   return i >= 0 ? args[i + 1] : def;
 };
 const env = flag('env', 'dev');
+let oauth;
+try { oauth = externalOAuth(process.env, cmd === 'login' && args.includes('--oauth')); } catch (error) { console.error(error.message); process.exit(2); }
+process.on('unhandledRejection', (error) => { console.error(error?.message || 'request failed'); process.exit(1); });
 
 function saveSession(d) {
   fs.mkdirSync(path.dirname(SESSION), { recursive: true, mode: 0o700 });
@@ -56,27 +61,30 @@ async function ensureToken(s) {
   }
   return s;
 }
-async function call(method, p, body, raw = false) {
-  const s = await ensureToken(loadSession());
+async function call(method, p, body, raw = false, idempotencyKey) {
+  const s = oauth ? await oauth.session() : await ensureToken(loadSession());
   const res = await fetch(BASE + p, {
     method,
     headers: {
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(s?.access ? { Authorization: `Bearer ${s.access}` } : {}),
+      ...(s?.kind === 'oauth' ? { 'X-Taboo-Trust': s.trust, 'X-Taboo-Organization': s.organization } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
+    redirect: 'manual', signal: AbortSignal.timeout(30000),
   });
-  if (raw) return res;
+  if (raw && res.ok) return res;
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) { console.error(`error ${res.status}: ${data.code} ${data.message}`); process.exit(1); }
+  if (!res.ok) { console.error(`error ${res.status}: ${data.code || 'HTTP_ERROR'} ${data.message || 'request rejected'}`); process.exit(1); }
   return data;
 }
 
 async function projectId() {
-  const explicit = flag('project', null);
+  const explicit = flag('project', process.env.TABOO_PROJECT_ID || null);
   if (explicit) return explicit;
-  const s = loadSession();
-  if (s?.kind === 'identity') {
+  const s = oauth ? { kind: 'oauth' } : loadSession();
+  if (s?.kind === 'identity' || s?.kind === 'oauth') {
     console.error('机器身份会话请显式指定 --project <project_id>（scope 内项目）');
     process.exit(1);
   }
@@ -89,6 +97,7 @@ async function projectId() {
 
 switch (cmd) {
   case 'login': {
+    if (oauth) { await oauth.session(); console.log('External OAuth credentials verified; no token or credential saved to disk.'); break; }
     const clientId = flag('client-id', null);
     const clientSecret = flag('client-secret', null);
     if (clientId || clientSecret) {
@@ -109,7 +118,12 @@ switch (cmd) {
   case 'set': {
     const [key, value] = args.filter((a) => !a.startsWith('--'));
     if (!key || value === undefined) { console.error('usage: taboo set <KEY> <VALUE> [--env dev]'); process.exit(1); }
-    const d = await call('POST', `/api/v1/projects/${await projectId()}/secrets?env=${env}`, { key, value });
+    const idempotencyKey=flag('idempotency-key',randomUUID());
+    const expected=flag('expected-version',undefined);
+    if(expected!==undefined && (!/^\d+$/.test(expected)||!Number.isSafeInteger(Number(expected)))){console.error('--expected-version must be a non-negative integer');process.exit(2);}
+    const pid=await projectId();
+    console.error(`mutation receipt: ${idempotencyKey}; if the outcome is unknown, repeat the identical command with --idempotency-key ${idempotencyKey}`);
+    const d = await call('POST', `/api/v1/projects/${pid}/secrets?env=${encodeURIComponent(env)}`, { key, value, ...(expected!==undefined?{expectedVersion:Number(expected)}:{}) },false,idempotencyKey);
     console.log(`${key} saved (v${d.version})`);
     break;
   }
@@ -151,7 +165,7 @@ switch (cmd) {
 
   taboo login <email> <password>                用户登录
   taboo login --client-id X --client-secret Y   机器身份登录（token 临期自动重换）
-  taboo set <KEY> <VALUE> [--env] [--project]   写入/更新密钥
+  taboo set <KEY> <VALUE> [--env] [--project]   写入/更新密钥（--idempotency-key KEY --expected-version N）
   taboo get <KEY> [--env] [--project]           读取明文（审计）
   taboo list [--env] [--project]                列出密钥（无值）
   taboo export [--env] [--project]              导出 .env 格式到 stdout

@@ -56,6 +56,9 @@ func main() {
 
 	args := os.Args[1:]
 	if len(args) > 0 && args[0] == "backup" {
+		if cfg.DatabaseURL != "" {
+			log.Fatal("PostgreSQL backup requires pg_dump plus the configured root key; see the recovery runbook")
+		}
 		dest := "backup"
 		if len(args) > 1 {
 			dest = args[1]
@@ -67,7 +70,12 @@ func main() {
 		return
 	}
 
-	db, err := store.Open(cfg.DataDir)
+	var db *sql.DB
+	if cfg.DatabaseURL != "" {
+		db, err = store.OpenPostgres(context.Background(), cfg.DatabaseURL, cfg.DatabaseRuntimeRole)
+	} else {
+		db, err = store.Open(cfg.DataDir)
+	}
 	if err != nil {
 		log.Fatalf("[taboo] open db: %v", err)
 	}
@@ -92,6 +100,7 @@ func main() {
 	defer stop()
 
 	dynSvc := dynamic.New(db, masterKey)
+	defer dynSvc.Close()
 	deks := tc.NewDEKCache()
 	bus := events.NewBus()
 	syncs := &syncsvc.Service{DB: db, MasterKey: masterKey, DEKs: deks}
@@ -101,6 +110,9 @@ func main() {
 	ob := &outbox.Service{DB: db, Bus: bus}
 
 	r := server.New(&server.Deps{
+		PublicOrigin:    cfg.PublicOrigin,
+		SessionProfile:  cfg.SessionProfile,
+		IssuerAllowlist: cfg.IssuerAllowlist,
 		DB:              db,
 		MasterKey:       masterKey,
 		JWTSecret:       cfg.JWTSecret,
@@ -205,8 +217,8 @@ func runSelfCheck(db *sql.DB, masterKey []byte) {
 	}
 	check("argon2id verify", err)
 
-	var v int
-	check("read user_version", db.QueryRow(`PRAGMA user_version`).Scan(&v))
+	v, err := store.Version(db)
+	check("read schema version", err)
 	if v != store.SchemaVersion {
 		check("schema version", fmt.Errorf("user_version=%d, want %d", v, store.SchemaVersion))
 	} else {
@@ -216,9 +228,8 @@ func runSelfCheck(db *sql.DB, masterKey []byte) {
 		"users", "orgs", "secrets", "secret_versions", "audit_logs", "webhooks", "sync_targets",
 		"oidc_providers", "org_invites", "project_grants", "outbox_events", "audit_checkpoints",
 	} {
-		var n int
-		err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, t).Scan(&n)
-		if err == nil && n == 0 {
+		exists, err := store.HasTable(db, t)
+		if err == nil && !exists {
 			err = fmt.Errorf("missing table: %s", t)
 		}
 		check("table "+t, err)

@@ -20,7 +20,11 @@ func Backup(dataDir, destDir string) error {
 		return fmt.Errorf("source db: %w", err)
 	}
 	destDB := filepath.Join(destDir, "taboo.db")
-	_ = os.Remove(destDB)
+	if _, err := os.Stat(destDB); err == nil {
+		return fmt.Errorf("backup destination already contains taboo.db")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 
 	db, err := Open(dataDir)
 	if err != nil {
