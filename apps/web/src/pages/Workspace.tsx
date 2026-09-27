@@ -212,13 +212,16 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: string; env: string; projectSlug: string; canWrite: boolean }) {
+function SecretsPanel({ projectId, env, projectSlug, canWrite: legacyCanWrite }: { projectId: string; env: string; projectSlug: string; canWrite: boolean }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
   const [cur, setCur] = useState('/'); // 当前文件夹路径（物化路径 /a/b/）
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<string | null>(null); // key 或 '__new__'
   const [detail, setDetail] = useState<SecretMeta | null>(null);
+  const [permissions, setPermissions] = useState<{write:boolean;delete:boolean;rollback:boolean;export:boolean} | null>(null);
+  const canWrite = permissions?.write ?? (!hasBrowserSession() && legacyCanWrite);
+
 
   const loadFolders = useCallback(() => {
     api.get<{ folders: Folder[] }>(`/api/v1/projects/${projectId}/folders?env=${env}`)
@@ -227,9 +230,9 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: st
   }, [projectId, env]);
 
   const load = useCallback(() => {
-    api.get<{ secrets: SecretMeta[] }>(`/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(cur)}`)
-      .then((d) => setSecrets(d.secrets))
-      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
+    api.get<{ secrets: SecretMeta[]; permissions?: {write:boolean;delete:boolean;rollback:boolean;export:boolean} }>(`/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(cur)}`)
+      .then((d) => { setError(''); setSecrets(d.secrets); setPermissions(d.permissions ?? null); })
+      .catch((e) => { setSecrets([]); setPermissions({write:false,delete:false,rollback:false,export:false}); setEditing(null); setDetail(null); setError(e instanceof ApiError ? e.message : String(e)); });
   }, [projectId, env, cur]);
 
   useEffect(load, [load]);
@@ -299,7 +302,7 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite }: { projectId: st
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
       )}
       {detail && (
-        <DetailDrawer projectId={projectId} env={env} meta={detail}
+        <DetailDrawer projectId={projectId} env={env} meta={detail} onChanged={load}
           onClose={() => setDetail(null)} />
       )}
     </div>
@@ -356,6 +359,9 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
   onChanged: () => void; onEdit: () => void; onDetail: () => void;
 }) {
   const [value, setValue] = useState<string | null>(null);
+  useEffect(() => { setValue(null); }, [s.canReveal]);
+  useEffect(() => { const clear = () => setValue(null); window.addEventListener('blur', clear); return () => window.removeEventListener('blur', clear); }, []);
+
   const [err, setErr] = useState('');
 
   async function reveal() {
@@ -396,7 +402,7 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
         {s.canReveal && <button className="ghost" onClick={reveal}>{value === null ? '显示' : '隐藏'}</button>}
         {s.canReveal && <button className="ghost" onClick={copy}>复制</button>}
         {canWrite && <button className="ghost" onClick={onEdit}>编辑</button>}
-        {canWrite && <button className="ghost" onClick={remove}>删除</button>}
+        {(s.canDelete ?? (!hasBrowserSession() && canWrite)) && <button className="ghost" onClick={remove}>删除</button>}
       </td>
     </tr>
   );
@@ -448,28 +454,29 @@ function SecretEditor({ projectId, env, path, secretKey, onClose, onSaved }: {
   );
 }
 
-function DetailDrawer({ projectId, env, meta, onClose }: {
-  projectId: string; env: string; meta: SecretMeta; onClose: () => void;
+function DetailDrawer({ projectId, env, meta, onClose, onChanged }: {
+  projectId: string; env: string; meta: SecretMeta; onClose: () => void; onChanged: () => void;
 }) {
   const secretKey = meta.key;
   const folder = meta.folder;
   const [versions, setVersions] = useState<Version[]>([]);
   const [latest, setLatest] = useState(0);
+  const [canRollback, setCanRollback] = useState(false);
   const [err, setErr] = useState('');
 
   const load = useCallback(() => {
-    api.get<{ versions: Version[]; latest: number }>(
+    api.get<{ versions: Version[]; latest: number; canRollback?: boolean }>(
       `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/versions?env=${env}&path=${encodeURIComponent(folder)}`)
-      .then((d) => { setVersions(d.versions); setLatest(d.latest); })
+      .then((d) => { setVersions(d.versions); setLatest(d.latest); setCanRollback(d.canRollback ?? (!hasBrowserSession() && meta.canWrite !== false)); })
       .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
-  }, [projectId, env, secretKey, folder]);
+  }, [projectId, env, secretKey, folder, meta.canWrite]);
   useEffect(load, [load]);
 
   async function rollback(v: number) {
     if (!window.confirm(`回滚 ${secretKey} 到 v${v}？（将产生新版本）`)) return;
     try {
       await api.post(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rollback?env=${env}&path=${encodeURIComponent(folder)}`, { version: v });
-      load();
+      load(); onChanged();
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
 
@@ -486,7 +493,7 @@ function DetailDrawer({ projectId, env, meta, onClose }: {
                 <td>v{v.version}{v.version === latest && '（当前）'}</td>
                 <td className="muted">{v.created_by.slice(0, 8)}</td>
                 <td className="muted">{v.created_at}</td>
-                <td>{v.version !== latest && <button className="ghost" onClick={() => rollback(v.version)}>回滚到此</button>}</td>
+                <td>{canRollback && v.version !== latest && <button className="ghost" onClick={() => rollback(v.version)}>回滚到此</button>}</td>
               </tr>
             ))}
           </tbody>

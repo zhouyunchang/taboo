@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS workload_grants (
  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
  env_id TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
- action TEXT NOT NULL CHECK(action IN ('read','reveal','write','export')),
+ action TEXT NOT NULL CHECK(action IN ('read','reveal','write','export','rollback','delete')),
  required_scope TEXT NOT NULL CHECK(required_scope<>''),
  PRIMARY KEY(binding_id,project_id,env_id,action),
  FOREIGN KEY(binding_id,org_id) REFERENCES workload_bindings(id,org_id) ON DELETE CASCADE

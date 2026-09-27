@@ -38,14 +38,17 @@ type Folder struct {
 }
 
 type SecretMeta struct {
-	ID        string   `json:"id"`
-	Folder    string   `json:"folder"`
-	Key       string   `json:"key"`
-	Comment   string   `json:"comment"`
-	Tags      []string `json:"tags"`
-	Version   int      `json:"version"`
-	UpdatedAt string   `json:"updated_at"`
-	CanReveal bool     `json:"canReveal"`
+	ID          string   `json:"id"`
+	Folder      string   `json:"folder"`
+	Key         string   `json:"key"`
+	Comment     string   `json:"comment"`
+	Tags        []string `json:"tags"`
+	Version     int      `json:"version"`
+	UpdatedAt   string   `json:"updated_at"`
+	CanReveal   bool     `json:"canReveal"`
+	CanWrite    bool     `json:"canWrite"`
+	CanDelete   bool     `json:"canDelete"`
+	CanRollback bool     `json:"canRollback"`
 }
 
 type SecretValue struct {

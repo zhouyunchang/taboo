@@ -1,9 +1,15 @@
 package store
 
-import _ "embed"
+import (
+	_ "embed"
+	"strings"
+)
 
 //go:embed migrations/002_workloads.sql
 var workloadSchema string
+
+//go:embed migrations/003_governance.sql
+var governanceSchema string
 
 // Additive schema: existing organizations and secrets retain their IDs. A
 // tombstoned admission is retained so JIT cannot recreate revoked membership.
@@ -43,6 +49,24 @@ CREATE INDEX IF NOT EXISTS idx_browser_session_exp ON browser_sessions(expires_a
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(workloadSchema)
+	if _, err = db.Exec(workloadSchema); err != nil {
+		return err
+	}
+	var definition string
+	if err = db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='workload_grants'`).Scan(&definition); err != nil {
+		return err
+	}
+	if !strings.Contains(definition, "'rollback'") {
+		if _, err = db.Exec(`ALTER TABLE workload_grants RENAME TO workload_grants_previous`); err != nil {
+			return err
+		}
+		if _, err = db.Exec(workloadSchema); err != nil {
+			return err
+		}
+		if _, err = db.Exec(`INSERT INTO workload_grants SELECT * FROM workload_grants_previous; DROP TABLE workload_grants_previous;`); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(governanceSchema)
 	return err
 }

@@ -296,6 +296,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/security": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getOrganizationSecurity */
+        get: operations["getOrganizationSecurity"];
+        /** putOrganizationSecurity */
+        put: operations["putOrganizationSecurity"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/members/{userId}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getMemberActions */
+        get: operations["getMemberActions"];
+        /** putMemberActions */
+        put: operations["putMemberActions"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{slug}/invites": {
         parameters: {
             query?: never;
@@ -1043,6 +1079,13 @@ export interface components {
             /** @example /db/mysql/ */
             path: string;
         };
+        SecretPermissions: {
+            write: boolean;
+            reveal: boolean;
+            export: boolean;
+            rollback: boolean;
+            delete: boolean;
+        };
         SecretMeta: {
             id: string;
             folder: string;
@@ -1053,6 +1096,8 @@ export interface components {
             updated_at: string;
             canReveal: boolean;
             canWrite: boolean;
+            canDelete?: boolean;
+            canRollback?: boolean;
         };
         SecretValue: components["schemas"]["SecretMeta"] & {
             value: string;
@@ -1061,6 +1106,21 @@ export interface components {
             version: number;
             created_by: string;
             created_at: string;
+        };
+        OrganizationSecurity: {
+            /** @enum {string} */
+            login_policy: "LOCAL_OR_EXTERNAL" | "EXTERNAL_REQUIRED";
+            /** @enum {string} */
+            readonly external_secret_permissions?: "EXPLICIT_ACTIONS";
+        };
+        MemberActionGrant: {
+            project_id: string;
+            environment_id: string;
+            /** @enum {string} */
+            action: "read" | "write" | "reveal" | "export" | "rollback" | "delete";
+        };
+        MemberActions: {
+            grants: components["schemas"]["MemberActionGrant"][];
         };
         OAuthTrustInput: {
             name?: string;
@@ -1104,10 +1164,10 @@ export interface components {
             project_id: string;
             environment_id: string;
             /**
-             * @description 四种动作独立，不隐含其他动作
+             * @description 六种动作独立，不隐含其他动作
              * @enum {string}
              */
-            action: "read" | "reveal" | "write" | "export";
+            action: "read" | "reveal" | "write" | "export" | "rollback" | "delete";
             /** @description 该动作必须在已验证 Token 中出现的精确 scope */
             required_scope: string;
         };
@@ -1984,6 +2044,108 @@ export interface operations {
             };
         };
     };
+    getOrganizationSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationSecurity"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    putOrganizationSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationSecurity"];
+            };
+        };
+        responses: {
+            /** @description 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationSecurity"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getMemberActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberActions"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    putMemberActions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberActions"];
+            };
+        };
+        responses: {
+            /** @description 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberActions"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
     createInvite: {
         parameters: {
             query?: never;
@@ -2345,6 +2507,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         secrets?: components["schemas"]["SecretMeta"][];
+                        permissions?: components["schemas"]["SecretPermissions"];
                     };
                 };
             };
@@ -2480,6 +2643,7 @@ export interface operations {
                     "application/json": {
                         versions?: components["schemas"]["SecretVersion"][];
                         latest?: number;
+                        canRollback?: boolean;
                     };
                 };
             };

@@ -122,7 +122,13 @@ func (s *Service) AddMember(w http.ResponseWriter, r *http.Request) {
 	}
 	email := strings.ToLower(strings.TrimSpace(b.Email))
 	var userID string
-	if err := s.DB.QueryRow(`SELECT id FROM users WHERE email = ?`, email).Scan(&userID); err != nil {
+	var lookupErr error
+	if s.LookupLocalUser != nil {
+		userID, lookupErr = s.LookupLocalUser(email)
+	} else {
+		lookupErr = s.DB.QueryRow(`SELECT id FROM users WHERE email=? AND auth_source='local' AND status='active'`, email).Scan(&userID)
+	}
+	if lookupErr != nil {
 		writeErr(w, apperr.New(404, "NOT_FOUND", "user not registered; send an invite instead"))
 		return
 	}
@@ -130,15 +136,46 @@ func (s *Service) AddMember(w http.ResponseWriter, r *http.Request) {
 	if b.Restricted {
 		rest = 1
 	}
-	if _, err := s.DB.Exec(`INSERT INTO org_members (org_id, user_id, role, restricted) VALUES (?, ?, ?, ?)
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	defer tx.Rollback()
+	if err = lockMembership(tx, orgID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	var existing string
+	_ = tx.QueryRow(`SELECT role FROM org_members WHERE org_id=? AND user_id=?`, orgID, userID).Scan(&existing)
+	if existing == "owner" && b.Role != "owner" {
+		var owners int
+		if tx.QueryRow(`SELECT COUNT(*) FROM org_members WHERE org_id=? AND role='owner'`, orgID).Scan(&owners) != nil || owners <= 1 {
+			writeErr(w, apperr.New(409, "LAST_OWNER", "cannot demote the last owner"))
+			return
+		}
+	}
+	if !preserveExternalOwner(tx, orgID, userID, b.Role) {
+		writeErr(w, apperr.New(409, "LAST_EXTERNAL_OWNER", "external-only organization must retain an external owner"))
+		return
+	}
+	if _, err := tx.Exec(`INSERT INTO org_members (org_id, user_id, role, restricted) VALUES (?, ?, ?, ?)
 		ON CONFLICT(org_id, user_id) DO UPDATE SET role = excluded.role, restricted = excluded.restricted`,
 		orgID, userID, b.Role, rest); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "members.add", "org/"+slug+"/members/"+email,
+	if _, err = tx.Exec(`UPDATE federation_admissions SET last_role='' WHERE org_id=? AND user_id=?`, orgID, userID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if err := auth.AuditReq(tx, r, orgID, auth.From(r), "members.add", "org/"+slug+"/members/"+email,
 		map[string]any{"role": b.Role, "restricted": b.Restricted}); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if tx.Commit() != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
 	writeJSON(w, 201, map[string]any{"user_id": userID, "email": email, "role": b.Role})
@@ -195,6 +232,31 @@ func (s *Service) PatchMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if err = lockMembership(tx, orgID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	var latest string
+	if tx.QueryRow(`SELECT role FROM org_members WHERE org_id=? AND user_id=?`, orgID, userID).Scan(&latest) != nil {
+		writeErr(w, apperr.NotFound)
+		return
+	}
+	if b.Role == nil {
+		role = latest
+		args[0] = role
+	}
+	if latest == "owner" && role != "owner" {
+		var owners int
+		if tx.QueryRow(`SELECT COUNT(*) FROM org_members WHERE org_id=? AND role='owner'`, orgID).Scan(&owners) != nil || owners <= 1 {
+			writeErr(w, apperr.New(409, "LAST_OWNER", "cannot demote the last owner"))
+			return
+		}
+	}
+
+	if !preserveExternalOwner(tx, orgID, userID, role) {
+		writeErr(w, apperr.New(409, "LAST_EXTERNAL_OWNER", "external-only organization must retain an external owner"))
+		return
+	}
 	if _, err = tx.Exec(`UPDATE org_members SET `+strings.Join(sets, ", ")+` WHERE org_id = ? AND user_id = ?`, args...); err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
@@ -234,13 +296,45 @@ func (s *Service) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "LAST_OWNER", "cannot remove the last owner"))
 		return
 	}
-	if _, err := s.DB.Exec(`DELETE FROM org_members WHERE org_id = ? AND user_id = ?`, orgID, userID); err != nil {
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	defer tx.Rollback()
+	if err = lockMembership(tx, orgID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if tx.QueryRow(`SELECT role FROM org_members WHERE org_id=? AND user_id=?`, orgID, userID).Scan(&role) != nil {
+		writeErr(w, apperr.NotFound)
+		return
+	}
+	if role == "owner" {
+		var owners int
+		if tx.QueryRow(`SELECT COUNT(*) FROM org_members WHERE org_id=? AND role='owner'`, orgID).Scan(&owners) != nil || owners <= 1 {
+			writeErr(w, apperr.New(409, "LAST_OWNER", "cannot remove the last owner"))
+			return
+		}
+	}
+	if !preserveExternalOwner(tx, orgID, userID, "") {
+		writeErr(w, apperr.New(409, "LAST_EXTERNAL_OWNER", "external-only organization must retain an external owner"))
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM org_members WHERE org_id = ? AND user_id = ?`, orgID, userID); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	_, _ = s.DB.Exec(`DELETE FROM project_grants WHERE org_id = ? AND user_id = ?`, orgID, userID)
-	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "members.remove", "org/"+slug+"/members/"+userID, nil); err != nil {
+	if _, err = tx.Exec(`DELETE FROM project_grants WHERE org_id = ? AND user_id = ?`, orgID, userID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if err := auth.AuditReq(tx, r, orgID, auth.From(r), "members.remove", "org/"+slug+"/members/"+userID, nil); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if tx.Commit() != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
 	writeJSON(w, 200, map[string]any{"user_id": userID, "deleted": true})
@@ -337,14 +431,24 @@ func (s *Service) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	token := hex.EncodeToString(raw)
 	id := tc.NewID()
 	exp := time.Now().Add(7 * 24 * time.Hour).Unix()
-	if _, err := s.DB.Exec(`INSERT INTO org_invites (id, org_id, email, role, token_hash, expires_at, created_by)
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO org_invites (id, org_id, email, role, token_hash, expires_at, created_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`, id, orgID, email, b.Role, tc.SHA256(token), exp, auth.From(r).ID); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "members.invite", "org/"+slug+"/invites/"+email,
+	if err := auth.AuditReq(tx, r, orgID, auth.From(r), "members.invite", "org/"+slug+"/invites/"+email,
 		map[string]any{"role": b.Role}); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if tx.Commit() != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
 	origin := r.Header.Get("Origin")
@@ -375,7 +479,6 @@ func (s *Service) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if exp < time.Now().Unix() {
-		_, _ = s.DB.Exec(`DELETE FROM org_invites WHERE id = ?`, id)
 		writeErr(w, apperr.New(400, "EXPIRED", "invite expired"))
 		return
 	}
@@ -383,13 +486,34 @@ func (s *Service) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(403, "FORBIDDEN", "invite email does not match current user"))
 		return
 	}
-	if _, err := s.DB.Exec(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	defer tx.Rollback()
+	if err = lockMembership(tx, orgID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	var consumed string
+	if tx.QueryRow(`DELETE FROM org_invites WHERE id=? AND token_hash=? AND expires_at>? RETURNING id`, id, tc.SHA256(token), time.Now().Unix()).Scan(&consumed) != nil {
+		writeErr(w, apperr.NotFound)
+		return
+	}
+	if _, err := tx.Exec(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)
 		ON CONFLICT(org_id, user_id) DO NOTHING`, orgID, u.ID, role); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	_, _ = s.DB.Exec(`DELETE FROM org_invites WHERE id = ?`, id)
-	_ = auth.AuditReq(s.DB, r, orgID, u, "members.accept", "org/invite/"+email, map[string]any{"role": role})
+	if err = auth.AuditReq(tx, r, orgID, u, "members.accept", "org/invite/"+email, map[string]any{"role": role}); err != nil {
+		writeErr(w, apperr.New(503, "AUDIT_UNAVAILABLE", "try again"))
+		return
+	}
+	if tx.Commit() != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
 	var slug string
 	_ = s.DB.QueryRow(`SELECT slug FROM orgs WHERE id = ?`, orgID).Scan(&slug)
 	writeJSON(w, 200, map[string]any{"org_id": orgID, "slug": slug, "role": role})

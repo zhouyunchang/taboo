@@ -98,7 +98,7 @@ test('session transport failure has an explicit retry path', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
 });
 
-test('mapped developer can write and reveal dev secrets with BFF CSRF', async ({ page, request }) => {
+test('explicitly granted developer can write and reveal dev secrets with BFF CSRF', async ({ page, request }) => {
   const update = await request.patch(`/api/v1/orgs/${slug}/oidc/${providerID}`, {
     headers: { Authorization: `Bearer ${localTokens.access}` }, data: { enabled: true, default_role: 'developer' },
   });
@@ -107,6 +107,18 @@ test('mapped developer can write and reveal dev secrets with BFF CSRF', async ({
   await page.getByLabel('Username').fill('fixture-user');
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  const uid = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()).user.id);
+  const headers = { Authorization: `Bearer ${localTokens.access}` };
+  const projects = await (await request.get('/api/v1/orgs/a/projects', { headers })).json();
+  const pid = projects.projects[0].id;
+  const environments = await (await request.get(`/api/v1/projects/${pid}/environments`, { headers })).json();
+  const environment = environments.environments.find((x: { slug: string }) => x.slug === 'dev');
+  const granted = await request.put(`/api/v1/orgs/a/members/${uid}/actions`, { headers, data: {
+    grants: ['read', 'write', 'reveal', 'rollback'].map((action) => ({ project_id: pid, environment_id: environment.id, action })),
+  }});
+  expect(granted.status()).toBe(200);
+  await page.reload();
   await page.getByRole('button', { name: '＋ 新建密钥', exact: true }).click();
   await page.getByLabel('Key', { exact: true }).fill('PUBLIC_FIXTURE');
   await page.getByLabel('值', { exact: true }).fill('not-a-real-secret');

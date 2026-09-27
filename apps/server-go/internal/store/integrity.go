@@ -7,16 +7,17 @@ import "fmt"
 // edges are immutable: resources must be explicitly copied to another tenant.
 func migrateIntegrity(db migrationDB) error {
 	checks := map[string]string{
-		"workload_bindings":  `EXISTS(SELECT 1 FROM machine_identities m WHERE m.id=NEW.id AND m.org_id=NEW.org_id AND m.auth_type='external_oauth')`,
-		"workload_grants":    `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND e.id=NEW.env_id)`,
-		"secrets":            `EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.folder_id AND f.env_id=NEW.env_id)`,
-		"folders":            `NEW.parent_id IS NULL OR EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.parent_id AND f.env_id=NEW.env_id)`,
-		"project_grants":     `EXISTS(SELECT 1 FROM projects p JOIN org_members m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND m.user_id=NEW.user_id)`,
-		"identity_scopes":    `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id JOIN machine_identities m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND e.id=NEW.env_id AND m.id=NEW.identity_id)`,
-		"dynamic_engines":    `EXISTS(SELECT 1 FROM projects p WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id)`,
-		"sync_targets":       `NEW.project_id IS NULL OR EXISTS(SELECT 1 FROM projects p WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id)`,
-		"sync_runs":          `EXISTS(SELECT 1 FROM sync_targets t WHERE t.id=NEW.target_id AND t.org_id=NEW.org_id)`,
-		"webhook_deliveries": `EXISTS(SELECT 1 FROM webhooks w WHERE w.id=NEW.webhook_id AND w.org_id=NEW.org_id)`,
+		"member_action_grants": `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND e.id=NEW.env_id)`,
+		"workload_bindings":    `EXISTS(SELECT 1 FROM machine_identities m WHERE m.id=NEW.id AND m.org_id=NEW.org_id AND m.auth_type='external_oauth')`,
+		"workload_grants":      `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND e.id=NEW.env_id)`,
+		"secrets":              `EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.folder_id AND f.env_id=NEW.env_id)`,
+		"folders":              `NEW.parent_id IS NULL OR EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.parent_id AND f.env_id=NEW.env_id)`,
+		"project_grants":       `EXISTS(SELECT 1 FROM projects p JOIN org_members m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND m.user_id=NEW.user_id)`,
+		"identity_scopes":      `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id JOIN machine_identities m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND e.id=NEW.env_id AND m.id=NEW.identity_id)`,
+		"dynamic_engines":      `EXISTS(SELECT 1 FROM projects p WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id)`,
+		"sync_targets":         `NEW.project_id IS NULL OR EXISTS(SELECT 1 FROM projects p WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id)`,
+		"sync_runs":            `EXISTS(SELECT 1 FROM sync_targets t WHERE t.id=NEW.target_id AND t.org_id=NEW.org_id)`,
+		"webhook_deliveries":   `EXISTS(SELECT 1 FROM webhooks w WHERE w.id=NEW.webhook_id AND w.org_id=NEW.org_id)`,
 	}
 	for table, condition := range checks {
 		var n int

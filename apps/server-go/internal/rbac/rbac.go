@@ -6,6 +6,8 @@ const (
 	Reveal      = "reveal"
 	Export      = "export"
 	Write       = "write"
+	Rollback    = "rollback"
+	Delete      = "delete"
 	Admin       = "admin"
 	Members     = "members"
 	AuditRead   = "audit.read"
@@ -50,7 +52,7 @@ func UserAllows(role, action string, envProtected bool) bool {
 	switch action {
 	case Read:
 		return rank >= roleRank["viewer"]
-	case Reveal, Write, Export:
+	case Reveal, Write, Export, Rollback, Delete:
 		if rank >= roleRank["admin"] {
 			return true
 		}
@@ -83,7 +85,7 @@ func IdentityAllows(action string, perms []string) bool {
 		return hasPerm(perms, "read", "reveal", "write")
 	case Reveal, Export:
 		return hasPerm(perms, "reveal", "write")
-	case Write:
+	case Write, Rollback, Delete:
 		return hasPerm(perms, "write")
 	}
 	return false
@@ -91,7 +93,7 @@ func IdentityAllows(action string, perms []string) bool {
 
 func Sensitive(action string) bool {
 	switch Normalize(action) {
-	case Reveal, Export, Write, Admin, Members, AuditExport:
+	case Reveal, Export, Write, Rollback, Delete, Admin, Members, AuditExport:
 		return true
 	}
 	return false

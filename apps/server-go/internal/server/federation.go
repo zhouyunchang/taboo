@@ -56,13 +56,13 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 			case "orgs":
 				// Automated export/delivery and identity governance require separate
 				// migration gates; the first BFF slice exposes project and audit reads.
-				if parts[2] != "projects" && (parts[2] != "audit" || len(parts) != 3) {
+				if parts[2] != "projects" && parts[2] != "members" && parts[2] != "security" && parts[2] != "oidc" && parts[2] != "oauth-trusts" && parts[2] != "workloads" && (parts[2] != "audit" || len(parts) != 3) {
 					writeErr(w, apperr.Forbidden)
 					return
 				}
 				err = db.QueryRow(`SELECT id FROM orgs WHERE slug=?`, parts[1]).Scan(&org)
 			case "projects":
-				if parts[2] != "secrets" && parts[2] != "environments" && parts[2] != "folders" {
+				if parts[2] != "secrets" && parts[2] != "environments" && parts[2] != "folders" && parts[2] != "export" {
 					writeErr(w, apperr.Forbidden)
 					return
 				}

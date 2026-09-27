@@ -21,6 +21,9 @@ import (
 )
 
 type Service struct {
+	// Exact local account lookup is only used after owner authorization in
+	// AddMember; tenant handlers cannot query the global identity directory.
+	LookupLocalUser func(string) (string, error)
 	DB              *sql.DB
 	MasterKey       []byte
 	JWTSecret       string
@@ -84,6 +87,10 @@ func (s *Service) Routes(r chi.Router) {
 		r.Patch("/members/{userId}", s.PatchMember)
 		r.Delete("/members/{userId}", s.RemoveMember)
 		r.Put("/members/{userId}/grants", s.PutGrants)
+		r.Get("/members/{userId}/actions", s.ListActionGrants)
+		r.Put("/members/{userId}/actions", s.PutActionGrants)
+		r.Get("/security", s.Security)
+		r.Put("/security", s.PutSecurity)
 		r.Post("/invites", s.CreateInvite)
 		r.Get("/audit", s.Audit)
 		r.Get("/audit/verify", s.AuditVerify)
@@ -327,6 +334,13 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		orgs = append(orgs, o)
 	}
 	rows.Close() // release the single SQLite connection before the next query
+	visible := orgs[:0]
+	for _, o := range orgs {
+		if auth.OrganizationLoginAllowed(s.DB, u, o.ID) {
+			visible = append(visible, o)
+		}
+	}
+	orgs = visible
 	writeJSON(w, 200, map[string]any{"user": u, "orgs": orgs, "totp_enabled": totpEnabledOf(s.DB, u.ID)})
 }
 

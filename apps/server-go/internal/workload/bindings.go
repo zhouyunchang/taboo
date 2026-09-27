@@ -34,7 +34,7 @@ func (s *Service) validateGrants(w http.ResponseWriter, org string, grants []Gra
 	}
 	seen := map[string]bool{}
 	for _, g := range grants {
-		if g.Action != "read" && g.Action != "reveal" && g.Action != "write" && g.Action != "export" {
+		if g.Action != "read" && g.Action != "reveal" && g.Action != "write" && g.Action != "export" && g.Action != "rollback" && g.Action != "delete" {
 			fail(w, 400, "INVALID_GRANTS", "unsupported workload action")
 			return false
 		}

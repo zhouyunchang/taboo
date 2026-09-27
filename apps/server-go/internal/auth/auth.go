@@ -96,6 +96,22 @@ func Can(db *sql.DB, actor *Actor, orgID, projectID, action, envSlug string) boo
 	if !ok {
 		return false
 	}
+	if actor.AuthenticationSource != "" && projectID != "" {
+		switch action {
+		case rbac.Read, rbac.Write, rbac.Reveal, rbac.Export, rbac.Rollback, rbac.Delete:
+			// Explicit grants are the authority for secret actions of federated
+			// people. A mapped developer/admin role cannot imply plaintext access.
+			var n int
+			query := `SELECT COUNT(*) FROM member_action_grants g JOIN environments e ON e.id=g.env_id AND e.project_id=g.project_id WHERE g.org_id=? AND g.user_id=? AND g.project_id=? AND g.action=?`
+			args := []any{orgID, actor.ID, projectID, action}
+			if envSlug != "" {
+				query += ` AND e.slug=?`
+				args = append(args, envSlug)
+			}
+			err := db.QueryRow(query, args...).Scan(&n)
+			return err == nil && n > 0 && rbac.UserAllows(eff, rbac.Read, false)
+		}
+	}
 	return rbac.UserAllows(eff, action, EnvProtected(db, projectID, envSlug))
 }
 

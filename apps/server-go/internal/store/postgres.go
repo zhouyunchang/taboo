@@ -242,29 +242,31 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
+	if v != 0 && v != 11 && v != 12 && v != SchemaVersion {
+		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
+	}
 	if v == 0 {
 		if _, err = tx.Exec(postgresBaseline); err != nil {
 			return fmt.Errorf("PostgreSQL baseline: %w", err)
 		}
-		if err = installWorkloads(tx, owner, role); err != nil {
-			return err
-		}
 		if err = installPolicies(tx, owner, role); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`INSERT INTO schema_version(singleton,version) VALUES(true,?)`, SchemaVersion); err != nil {
-			return err
-		}
-	} else if v == 11 {
+	}
+	if v < 12 {
 		if err = installWorkloads(tx, owner, role); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`UPDATE schema_version SET version=? WHERE singleton=true`, SchemaVersion); err != nil {
+	}
+	if v < 13 {
+		if err = installGovernance(tx, owner, role); err != nil {
 			return err
 		}
-	} else if v != SchemaVersion {
-		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
+	if _, err = tx.Exec(`INSERT INTO schema_version(singleton,version) VALUES(true,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version`, SchemaVersion); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 
@@ -327,6 +329,26 @@ func installWorkloads(tx *sql.Tx, owner, role string) error {
 	}
 	for _, table := range []string{"oauth_trusts", "workload_bindings", "workload_grants"} {
 		if _, err := tx.Exec(`ALTER TABLE ` + table + ` ENABLE ROW LEVEL SECURITY; ALTER TABLE ` + table + ` FORCE ROW LEVEL SECURITY; CREATE POLICY tenant_scope ON ` + table + ` USING (current_user=` + pq.QuoteLiteral(owner) + ` OR org_id=nullif(current_setting('taboo.org_id',true),'')) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR org_id=nullif(current_setting('taboo.org_id',true),'')); GRANT SELECT,INSERT,UPDATE,DELETE ON ` + table + ` TO ` + pq.QuoteIdentifier(role)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func installGovernance(tx *sql.Tx, owner, role string) error {
+	if _, err := tx.Exec(governanceSchema); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE workload_grants DROP CONSTRAINT workload_grants_action_check; ALTER TABLE workload_grants ADD CONSTRAINT workload_grants_action_check CHECK(action IN ('read','reveal','write','export','rollback','delete')); ALTER TABLE member_action_grants ADD CONSTRAINT member_actions_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE;
+ ALTER TABLE member_action_grants ADD CONSTRAINT member_actions_env_project FOREIGN KEY(env_id,project_id) REFERENCES environments(id,project_id) ON DELETE CASCADE;`); err != nil {
+		return err
+	}
+	for _, table := range []string{"org_security", "member_action_grants"} {
+		condition := `current_user=` + pq.QuoteLiteral(owner) + ` OR org_id=nullif(current_setting('taboo.org_id',true),'')`
+		if table == "org_security" {
+			condition += ` OR (nullif(current_setting('taboo.org_id',true),'') IS NULL AND EXISTS(SELECT 1 FROM org_members m WHERE m.org_id=org_security.org_id AND m.user_id=nullif(current_setting('taboo.user_id',true),'')))`
+		}
+		if _, err := tx.Exec(`ALTER TABLE ` + table + ` ENABLE ROW LEVEL SECURITY; ALTER TABLE ` + table + ` FORCE ROW LEVEL SECURITY; CREATE POLICY tenant_scope ON ` + table + ` USING (` + condition + `) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR org_id=nullif(current_setting('taboo.org_id',true),'')); GRANT SELECT,INSERT,UPDATE,DELETE ON ` + table + ` TO ` + pq.QuoteIdentifier(role)); err != nil {
 			return err
 		}
 	}

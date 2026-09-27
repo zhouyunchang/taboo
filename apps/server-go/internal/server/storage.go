@@ -20,10 +20,6 @@ func scopedHTTP(d *Deps) http.Handler {
 		route := chi.NewRouteContext()
 		route.RoutePath = strings.TrimPrefix(r.URL.Path, "/api/v1")
 		r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, route))
-		if !store.IsPostgres(d.DB) {
-			portable.ServeHTTP(w, r)
-			return
-		}
 		a := auth.From(r)
 		if a == nil {
 			writeErr(w, apperr.Unauthorized)
@@ -63,6 +59,14 @@ func scopedHTTP(d *Deps) http.Handler {
 					return
 				}
 			}
+		}
+		if org != "" && !auth.OrganizationLoginAllowed(d.DB, a, org) {
+			writeErr(w, apperr.New(403, "EXTERNAL_LOGIN_REQUIRED", "external sign-in to this organization is required"))
+			return
+		}
+		if !store.IsPostgres(d.DB) {
+			portable.ServeHTTP(w, r)
+			return
 		}
 		db, closeScope, err := store.Scoped(r.Context(), d.DB, org, a.ID)
 		if err != nil {

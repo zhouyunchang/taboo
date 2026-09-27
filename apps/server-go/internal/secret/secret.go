@@ -34,15 +34,17 @@ type Service struct {
 }
 
 type Meta struct {
-	ID       string   `json:"id"`
-	Folder   string   `json:"folder"`
-	Key      string   `json:"key"`
-	Comment  string   `json:"comment"`
-	Tags     []string `json:"tags"`
-	Version  int      `json:"version"`
-	Updated  string   `json:"updated_at"`
-	CanRev   bool     `json:"canReveal"`
-	CanWrite bool     `json:"canWrite"`
+	ID          string   `json:"id"`
+	Folder      string   `json:"folder"`
+	Key         string   `json:"key"`
+	Comment     string   `json:"comment"`
+	Tags        []string `json:"tags"`
+	Version     int      `json:"version"`
+	Updated     string   `json:"updated_at"`
+	CanRev      bool     `json:"canReveal"`
+	CanWrite    bool     `json:"canWrite"`
+	CanDelete   bool     `json:"canDelete"`
+	CanRollback bool     `json:"canRollback"`
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -186,6 +188,9 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	}
 	canRev := auth.Can(s.DB, u, p.OrgID, p.ID, "reveal", envSlug)
 	canWrite := auth.Can(s.DB, u, p.OrgID, p.ID, "write", envSlug)
+	canDelete := auth.Can(s.DB, u, p.OrgID, p.ID, "delete", envSlug)
+	canRollback := auth.Can(s.DB, u, p.OrgID, p.ID, "rollback", envSlug)
+	permissions := map[string]bool{"write": canWrite, "reveal": canRev, "delete": canDelete, "rollback": canRollback, "export": auth.Can(s.DB, u, p.OrgID, p.ID, "export", envSlug)}
 	// 支持 ?path=/a/b/ 按文件夹过滤；缺省列出整个环境
 	sql := `SELECT s.id, f.path, s.key, s.comment, s.tags, s.latest_version, s.updated_at
 		FROM secrets s JOIN folders f ON f.id = s.folder_id WHERE s.env_id = ?`
@@ -193,7 +198,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("path") != "" {
 		fid, _, ferr := s.folderRef(envID, r.URL.Query().Get("path"), false)
 		if ferr != nil {
-			writeJSON(w, 200, map[string]any{"secrets": []Meta{}})
+			writeJSON(w, 200, map[string]any{"secrets": []Meta{}, "permissions": permissions})
 			return
 		}
 		sql += ` AND s.folder_id = ?`
@@ -215,11 +220,13 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(tags), &m.Tags)
 		m.CanRev = canRev
 		m.CanWrite = canWrite
+		m.CanDelete = canDelete
+		m.CanRollback = canRollback
 		out = append(out, m)
 		count++
 	}
 	_ = count
-	writeJSON(w, 200, map[string]any{"secrets": out})
+	writeJSON(w, 200, map[string]any{"secrets": out, "permissions": permissions})
 }
 
 // POST /secrets?env=dev —— 创建/更新（产生新版本）
@@ -430,6 +437,7 @@ func (s *Service) Versions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.SecretNotFound)
 		return
 	}
+	canRollback := auth.Can(s.DB, auth.From(r), p.OrgID, p.ID, "rollback", envSlug)
 	rows, err := s.DB.Query(`SELECT version, created_by, created_at FROM secret_versions
 		WHERE secret_id = ? ORDER BY version DESC`, secretID)
 	if err != nil {
@@ -448,7 +456,7 @@ func (s *Service) Versions(w http.ResponseWriter, r *http.Request) {
 		_ = rows.Scan(&x.Version, &x.CreatedBy, &x.CreatedAt)
 		out = append(out, x)
 	}
-	writeJSON(w, 200, map[string]any{"key": key, "latest": latest, "versions": out})
+	writeJSON(w, 200, map[string]any{"key": key, "latest": latest, "versions": out, "canRollback": canRollback})
 }
 
 // POST /secrets/{key}/rollback {version}
@@ -456,7 +464,7 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "write", envSlug) {
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "rollback", envSlug) {
 		return
 	}
 	envID, err := s.envOf(p.ID, envSlug)
@@ -560,7 +568,7 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
 	envSlug := q(r, "env", "dev")
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "write", envSlug) {
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "delete", envSlug) {
 		return
 	}
 	envID, err := s.envOf(p.ID, envSlug)

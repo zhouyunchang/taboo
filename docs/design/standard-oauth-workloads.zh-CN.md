@@ -10,14 +10,14 @@
 
 | 验证画像 | 必须验证 | 上游状态保证 |
 | --- | --- | --- |
-| `JWT_RFC9068` | RS256 签名、`typ=at+jwt` 或 `application/at+jwt`、iss/sub/client_id/aud/iat/exp/jti/scope、nbf（存在时） | `BOUNDED`，接受的 Token 总寿命 60–900 秒，默认上限 900 秒；上游停用不使已发离线 Token 立即失效 |
+| `JWT_RFC9068` | RS256 签名、`typ=at+jwt` 或 `application/at+jwt`、iss/sub/client_id/aud/iat/exp/jti/scope、nbf（存在时） | `BOUNDED`，接受的 Token 总寿命上限可配置为 60–900 秒，默认上限 900 秒；上游停用不使已发离线 Token 立即失效 |
 | `INTROSPECTION_RFC7662` | 每次受保护请求在线验证 active、Bearer、iss/sub/client_id/aud/iat/exp/scope；opaque 不被解析 | `ONLINE_REQUIRED`，不缓存 ALLOW；inactive 拒绝，网络/服务错误 503；上游账户停用是否撤销旧 Token 仍取决于提供方语义 |
 
 7662 本身不要求所有响应字段；上述字段是 taboo 的显式接入画像。缺少 audience 或身份上下文的提供方不能启用此画像。JWT 时效不为 exp 添加宽限；iat/nbf 最多 30 秒时钟偏差。所有实例应同步时钟。
 
 ## 绑定与权限
 
-`/orgs/{slug}/workloads` 把精确 `(trust, sub, client_id)` 绑定到本地机器身份，并登记项目、环境、动作和动作要求的单个 OAuth scope。`read`、`write`、`reveal`、`export` 分开授权，Token scope 与本地 grant 必须同时满足；write 不推导 reveal 或 export。`PUT /workloads/{id}/grants` 原子替换，`POST /workloads/{id}/revoke` 立即本地撤销。信任、绑定、授权变更与审计同事务。服务端每次重新检查本地启用状态；已在途通过授权的操作不承诺撤销。
+`/orgs/{slug}/workloads` 把精确 `(trust, sub, client_id)` 绑定到本地机器身份，并登记项目、环境、动作和动作要求的单个 OAuth scope。`read`、`write`、`reveal`、`export`、`rollback`、`delete` 分开授权，Token scope 与本地 grant 必须同时满足；write 不推导 reveal 或 export。`PUT /workloads/{id}/grants` 原子替换，`POST /workloads/{id}/revoke` 立即本地撤销。信任、绑定、授权变更与审计同事务。服务端每次重新检查本地启用状态；已在途通过授权的操作不承诺撤销。
 
 工作负载只允许项目 secrets、folders、environments 和 export 路由，并在业务处理前检查组织归属。不允许组织管理、动态引擎和其他治理路由。原有本地机器 scope 保留原语义（write 包含 reveal/export），外部迁移需明确列出所需动作，不能直接拷贝旧 scope 推导授权。
 
