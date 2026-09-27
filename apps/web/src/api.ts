@@ -21,6 +21,16 @@ export class ApiError extends Error {
   }
 }
 
+export interface BrowserSessionInfo {
+  revocation_profile: 'BOUNDED' | 'ONLINE_REQUIRED';
+  sensitive_operations_allowed: boolean;
+  expires_at: number;
+  auth_valid_until: number;
+  reauthentication_url: string;
+  rp_logout: boolean;
+}
+let browserInfo: BrowserSessionInfo | null = null;
+export const getBrowserSessionInfo = () => browserInfo;
 let browserCSRF = '';
 let browserSession = false;
 let refreshRequest: Promise<boolean> | null = null;
@@ -33,6 +43,7 @@ export async function initializeBrowserSession(): Promise<boolean> {
   const data = await res.json();
   browserSession = data.authenticated === true;
   browserCSRF = browserSession ? data.csrf_token : '';
+  browserInfo = browserSession ? data : null;
   if (browserSession || data.authentication === 'oidc') {
     clearTokens();
     localStorage.removeItem('taboo.idp_logout');
@@ -41,12 +52,14 @@ export async function initializeBrowserSession(): Promise<boolean> {
 }
 
 export async function logout(): Promise<void> {
-  if (browserSession) await request<void>('POST', '/api/v1/auth/logout');
+  const result = browserSession ? await request<{logout_url?:string}>('POST', '/api/v1/auth/logout') : undefined;
   browserCSRF = '';
   browserSession = false;
+  browserInfo = null;
   clearTokens();
   localStorage.removeItem('taboo.idp_logout');
   window.dispatchEvent(new Event('taboo:logout'));
+  if (result?.logout_url) window.location.assign(result.logout_url);
 }
 
 async function refreshLocal(): Promise<boolean> {
@@ -79,6 +92,7 @@ async function request<T>(method: string, path: string, body?: unknown, retried 
   }
   if (res.status === 401 && (token || browserSession)) {
     browserSession = false;
+    browserInfo = null;
     browserCSRF = '';
     clearTokens();
     window.dispatchEvent(new Event('taboo:logout'));

@@ -29,6 +29,16 @@ func TestKeycloakInterop(t *testing.T) {
 		t.Skip("run scripts/test-federation.sh for real Keycloak interop")
 	}
 	f := fixture(t, issuer)
+	session, callback, flow := keycloakLogin(t, f)
+	checkStatus(t, f.request("GET", "/api/v1/me", session, false), 200)
+	checkStatus(t, f.request("GET", "/api/v1/orgs/b/projects", session, false), 403)
+	checkStatus(t, f.request("GET", callback.RequestURI(), flow, false), 400)
+	checkStatus(t, f.request("POST", "/api/v1/auth/logout", session, true), 204)
+	checkStatus(t, f.request("GET", "/api/v1/me", session, false), 401)
+}
+
+func keycloakLogin(t *testing.T, f *federationFixture) (*http.Cookie, *url.URL, *http.Cookie) {
+	t.Helper()
 	w := f.request("GET", "/api/v1/auth/oidc/a/login", nil, false)
 	checkStatus(t, w, 302)
 	flow := cookieOf(t, w, "taboo.oidc.flow")
@@ -71,11 +81,7 @@ func TestKeycloakInterop(t *testing.T) {
 	w = f.request("GET", callback.RequestURI(), flow, false)
 	checkStatus(t, w, 303)
 	session := cookieOf(t, w, auth.BrowserCookie)
-	checkStatus(t, f.request("GET", "/api/v1/me", session, false), 200)
-	checkStatus(t, f.request("GET", "/api/v1/orgs/b/projects", session, false), 403)
-	checkStatus(t, f.request("GET", callback.RequestURI(), flow, false), 400)
-	checkStatus(t, f.request("POST", "/api/v1/auth/logout", session, true), 204)
-	checkStatus(t, f.request("GET", "/api/v1/me", session, false), 401)
+	return session, callback, flow
 }
 
 // Keycloak is tested through introspection rather than relabeling its ordinary
@@ -139,4 +145,74 @@ func TestKeycloakMachineInterop(t *testing.T) {
 	checkStatus(t, call(), 200)
 	checkStatus(t, f.localRequest("POST", "/api/v1/orgs/a/workloads/"+id.ID+"/revoke", "", ""), 200)
 	checkStatus(t, call(), 401)
+}
+
+func TestKeycloakOnlineSessionDisableAndRefresh(t *testing.T) {
+	issuer := os.Getenv("TABOO_TEST_KEYCLOAK_ISSUER")
+	if issuer == "" {
+		if os.Getenv("TABOO_REQUIRE_KEYCLOAK") == "1" {
+			t.Fatal("Keycloak issuer required")
+		}
+		t.Skip("run scripts/test-federation.sh")
+	}
+	bounded := fixture(t, issuer)
+	boundedCookie, _, _ := keycloakLogin(t, bounded)
+	online := fixture(t, issuer)
+	online.sessionPolicy("ONLINE_REQUIRED", nil)
+	onlineCookie, _, _ := keycloakLogin(t, online)
+	checkStatus(t, online.request("GET", "/api/v1/me", onlineCookie, false), 200)
+	online.alterCredential(onlineCookie, func(b map[string]any) { b["IdentityExpires"] = time.Now().Unix() - 1 })
+	checkStatus(t, online.request("GET", "/api/v1/me", onlineCookie, false), 200)
+	// The disposable realm admin is used only in this public interoperability
+	// test, to verify what disabling an actual upstream account does to old tokens.
+	root := strings.TrimSuffix(issuer, "/realms/taboo-test")
+	client := oauth.Client()
+	res, err := client.PostForm(root+"/realms/master/protocol/openid-connect/token", url.Values{"grant_type": {"password"}, "client_id": {"admin-cli"}, "username": {"fixture-admin"}, "password": {"fixture-admin-password"}})
+	if err != nil {
+		t.Fatal("fixture admin unavailable")
+	}
+	var token struct {
+		Access string `json:"access_token"`
+	}
+	decodeErr := json.NewDecoder(res.Body).Decode(&token)
+	res.Body.Close()
+	if res.StatusCode != 200 || decodeErr != nil || token.Access == "" {
+		t.Fatal("fixture admin authentication failed")
+	}
+	request := func(method, path, body string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(method, root+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token.Access)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal("fixture admin request failed")
+		}
+		return res
+	}
+	res = request("GET", "/admin/realms/taboo-test/users?username=fixture-user&exact=true", "")
+	var users []struct {
+		ID string `json:"id"`
+	}
+	decodeErr = json.NewDecoder(res.Body).Decode(&users)
+	res.Body.Close()
+	if res.StatusCode != 200 || decodeErr != nil || len(users) != 1 {
+		t.Fatal("fixture user missing")
+	}
+	userPath := "/admin/realms/taboo-test/users/" + url.PathEscape(users[0].ID)
+	t.Cleanup(func() {
+		res := request("PUT", userPath, `{"enabled":true}`)
+		res.Body.Close()
+		if res.StatusCode != 204 {
+			t.Error("fixture user restoration failed")
+		}
+	})
+	res = request("PUT", userPath, `{"enabled":false}`)
+	res.Body.Close()
+	if res.StatusCode != 204 {
+		t.Fatal("fixture user disable failed")
+	}
+	checkStatus(t, online.request("GET", "/api/v1/me", onlineCookie, false), 401)
+	checkStatus(t, bounded.request("GET", "/api/v1/me", boundedCookie, false), 200)
+	checkStatus(t, online.request("POST", "/api/v1/auth/logout", onlineCookie, true), 204)
 }

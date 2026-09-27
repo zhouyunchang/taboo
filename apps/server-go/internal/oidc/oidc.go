@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -110,7 +109,10 @@ func (s *Service) scanProvider(scanner interface {
 		return nil, err
 	}
 	p.PublicLogin, p.Autocreate, p.SyncRole, p.Enabled = pub == 1, auto == 1, syncR == 1, en == 1
-	p.Revision = auth.ProviderRevisionValues([13]string{p.ID, p.OrgID, p.Issuer, p.ClientID, secretEnc, p.Scopes, p.RoleClaim, p.UsernameClaim, roleMapJSON, p.DefaultRole, strconv.Itoa(auto), strconv.Itoa(syncR), strconv.Itoa(en)})
+	p.Revision, err = auth.ProviderRevision(s.DB, p.ID)
+	if err != nil {
+		return nil, err
+	}
 	p.RoleMap = map[string]string{}
 	_ = json.Unmarshal([]byte(roleMapJSON), &p.RoleMap)
 	secret, err := tc.Open(s.MasterKey, secretEnc, tc.Context{Purpose: "oidc-client", Org: p.OrgID, Object: p.ID, Version: 1})
@@ -196,6 +198,8 @@ func (s *Service) Routes(r chi.Router) {
 		r.Post("/", s.Create)
 		r.Patch("/{id}", s.Update)
 		r.Delete("/{id}", s.Delete)
+		r.Get("/{id}/security", s.Security)
+		r.Put("/{id}/security", s.PutSecurity)
 	})
 }
 

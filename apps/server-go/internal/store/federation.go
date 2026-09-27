@@ -11,6 +11,9 @@ var workloadSchema string
 //go:embed migrations/003_governance.sql
 var governanceSchema string
 
+//go:embed migrations/004_browser_security.sql
+var browserSecuritySchema string
+
 // Additive schema: existing organizations and secrets retain their IDs. A
 // tombstoned admission is retained so JIT cannot recreate revoked membership.
 func migrateFederation(db migrationDB) error {
@@ -68,5 +71,9 @@ CREATE INDEX IF NOT EXISTS idx_browser_session_exp ON browser_sessions(expires_a
 		}
 	}
 	_, err = db.Exec(governanceSchema)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(browserSecuritySchema)
 	return err
 }

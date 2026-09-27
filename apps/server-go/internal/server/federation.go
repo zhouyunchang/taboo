@@ -79,22 +79,3 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 		})
 	}
 }
-
-func (d *Deps) allowedBrowser(a *auth.Actor) bool {
-	if d.SessionProfile != "BOUNDED" || d.PublicOrigin == "" {
-		return false
-	}
-	if a.BrowserOrigin != strings.TrimSuffix(d.PublicOrigin, "/") {
-		return false
-	}
-	var issuer string
-	if err := d.DB.QueryRow(`SELECT issuer FROM oidc_providers WHERE id=? AND org_id=?`, a.AuthenticationSource, a.OrganizationID).Scan(&issuer); err != nil {
-		return false
-	}
-	for _, allowed := range d.IssuerAllowlist {
-		if issuer == allowed {
-			return true
-		}
-	}
-	return false
-}

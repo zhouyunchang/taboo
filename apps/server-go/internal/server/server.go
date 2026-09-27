@@ -115,7 +115,6 @@ func New(d *Deps) *chi.Mux {
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		})
 		orgs.PublicRoutes(r)
-		r.Get("/auth/session", auth.BrowserSession(d.DB, d.allowedBrowser))
 		// client_credentials 换 token（公开，登录同窗口限流）
 		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/identities/token", identities.Token)
 		// TOTP 2FA 第二步（公开，登录同窗口限流）
@@ -126,13 +125,15 @@ func New(d *Deps) *chi.Mux {
 			DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret,
 			DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword,
 		}
+		r.Get("/auth/session", auth.BrowserSession(d.DB, oidcSvc.CheckSession))
+		r.Post("/auth/logout", oidcSvc.Logout)
 		r.Get("/auth/sources", oidcSvc.ListSources)
 		r.Route("/auth/oidc/{slug}", func(r chi.Router) {
 			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/login", oidcSvc.Login)
 			r.Get("/callback", oidcSvc.Callback)
 		})
 		r.Group(func(r chi.Router) {
-			r.Use(auth.MiddlewareWithExternal(d.DB, d.JWTSecret, d.Workloads.Authenticate, d.allowedBrowser))
+			r.Use(auth.MiddlewareWithExternal(d.DB, d.JWTSecret, d.Workloads.Authenticate, oidcSvc.CheckSession))
 			r.Use(federatedScope(d.DB))
 			handler := scopedHTTP(d)
 			if err := chi.Walk(protectedRoutes(d), func(method, path string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
@@ -227,7 +228,6 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	webhooks := &whsvc.Service{DB: d.DB, MasterKey: d.MasterKey}
 	dyn := d.Dynamic.WithDB(d.DB)
 	oidcSvc := &oidc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, PublicOrigin: d.PublicOrigin, SessionProfile: d.SessionProfile, IssuerAllowlist: d.IssuerAllowlist, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
-	r.Post("/auth/logout", auth.BrowserLogout(d.DB))
 	orgs.Routes(r)
 	d.Workloads.WithDB(d.DB).Routes(r)
 	totps.Routes(r)

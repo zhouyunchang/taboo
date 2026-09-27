@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError, hasBrowserSession } from '../api';
+import { api, ApiError, hasBrowserSession, getBrowserSessionInfo } from '../api';
 import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
 import SettingsPanel from './Settings';
 import ValidatedForm from '../components/ValidatedForm';
@@ -15,6 +15,7 @@ interface Props {
 export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutError }: Props) {
   const org = orgs[0];
   const federated = hasBrowserSession();
+  const session = getBrowserSessionInfo();
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [envs, setEnvs] = useState<Env[]>([]);
@@ -69,7 +70,11 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
         <button className="ghost" onClick={onLogout}>退出</button>
       </header>
 
-      {federated && <p className="session-notice" role="status">外部登录 · 当前组织：{org.name} · 会话最长 15 分钟。退出仅结束本系统会话。</p>}
+      {federated && <p className="session-notice" role="status">外部登录 · 当前组织：{org.name} · {session?.revocation_profile === 'ONLINE_REQUIRED' ? '每次访问检查上游状态，故障时拒绝访问。' : '会话有效期内使用已验证身份，上游停用最迟在会话到期时生效。'}
+        {session?.expires_at && <> 会话到期：{new Date(session.expires_at * 1000).toLocaleTimeString()}。</>}
+        {session?.rp_logout ? ' 退出时同时前往身份提供方结束会话。' : ' 退出仅结束本系统会话。'}
+        {session?.sensitive_operations_allowed === false && <> 当前认证未满足敏感操作要求。<a href={session.reauthentication_url}>重新验证身份</a></>}
+      </p>}
       {logoutError && <p className="error" role="alert">{logoutError}</p>}
       <div className="body">
         <aside className="sidebar">

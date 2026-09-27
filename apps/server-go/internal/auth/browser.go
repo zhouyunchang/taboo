@@ -16,6 +16,8 @@ import (
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 )
 
+type BrowserPolicy func(*http.Request, *Actor) error
+
 const BrowserCookie = "taboo.session"
 
 func RandomToken() (string, error) {
@@ -42,7 +44,16 @@ func ProviderRevision(db interface{ QueryRow(string, ...any) *sql.Row }, id stri
 	if err != nil {
 		return "", err
 	}
-	return ProviderRevisionValues(values), nil
+	base := ProviderRevisionValues(values)
+	var policy string
+	err = db.QueryRow(`SELECT configuration FROM provider_security WHERE provider_id=?`, id).Scan(&policy)
+	if err == sql.ErrNoRows {
+		return base, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return tc.SHA256(base + "\x00" + policy), nil
 }
 
 func ProviderRevisionValues(values [13]string) string {
@@ -80,23 +91,27 @@ func browserActor(db *sql.DB, r *http.Request) (*Actor, error) {
 		return nil, err
 	}
 	a.OrganizationID, a.AuthenticationSource, a.BrowserOrigin = org, provider, origin
+	a.SessionHash = tc.SHA256(c.Value)
 	return a, nil
 }
 
-func BrowserSession(db *sql.DB, policies ...func(*Actor) bool) http.HandlerFunc {
+func BrowserSession(db *sql.DB, policies ...BrowserPolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
 		a, err := browserActor(db, r)
 		if err == nil {
 			for _, allowed := range policies {
-				if !allowed(a) {
-					err = apperr.Unauthorized
+				if err = allowed(r, a); err != nil {
 					break
 				}
 			}
 		}
 		if err != nil {
+			if e, ok := err.(*apperr.Error); ok && e.Status >= 500 {
+				writeErr(w, e)
+				return
+			}
 			result := map[string]any{"authenticated": false}
 			if _, e := r.Cookie(BrowserCookie); e == nil {
 				result["authentication"] = "oidc"
@@ -108,24 +123,6 @@ func BrowserSession(db *sql.DB, policies ...func(*Actor) bool) http.HandlerFunc 
 		c, _ := r.Cookie(BrowserCookie)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "csrf_token": BrowserCSRF(c.Value), "organization_id": a.OrganizationID, "authentication": "oidc", "revocation_profile": "BOUNDED"})
-	}
-}
-
-func BrowserLogout(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		a := From(r)
-		if a == nil || a.AuthenticationSource == "" {
-			writeErr(w, apperr.Unauthorized)
-			return
-		}
-		c, _ := r.Cookie(BrowserCookie)
-		if _, err := db.Exec(`DELETE FROM browser_sessions WHERE token_hash=?`, tc.SHA256(c.Value)); err != nil {
-			writeErr(w, apperr.New(503, "SESSION_UNAVAILABLE", "try again"))
-			return
-		}
-		http.SetCookie(w, &http.Cookie{Name: BrowserCookie, Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusNoContent)
+		_ = json.NewEncoder(w).Encode(map[string]any{"authenticated": true, "csrf_token": BrowserCSRF(c.Value), "organization_id": a.OrganizationID, "authentication": "oidc", "revocation_profile": a.SessionProfile, "sensitive_operations_allowed": a.SensitiveAllowed, "expires_at": a.SessionExpires, "auth_valid_until": a.AuthValidUntil, "reauthentication_url": a.ReauthenticationURL, "rp_logout": a.RPLogoutEnabled})
 	}
 }

@@ -363,6 +363,40 @@ paths:
                       role: { type: string }
       responses:
         '200': { description: 已更新 }
+  /api/v1/orgs/{slug}/oidc/{id}/security:
+    get:
+      tags: [oidc]
+      summary: 读取连接会话与敏感操作策略
+      operationId: getOIDCSecurity
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 会话策略；变更使已有会话与登录请求失效
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OIDCSecurity' }
+    put:
+      tags: [oidc]
+      summary: 替换连接会话与敏感操作策略
+      operationId: putOIDCSecurity
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OIDCSecurity' }
+      responses:
+        '200':
+          description: 会话策略；变更使已有会话与登录请求失效
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OIDCSecurity' }
   /api/v1/orgs/{slug}/security:
     get:
       tags: [members]
@@ -1007,7 +1041,7 @@ paths:
   /api/v1/auth/session:
     get:
       tags: [sso]
-      summary: 检查 BFF 会话；不创建或刷新会话
+      summary: 检查 BFF 会话；必要时刷新上游 Token，但不延长本地会话绝对期限
       operationId: getBrowserSession
       responses:
         '200':
@@ -1022,16 +1056,30 @@ paths:
                   csrf_token: { type: string }
                   organization_id: { type: string }
                   authentication: { type: string, enum: [oidc] }
-                  revocation_profile: { type: string, enum: [BOUNDED] }
+                  revocation_profile: { type: string, enum: [BOUNDED, ONLINE_REQUIRED] }
+                  sensitive_operations_allowed: { type: boolean }
+                  expires_at: { type: integer, format: int64 }
+                  auth_valid_until: { type: integer, format: int64 }
+                  reauthentication_url: { type: string }
+                  rp_logout: { type: boolean }
   /api/v1/auth/logout:
     post:
       tags: [sso]
-      summary: 删除本地 BFF 会话并清除 Cookie（不结束上游会话）
+      summary: 删除本地 BFF 会话并清除 Cookie；已启用 RP Logout 时返回发现的上游退出 URL
       operationId: logoutBrowserSession
       security: [{ browserSession: [] }]
       parameters:
         - { name: X-CSRF-Token, in: header, required: true, schema: { type: string } }
       responses:
+        '200':
+          description: 本地会话已删除；浏览器可导航到上游 RP Logout
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [logout_url]
+                properties:
+                  logout_url: { type: string }
         '204': { description: 会话已删除 }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1453,6 +1501,17 @@ components:
         version: { type: integer }
         created_by: { type: string }
         created_at: { type: string }
+    OIDCSecurity:
+      type: object
+      required: [profile, session_ttl, max_auth_age, required_acr, required_amr, online_audience, rp_logout]
+      properties:
+        profile: { type: string, enum: [BOUNDED, ONLINE_REQUIRED] }
+        session_ttl: { type: integer, minimum: 60, maximum: 900 }
+        max_auth_age: { type: integer, minimum: 60, maximum: 900 }
+        required_acr: { type: array, maxItems: 16, items: { type: string }, description: 可接受的精确 acr 值，满足任一项 }
+        required_amr: { type: array, maxItems: 16, items: { type: string }, description: 必须同时存在的精确 amr 值 }
+        online_audience: { type: string, description: ONLINE_REQUIRED 必填；上游内省必须返回此 audience }
+        rp_logout: { type: boolean, description: 显式启用发现的 RP-Initiated Logout }
     OrganizationSecurity:
       type: object
       required: [login_policy]

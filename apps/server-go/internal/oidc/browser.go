@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,8 +19,8 @@ import (
 const flowCookie = "taboo.oidc.flow"
 
 func (s *Service) origin() (string, error) {
-	if s.SessionProfile != "BOUNDED" {
-		return "", errors.New("explicit BOUNDED session profile required")
+	if s.SessionProfile != "BOUNDED" && s.SessionProfile != "ONLINE_REQUIRED" {
+		return "", errors.New("explicit browser session profile required")
 	}
 	u, err := federation.URL(s.PublicOrigin)
 	if err != nil || (u.Path != "" && u.Path != "/") {
@@ -32,7 +33,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	origin, err := s.origin()
 	if err != nil {
-		writeErr(w, apperr.New(503, "OIDC_CONFIGURATION_REQUIRED", "configure TABOO_PUBLIC_ORIGIN and TABOO_OIDC_SESSION_PROFILE=BOUNDED before using external sign-in"))
+		writeErr(w, apperr.New(503, "OIDC_CONFIGURATION_REQUIRED", "configure TABOO_PUBLIC_ORIGIN and TABOO_OIDC_SESSION_PROFILE before using external sign-in"))
 		return
 	}
 	slug := chi.URLParam(r, "slug")
@@ -44,6 +45,11 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	doc, _, err := discoCache.getContext(r.Context(), p.ID, p.Issuer)
 	if err != nil {
 		writeErr(w, apperr.New(502, "IDP_UNREACHABLE", "identity provider unavailable or incompatible"))
+		return
+	}
+	policy, err := s.policy(p.ID)
+	if err != nil || policy.Profile == "ONLINE_REQUIRED" && (!doc.SupportsOnline() || policy.OnlineAudience == "") {
+		writeErr(w, apperr.New(503, "INCOMPATIBLE_SECURITY_PROFILE", "configure the required session capabilities"))
 		return
 	}
 	state, err := auth.RandomToken()
@@ -85,6 +91,13 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: flowCookie, Value: browser, Path: "/api/v1/auth/oidc/" + slug, HttpOnly: true, Secure: strings.HasPrefix(origin, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: 300})
 	q := url.Values{"client_id": {p.ClientID}, "redirect_uri": {redirect}, "response_type": {"code"}, "scope": {oauthScopes(p.Scopes)}, "state": {state}, "nonce": {nonce}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}
+	q.Set("max_age", strconv.Itoa(policy.MaxAuthAge))
+	if len(policy.RequiredACR) > 0 {
+		q.Set("acr_values", strings.Join(policy.RequiredACR, " "))
+	}
+	if r.URL.Query().Get("reauth") == "1" {
+		q.Set("prompt", "login")
+	}
 	http.Redirect(w, r, doc.AuthorizationEndpoint+"?"+q.Encode(), http.StatusFound)
 }
 
@@ -149,13 +162,25 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(401, "OIDC_AUTHENTICATION_FAILED", "external sign-in could not be verified"))
 		return
 	}
+	policy, err := s.policy(p.ID)
+	authTime := claimTime(identity.Claims, "auth_time")
+	if err != nil || authTime <= 0 || authTime > time.Now().Unix()+30 || time.Now().Unix()-authTime > int64(policy.MaxAuthAge)+30 {
+		writeErr(w, apperr.New(401, "RECENT_AUTHENTICATION_REQUIRED", "provider did not prove recent authentication"))
+		return
+	}
+	if policy.Profile == "ONLINE_REQUIRED" {
+		if err = doc.CheckAccess(r.Context(), identity.AccessToken, policy.OnlineAudience, p.ClientID, p.ClientSecret, identity.Subject); err != nil {
+			writeErr(w, apperr.New(401, "ONLINE_AUTHENTICATION_FAILED", "online identity proof unavailable"))
+			return
+		}
+	}
 	raw, err := auth.RandomToken()
 	if err != nil {
 		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
 		return
 	}
-	expires := time.Now().Add(15 * time.Minute)
-	if identity.ExpiresAt.Before(expires) {
+	expires := time.Now().Add(time.Duration(policy.SessionTTL) * time.Second)
+	if identity.RefreshToken == "" && identity.ExpiresAt.Before(expires) {
 		expires = identity.ExpiresAt
 	}
 	if !expires.After(time.Now()) {
@@ -194,6 +219,19 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_, err = tx.Exec(`INSERT INTO browser_sessions(token_hash,user_id,org_id,provider_id,config_hash,origin,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?)`, tc.SHA256(raw), uid, p.OrgID, p.ID, revision, origin, expires.Unix(), time.Now().Unix())
+	if err != nil {
+		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
+		return
+	}
+	credentials := sessionCredentials{Access: identity.AccessToken, Refresh: identity.RefreshToken, IDToken: identity.RawIDToken, Nonce: nonce, Subject: identity.Subject, AccessExpires: identity.AccessExpiresAt.Unix(), IdentityExpires: identity.ExpiresAt.Unix(), AuthTime: authTime, AMR: claimAMR(identity.Claims)}
+	credentials.ACR, _ = identity.Claims["acr"].(string)
+	if policy.RPLogout {
+		credentials.LogoutEndpoint = doc.EndSessionEndpoint
+	}
+	sealed, err := s.sealSession(p.OrgID, tc.SHA256(raw), 1, credentials)
+	if err == nil {
+		_, err = tx.Exec(`INSERT INTO browser_credentials(token_hash,org_id,ciphertext) VALUES(?,?,?)`, tc.SHA256(raw), p.OrgID, sealed)
+	}
 	if err != nil || tx.Commit() != nil {
 		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
 		return

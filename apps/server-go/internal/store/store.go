@@ -466,7 +466,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 13
+const SchemaVersion = 14
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录

@@ -30,12 +30,13 @@ func TestSchema12GovernanceUpgradePreservesWorkloads(t *testing.T) {
 		`INSERT INTO oauth_trusts(id,org_id,name,issuer,audience,metadata_mode,token_profile) VALUES('t','a','fixture','https://op.example','api','oauth','JWT_RFC9068')`,
 		`INSERT INTO machine_identities(id,org_id,name,auth_type,client_id,secret_hash) VALUES('w','a','fixture','external_oauth','external:w','!')`,
 		`INSERT INTO workload_bindings(id,org_id,trust_id,subject,client_id) VALUES('w','a','t','subject','client')`,
-		`DROP TABLE member_action_grants`, `DROP TABLE org_security`,
+		`DROP TABLE member_action_grants`, `DROP TABLE org_security`, `DROP TABLE browser_credentials`, `DROP TABLE provider_security`,
 	} {
 		exec(q)
 	}
 	var reopen func() (*sql.DB, error)
 	if store.IsPostgres(db) {
+		exec(`ALTER TABLE oidc_providers DROP CONSTRAINT provider_id_org; ALTER TABLE browser_sessions DROP CONSTRAINT browser_token_org`)
 		exec(`ALTER TABLE workload_grants DROP CONSTRAINT workload_grants_action_check; ALTER TABLE workload_grants ADD CONSTRAINT workload_grants_action_check CHECK(action IN ('read','reveal','write','export')); UPDATE schema_version SET version=12`)
 		var schema string
 		if db.QueryRow(`SELECT current_schema()`).Scan(&schema) != nil {

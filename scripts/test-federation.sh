@@ -7,7 +7,7 @@ port="${TABOO_TEST_KEYCLOAK_PORT:-18081}"
 container="taboo-keycloak-test-$$"
 cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
-docker run -d --name "$container" -p "127.0.0.1:$port:8080" \
+docker run -d --name "$container" -e KC_BOOTSTRAP_ADMIN_USERNAME=fixture-admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=fixture-admin-password -p "127.0.0.1:$port:8080" \
   -v "$PWD/tests/federation/keycloak-realm.json:/opt/keycloak/data/import/taboo-test.json:ro" \
   "$image" start-dev --import-realm --hostname "http://127.0.0.1:$port" >/dev/null
 export TABOO_TEST_KEYCLOAK_ISSUER="http://127.0.0.1:$port/realms/taboo-test"

@@ -31,6 +31,13 @@ type Actor struct {
 	OrganizationID       string   `json:"-"`
 	AuthenticationSource string   `json:"-"`
 	BrowserOrigin        string   `json:"-"`
+	SessionHash          string   `json:"-"`
+	SessionProfile       string   `json:"-"`
+	SensitiveAllowed     bool     `json:"-"`
+	SessionExpires       int64    `json:"-"`
+	ReauthenticationURL  string   `json:"-"`
+	AuthValidUntil       int64    `json:"-"`
+	RPLogoutEnabled      bool     `json:"-"`
 }
 
 const (
@@ -86,6 +93,9 @@ func Can(db *sql.DB, actor *Actor, orgID, projectID, action, envSlug string) boo
 			return workloadCan(db, actor, orgID, projectID, action, envSlug)
 		}
 		return identityCan(db, actor.ID, orgID, projectID, action, envSlug)
+	}
+	if actor.BrowserOrigin != "" && rbac.Sensitive(action) && !actor.SensitiveAllowed {
+		return false
 	}
 	orgRole, restricted, ok := MemberInfo(db, orgID, actor.ID)
 	if !ok {
@@ -187,7 +197,7 @@ func failClosed(action string) bool {
 		return true
 	case strings.HasPrefix(action, "members."), strings.HasPrefix(action, "oidc."), strings.HasPrefix(action, "workload."):
 		return true
-	case action == "auth.oidc.login", action == "auth.login", action == "auth.register", action == "project.create", action == "env.create":
+	case action == "auth.session.refresh", action == "auth.logout", action == "auth.oidc.login", action == "auth.login", action == "auth.register", action == "project.create", action == "env.create":
 		return true
 	}
 	return false
@@ -241,10 +251,10 @@ func IssueTokens(db *sql.DB, secret string, u *Actor) (*TokenPair, error) {
 
 type ExternalAuthenticator func(*http.Request) (*Actor, error)
 
-func Middleware(db *sql.DB, jwtSecret string, policies ...func(*Actor) bool) func(http.Handler) http.Handler {
+func Middleware(db *sql.DB, jwtSecret string, policies ...BrowserPolicy) func(http.Handler) http.Handler {
 	return MiddlewareWithExternal(db, jwtSecret, nil, policies...)
 }
-func MiddlewareWithExternal(db *sql.DB, jwtSecret string, external ExternalAuthenticator, policies ...func(*Actor) bool) func(http.Handler) http.Handler {
+func MiddlewareWithExternal(db *sql.DB, jwtSecret string, external ExternalAuthenticator, policies ...BrowserPolicy) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("X-Taboo-Trust") != "" {
@@ -275,8 +285,12 @@ func MiddlewareWithExternal(db *sql.DB, jwtSecret string, external ExternalAuthe
 					return
 				}
 				for _, allowed := range policies {
-					if !allowed(a) {
-						writeErr(w, apperr.Unauthorized)
+					if err := allowed(r, a); err != nil {
+						if e, ok := err.(*apperr.Error); ok {
+							writeErr(w, e)
+						} else {
+							writeErr(w, apperr.Unauthorized)
+						}
 						return
 					}
 				}

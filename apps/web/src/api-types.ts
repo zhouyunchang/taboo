@@ -296,6 +296,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/oidc/{id}/security": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取连接会话与敏感操作策略 */
+        get: operations["getOIDCSecurity"];
+        /** 替换连接会话与敏感操作策略 */
+        put: operations["putOIDCSecurity"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{slug}/security": {
         parameters: {
             query?: never;
@@ -756,7 +774,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 检查 BFF 会话；不创建或刷新会话 */
+        /** 检查 BFF 会话；必要时刷新上游 Token，但不延长本地会话绝对期限 */
         get: operations["getBrowserSession"];
         put?: never;
         post?: never;
@@ -775,7 +793,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 删除本地 BFF 会话并清除 Cookie（不结束上游会话） */
+        /** 删除本地 BFF 会话并清除 Cookie；已启用 RP Logout 时返回发现的上游退出 URL */
         post: operations["logoutBrowserSession"];
         delete?: never;
         options?: never;
@@ -1106,6 +1124,20 @@ export interface components {
             version: number;
             created_by: string;
             created_at: string;
+        };
+        OIDCSecurity: {
+            /** @enum {string} */
+            profile: "BOUNDED" | "ONLINE_REQUIRED";
+            session_ttl: number;
+            max_auth_age: number;
+            /** @description 可接受的精确 acr 值，满足任一项 */
+            required_acr: string[];
+            /** @description 必须同时存在的精确 amr 值 */
+            required_amr: string[];
+            /** @description ONLINE_REQUIRED 必填；上游内省必须返回此 audience */
+            online_audience: string;
+            /** @description 显式启用发现的 RP-Initiated Logout */
+            rp_logout: boolean;
         };
         OrganizationSecurity: {
             /** @enum {string} */
@@ -2041,6 +2073,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getOIDCSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 会话策略；变更使已有会话与登录请求失效 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OIDCSecurity"];
+                };
+            };
+        };
+    };
+    putOIDCSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OIDCSecurity"];
+            };
+        };
+        responses: {
+            /** @description 会话策略；变更使已有会话与登录请求失效 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OIDCSecurity"];
+                };
             };
         };
     };
@@ -3164,7 +3246,14 @@ export interface operations {
                         /** @enum {string} */
                         authentication?: "oidc";
                         /** @enum {string} */
-                        revocation_profile?: "BOUNDED";
+                        revocation_profile?: "BOUNDED" | "ONLINE_REQUIRED";
+                        sensitive_operations_allowed?: boolean;
+                        /** Format: int64 */
+                        expires_at?: number;
+                        /** Format: int64 */
+                        auth_valid_until?: number;
+                        reauthentication_url?: string;
+                        rp_logout?: boolean;
                     };
                 };
             };
@@ -3181,6 +3270,17 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description 本地会话已删除；浏览器可导航到上游 RP Logout */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        logout_url: string;
+                    };
+                };
+            };
             /** @description 会话已删除 */
             204: {
                 headers: {

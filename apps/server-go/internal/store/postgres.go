@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -260,6 +260,11 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	}
 	if v < 13 {
 		if err = installGovernance(tx, owner, role); err != nil {
+			return err
+		}
+	}
+	if v < 14 {
+		if err = installBrowserSecurity(tx, owner, role); err != nil {
 			return err
 		}
 	}
@@ -349,6 +354,25 @@ func installGovernance(tx *sql.Tx, owner, role string) error {
 			condition += ` OR (nullif(current_setting('taboo.org_id',true),'') IS NULL AND EXISTS(SELECT 1 FROM org_members m WHERE m.org_id=org_security.org_id AND m.user_id=nullif(current_setting('taboo.user_id',true),'')))`
 		}
 		if _, err := tx.Exec(`ALTER TABLE ` + table + ` ENABLE ROW LEVEL SECURITY; ALTER TABLE ` + table + ` FORCE ROW LEVEL SECURITY; CREATE POLICY tenant_scope ON ` + table + ` USING (` + condition + `) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR org_id=nullif(current_setting('taboo.org_id',true),'')); GRANT SELECT,INSERT,UPDATE,DELETE ON ` + table + ` TO ` + pq.QuoteIdentifier(role)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func installBrowserSecurity(tx *sql.Tx, owner, role string) error {
+	if _, err := tx.Exec(browserSecuritySchema); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE oidc_providers ADD CONSTRAINT provider_id_org UNIQUE(id,org_id);
+ ALTER TABLE provider_security ADD CONSTRAINT security_provider_org FOREIGN KEY(provider_id,org_id) REFERENCES oidc_providers(id,org_id) ON DELETE CASCADE;
+ ALTER TABLE browser_sessions ADD CONSTRAINT browser_token_org UNIQUE(token_hash,org_id);
+ ALTER TABLE browser_credentials ADD CONSTRAINT credentials_session_org FOREIGN KEY(token_hash,org_id) REFERENCES browser_sessions(token_hash,org_id) ON DELETE CASCADE;`); err != nil {
+		return err
+	}
+	for _, table := range []string{"provider_security", "browser_credentials"} {
+		condition := `current_user=` + pq.QuoteLiteral(owner) + ` OR org_id=nullif(current_setting('taboo.org_id',true),'')`
+		if _, err := tx.Exec(`ALTER TABLE ` + table + ` ENABLE ROW LEVEL SECURITY; ALTER TABLE ` + table + ` FORCE ROW LEVEL SECURITY; CREATE POLICY tenant_scope ON ` + table + ` USING (` + condition + `) WITH CHECK (` + condition + `); GRANT SELECT,INSERT,UPDATE,DELETE ON ` + table + ` TO ` + pq.QuoteIdentifier(role)); err != nil {
 			return err
 		}
 	}

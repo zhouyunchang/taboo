@@ -7,6 +7,8 @@ import "fmt"
 // edges are immutable: resources must be explicitly copied to another tenant.
 func migrateIntegrity(db migrationDB) error {
 	checks := map[string]string{
+		"provider_security":    `EXISTS(SELECT 1 FROM oidc_providers p WHERE p.id=NEW.provider_id AND p.org_id=NEW.org_id)`,
+		"browser_credentials":  `EXISTS(SELECT 1 FROM browser_sessions s WHERE s.token_hash=NEW.token_hash AND s.org_id=NEW.org_id)`,
 		"member_action_grants": `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND e.id=NEW.env_id)`,
 		"workload_bindings":    `EXISTS(SELECT 1 FROM machine_identities m WHERE m.id=NEW.id AND m.org_id=NEW.org_id AND m.auth_type='external_oauth')`,
 		"workload_grants":      `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND e.id=NEW.env_id)`,
