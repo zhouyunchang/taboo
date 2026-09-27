@@ -576,7 +576,7 @@ paths:
         - { $ref: '#/components/parameters/Pid' }
         - { $ref: '#/components/parameters/Env' }
         - { name: path, in: query, schema: { type: string, default: / } }
-        - { name: Idempotency-Key, in: header, schema: { type: string }, description: 幂等约定（v1.5 强制） }
+        - { name: Idempotency-Key, in: header, schema: { type: string }, description: 可选，最长 128 字符；同一主体和组织内相同请求重放原响应，不同请求复用返回 409 }
       requestBody:
         required: true
         content:
@@ -601,6 +601,22 @@ paths:
         '200': { description: 明文, content: { application/json: { schema: { $ref: '#/components/schemas/SecretValue' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [secrets]
+      summary: 删除密钥和历史版本（write 权限，事务审计）
+      operationId: deleteSecret
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: key, in: path, required: true, schema: { type: string } }
+        - { name: path, in: query, schema: { type: string, default: / } }
+        - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 }, description: 同一请求重放原响应，不同请求复用返回 409 }
+      responses:
+        '200': { description: 已删除, content: { application/json: { schema: { type: object, required: [key, deleted], properties: { key: { type: string }, deleted: { type: boolean } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: 版本或幂等键冲突 }
   /api/v1/projects/{pid}/secrets/{key}/versions:
     get:
       tags: [secrets]
@@ -630,6 +646,7 @@ paths:
       operationId: rollbackSecret
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
+        - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 }, description: 同一请求重放原响应，不同请求复用返回 409 }
         - { $ref: '#/components/parameters/Pid' }
         - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
@@ -641,7 +658,9 @@ paths:
             schema:
               type: object
               required: [version]
-              properties: { version: { type: integer } }
+              properties:
+                version: { type: integer }
+                expectedVersion: { type: integer, minimum: 0, description: 当前版本前置条件，不匹配返回 409 }
       responses:
         '200': { description: 已回滚, content: { application/json: { schema: { type: object, properties: { version: { type: integer } } } } } }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1224,6 +1243,7 @@ components:
       properties:
         key: { type: string, pattern: '^[^/\s][^/]*[^/\s]$|^[^/\s]$', description: '单段 key，禁止包含 /（folder 与 key 分离，#16）' }
         value: { type: string }
+        expectedVersion: { type: integer, minimum: 0, description: 当前版本前置条件，0 表示仅创建；不匹配返回 409 }
         comment: { type: string }
         tags: { type: array, items: { type: string } }
     AuditLog:

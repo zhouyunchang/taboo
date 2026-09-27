@@ -13,7 +13,7 @@ import (
 
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
-	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/testdb"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/testoidc"
 )
 
@@ -34,10 +34,7 @@ func fixture(t *testing.T, issuer string) *federationFixture {
 		f.op = testoidc.New(t)
 		issuer = f.op.Server.URL
 	}
-	db, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	f.db = db
 	t.Cleanup(func() { db.Close() })
 	for _, org := range []string{"a", "b"} {
@@ -252,7 +249,7 @@ func TestFederationJWKRotation(t *testing.T) {
 }
 func TestFederationAuditFailureRollsBack(t *testing.T) {
 	f := fixture(t, "")
-	f.exec(`CREATE TRIGGER fail_federation_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(FAIL,'fixture'); END`)
+	testdb.FailAudit(t, f.db)
 	q, c := f.begin("a")
 	checkStatus(t, f.callback("a", q, c, nil), 503)
 	for _, table := range []string{"external_identities", "browser_sessions", "federation_admissions"} {
@@ -340,7 +337,7 @@ func TestFederationProviderPatchAndAudit(t *testing.T) {
 	if mapping != `{"/team/admin":"admin"}` {
 		t.Fatal("unrelated patch erased mapping")
 	}
-	f.exec(`CREATE TRIGGER fail_oidc_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(FAIL,'fixture'); END`)
+	testdb.FailAudit(t, f.db)
 	checkStatus(t, patch(`{"enabled":false}`), 500)
 	var enabled int
 	f.db.QueryRow(`SELECT enabled FROM oidc_providers WHERE id='provider-a'`).Scan(&enabled)

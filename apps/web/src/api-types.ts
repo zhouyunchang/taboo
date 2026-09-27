@@ -465,7 +465,8 @@ export interface paths {
         get: operations["revealSecret"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** 删除密钥和历史版本（write 权限，事务审计） */
+        delete: operations["deleteSecret"];
         options?: never;
         head?: never;
         patch?: never;
@@ -977,6 +978,8 @@ export interface components {
             /** @description 单段 key，禁止包含 /（folder 与 key 分离，#16） */
             key: string;
             value: string;
+            /** @description 当前版本前置条件，0 表示仅创建；不匹配返回 409 */
+            expectedVersion?: number;
             comment?: string;
             tags?: string[];
         };
@@ -2204,7 +2207,7 @@ export interface operations {
                 path?: string;
             };
             header?: {
-                /** @description 幂等约定（v1.5 强制） */
+                /** @description 可选，最长 128 字符；同一主体和组织内相同请求重放原响应，不同请求复用返回 409 */
                 "Idempotency-Key"?: string;
             };
             path: {
@@ -2261,6 +2264,47 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    deleteSecret: {
+        parameters: {
+            query?: {
+                env?: components["parameters"]["Env"];
+                path?: string;
+            };
+            header?: {
+                /** @description 同一请求重放原响应，不同请求复用返回 409 */
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        key: string;
+                        deleted: boolean;
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description 版本或幂等键冲突 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     secretVersions: {
         parameters: {
             query?: {
@@ -2297,7 +2341,10 @@ export interface operations {
                 env?: components["parameters"]["Env"];
                 path?: string;
             };
-            header?: never;
+            header?: {
+                /** @description 同一请求重放原响应，不同请求复用返回 409 */
+                "Idempotency-Key"?: string;
+            };
             path: {
                 pid: components["parameters"]["Pid"];
                 key: string;
@@ -2308,6 +2355,8 @@ export interface operations {
             content: {
                 "application/json": {
                     version: number;
+                    /** @description 当前版本前置条件，不匹配返回 409 */
+                    expectedVersion?: number;
                 };
             };
         };

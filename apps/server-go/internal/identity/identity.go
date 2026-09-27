@@ -138,8 +138,8 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, rs := range resolvedScopes {
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO identity_scopes (identity_id, project_id, env_id, permission)
-			VALUES (?, ?, ?, ?)`, id, rs.projectID, rs.envID, rs.permission); err != nil {
+		if _, err := tx.Exec(`INSERT INTO identity_scopes (identity_id, project_id, env_id, permission)
+			VALUES (?, ?, ?, ?) ON CONFLICT(identity_id,project_id,env_id) DO UPDATE SET permission=excluded.permission`, id, rs.projectID, rs.envID, rs.permission); err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
 		}

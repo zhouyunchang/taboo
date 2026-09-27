@@ -20,12 +20,37 @@ func Open(dataDir string) (*sql.DB, error) {
 	// 单写多读：SQLite 单连接避免 database is locked
 	db.SetMaxOpenConns(1)
 	if err := migrate(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 	return db, nil
 }
 
+type migrationDB interface {
+	Exec(string, ...any) (sql.Result, error)
+	Query(string, ...any) (*sql.Rows, error)
+	QueryRow(string, ...any) *sql.Row
+}
+
 func migrate(db *sql.DB) error {
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return err
+	}
+	if v > SchemaVersion {
+		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = migrateSchema(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func migrateSchema(db migrationDB) error {
 	_, err := db.Exec(`
 CREATE TABLE IF NOT EXISTS users (
   id               TEXT PRIMARY KEY,
@@ -342,29 +367,73 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 		return err
 	}
 	// 既有库补齐列与约束
-	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN actor_type TEXT NOT NULL DEFAULT 'user'`)
-	_, _ = db.Exec(`ALTER TABLE secrets ADD COLUMN folder_id TEXT REFERENCES folders(id)`)
-	_, _ = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_folder_key ON secrets(env_id, folder_id, key)`)
+	if _, err := db.Exec(`ALTER TABLE audit_logs ADD COLUMN actor_type TEXT NOT NULL DEFAULT 'user'`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE secrets ADD COLUMN folder_id TEXT REFERENCES folders(id)`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_folder_key ON secrets(env_id, folder_id, key)`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
 	// TOTP 2FA（M2 #4）：users 补列 + recovery_codes 表
-	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_pending_enc TEXT`)
-	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_secret_enc TEXT`)
-	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'`)
-	_, _ = db.Exec(`ALTER TABLE users ADD COLUMN external_sub TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external ON users(auth_source, external_sub) WHERE external_sub != ''`)
-	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN username_claim TEXT NOT NULL DEFAULT 'email'`)
-	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN public_login INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN autocreate INTEGER NOT NULL DEFAULT 1`)
-	_, _ = db.Exec(`ALTER TABLE oidc_providers ADD COLUMN sync_role INTEGER NOT NULL DEFAULT 1`)
-	_, _ = db.Exec(`ALTER TABLE environments ADD COLUMN protected INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`UPDATE environments SET protected = 1 WHERE slug = 'prod'`)
-	_, _ = db.Exec(`ALTER TABLE org_members ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN request_id TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE audit_logs ADD COLUMN entry_hash TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE dynamic_leases ADD COLUMN reclaim_fails INTEGER NOT NULL DEFAULT 0`)
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN totp_pending_enc TEXT`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN totp_secret_enc TEXT`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN external_sub TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external ON users(auth_source, external_sub) WHERE external_sub != ''`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE oidc_providers ADD COLUMN username_claim TEXT NOT NULL DEFAULT 'email'`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE oidc_providers ADD COLUMN public_login INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE oidc_providers ADD COLUMN autocreate INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE oidc_providers ADD COLUMN sync_role INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE environments ADD COLUMN protected INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE environments SET protected = 1 WHERE slug = 'prod'`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE org_members ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE audit_logs ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE audit_logs ADD COLUMN request_id TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE audit_logs ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE audit_logs ADD COLUMN entry_hash TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE dynamic_leases ADD COLUMN reclaim_fails INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
 	if err := migrateIdentityScopes(db); err != nil {
 		return err
 	}
@@ -376,6 +445,19 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 	if err := migrateFederation(db); err != nil {
 		return err
 	}
+	if err := migrateIntegrity(db); err != nil {
+		return err
+	}
+	for _, table := range []string{"sync_runs", "webhook_deliveries"} {
+		for _, column := range []string{"lease_token TEXT NOT NULL DEFAULT ''", "lease_until INTEGER NOT NULL DEFAULT 0"} {
+			if _, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+				return err
+			}
+		}
+	}
+	if _, err := db.Exec("ALTER TABLE sync_runs ADD COLUMN event_payload TEXT NOT NULL DEFAULT '{}'"); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
 	// PRAGMA 不支持参数绑定，整数直接内插（值来自本文件常量，无注入面）
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 		return err
@@ -384,11 +466,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 10
+const SchemaVersion = 11
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录
-func migrateFolders(db *sql.DB) error {
+func migrateFolders(db migrationDB) error {
 	// 1. 根文件夹
 	if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path)
 		SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),
@@ -414,7 +496,7 @@ func migrateFolders(db *sql.DB) error {
 }
 
 // migrateIdentityScopes 重建 CHECK，并把存量 read 升为 reveal（避免 CI 突然 403）。
-func migrateIdentityScopes(db *sql.DB) error {
+func migrateIdentityScopes(db migrationDB) error {
 	var ddl string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'identity_scopes'`).Scan(&ddl); err != nil {
 		return nil
@@ -422,11 +504,7 @@ func migrateIdentityScopes(db *sql.DB) error {
 	if strings.Contains(ddl, "'reveal'") {
 		return nil
 	}
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	tx := db
 	if _, err := tx.Exec(`CREATE TABLE identity_scopes_new (
   identity_id TEXT NOT NULL REFERENCES machine_identities(id) ON DELETE CASCADE,
   project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -448,5 +526,5 @@ func migrateIdentityScopes(db *sql.DB) error {
 	if _, err := tx.Exec(`ALTER TABLE identity_scopes_new RENAME TO identity_scopes`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }

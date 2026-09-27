@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -33,11 +34,11 @@ const (
 type Service struct {
 	DB        *sql.DB
 	MasterKey []byte
-	Engines   map[string]Engine // engine_id → 已建连接（内存缓存，进程内复用）
+	cache     *engineCache
 }
 
 func New(db *sql.DB, masterKey []byte) *Service {
-	return &Service{DB: db, MasterKey: masterKey, Engines: map[string]Engine{}}
+	return &Service{DB: db, MasterKey: masterKey, cache: &engineCache{engines: map[string]Engine{}}}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -68,11 +69,36 @@ func randomHex(n int) string {
 }
 
 // engineOf 取/建引擎连接（配置里的连接串解密后经 Factory 构造）
+type engineCache struct {
+	mu      sync.Mutex
+	engines map[string]Engine
+}
+
+func (s *Service) WithDB(db *sql.DB) *Service {
+	return &Service{DB: db, MasterKey: s.MasterKey, cache: s.cache}
+}
+func (s *Service) Close() {
+	s.cache.mu.Lock()
+	defer s.cache.mu.Unlock()
+	for k, e := range s.cache.engines {
+		if c, ok := e.(interface{ Close() error }); ok {
+			_ = c.Close()
+		}
+		delete(s.cache.engines, k)
+	}
+}
 func (s *Service) engineOf(engineID, connEnc string) (Engine, error) {
-	if e, ok := s.Engines[engineID]; ok {
+	var org, project string
+	if err := s.DB.QueryRow(`SELECT org_id,project_id FROM dynamic_engines WHERE id=?`, engineID).Scan(&org, &project); err != nil {
+		return nil, err
+	}
+	cacheKey := tc.SHA256(org + "\x00" + project + "\x00" + engineID + "\x00" + connEnc)
+	s.cache.mu.Lock()
+	defer s.cache.mu.Unlock()
+	if e, ok := s.cache.engines[cacheKey]; ok {
 		return e, nil
 	}
-	conn, err := tc.Decrypt(s.MasterKey, connEnc)
+	conn, err := tc.Open(s.MasterKey, connEnc, tc.Context{Purpose: "dynamic-engine", Org: org, Project: project, Object: engineID, Version: 1})
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +106,7 @@ func (s *Service) engineOf(engineID, connEnc string) (Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.Engines[engineID] = e
+	s.cache.engines[cacheKey] = e
 	return e, nil
 }
 
@@ -143,12 +169,12 @@ func (s *Service) CreateEngine(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "UNSUPPORTED", "only postgres engine is supported"))
 		return
 	}
-	enc, err := tc.Encrypt(s.MasterKey, b.Connection)
+	id := tc.NewID()
+	enc, err := tc.Seal(s.MasterKey, b.Connection, tc.Context{Purpose: "dynamic-engine", Org: p.OrgID, Project: p.ID, Object: id, Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	id := tc.NewID()
 	if _, err := s.DB.Exec(`INSERT INTO dynamic_engines (id, org_id, project_id, name, type, conn_encrypted, database, default_ttl, max_ttl)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, p.OrgID, p.ID, b.Name, typ, enc, orDefault(b.Database, "postgres"),
@@ -279,8 +305,13 @@ func (s *Service) RequestLease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(502, "GRANT_FAILED", err.Error()))
 		return
 	}
-	pwEnc, _ := tc.Encrypt(s.MasterKey, password)
 	lid := tc.NewID()
+	pwEnc, err := tc.Seal(s.MasterKey, password, tc.Context{Purpose: "dynamic-lease", Org: p.OrgID, Project: p.ID, Object: lid, Version: 1})
+	if err != nil {
+		_ = engine.Revoke(ctx, username)
+		writeErr(w, apperr.New(500, "INTERNAL", "lease encryption failed"))
+		return
+	}
 	expires := time.Now().Add(ttl).Unix()
 	if _, err := s.DB.Exec(`INSERT INTO dynamic_leases (id, engine_id, identity_id, username, password_encrypted, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?)`, lid, chi.URLParam(r, "eid"), identityID, username, pwEnc, expires); err != nil {
@@ -366,7 +397,7 @@ func (s *Service) RenewLease(w http.ResponseWriter, r *http.Request) {
 	}
 	pwEnc, username := "", lease["username"].(string)
 	_ = s.DB.QueryRow(`SELECT password_encrypted FROM dynamic_leases WHERE id = ?`, lease["id"]).Scan(&pwEnc)
-	password, err := tc.Decrypt(s.MasterKey, pwEnc)
+	password, err := tc.Open(s.MasterKey, pwEnc, tc.Context{Purpose: "dynamic-lease", Org: p.OrgID, Project: p.ID, Object: lease["id"].(string), Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return

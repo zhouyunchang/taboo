@@ -2,6 +2,8 @@
 
 日期：2026-09-27。对应 [KTI 实施计划](../plans/2026-09-27-standard-identity-federation-plan.zh-CN.md)。这是已批准 P0 计划的首批代码，**不是全部 P0 完成或生产验收**。实现位于 Go 服务；没有闭源工程、私有 SDK、权限目录或提供方专用 Claim 依赖。
 
+> 这是第一批实现快照。后续 PostgreSQL、AAD 信封、幂等写入、事务投递和恢复工具进展见 [存储实施记录](standard-identity-storage.zh-CN.md)；下面“未实现”条目以较新实施记录为准。
+
 ## 已实现的边界
 
 - `internal/federation/oidc`：公开 Discovery、Authorization Code + S256、RS256/JWKS、issuer/aud/azp/nonce/时效校验；发现和换码有超时、响应大小限制及禁止重定向。Discovery 的认证、换码和 JWKS 地址须与 issuer 同源。当前客户端认证仅 `client_secret_basic`，不宣称兼容全部可选 OIDC 画像。

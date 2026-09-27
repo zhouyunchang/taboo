@@ -150,7 +150,11 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		slug += "-" + tc.NewID()[:4]
 	}
 	dek := randomBytes(tc.KeyLen)
-	dekPlain, _ := tc.Encrypt(s.MasterKey, hexEncode(dek))
+	dekPlain, err := tc.Seal(s.MasterKey, hexEncode(dek), tc.DEKContext(orgID))
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "DEK encryption failed"))
+		return
+	}
 	if _, err := s.DB.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, ?, ?, ?)`,
 		orgID, email+"'s org", slug, dekPlain); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
@@ -199,7 +203,7 @@ func randomBytes(n int) []byte {
 
 // ensureRootFolder 为环境补建根文件夹（幂等，已存在则忽略冲突）
 func ensureRootFolder(db *sql.DB, envID string) {
-	_, _ = db.Exec(`INSERT OR IGNORE INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/')`,
+	_, _ = db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/') ON CONFLICT(env_id,path) DO NOTHING`,
 		tc.NewID(), envID)
 }
 

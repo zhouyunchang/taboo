@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
@@ -52,55 +54,47 @@ func ipOf(r *http.Request) string { return httpx.ClientIP(r) }
 
 // Subscribe 挂到事件总线：密钥变更 → 匹配目标 → 入队同步任务
 func (s *Service) Subscribe(bus *events.Bus) {
-	bus.Subscribe(func(e events.SecretEvent) {
+	bus.Subscribe(func(tx *sql.Tx, e events.SecretEvent) error {
 		if e.Action == "deleted" {
-			// 目标平台不支持可靠删除语义（GitHub/Vercel/CF 均可手动删），v1 只推写事件
-			return
+			return nil
 		}
-		targets, err := s.matchTargets(e.OrgID, e.ProjectID, e.EnvSlug)
+		rows, err := tx.Query(`SELECT id FROM sync_targets WHERE org_id=? AND enabled=1 AND (project_id IS NULL OR project_id=?) AND (env_slug='*' OR env_slug=?)`, e.OrgID, e.ProjectID, e.EnvSlug)
 		if err != nil {
-			return
+			return err
 		}
-		for _, t := range targets {
-			_ = s.enqueue(t.id, e, t)
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
 		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err = enqueue(tx, id, e); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
-type target struct {
-	id, orgID, platform, projectID, envSlug, configEnc string
-}
+type target struct{ id, orgID, platform, projectID, envSlug, configEnc string }
 
-// matchTargets 事件 → 目标：组织匹配 + 项目匹配（NULL 为组织级全项目）+ 环境匹配（'*' 为全环境）
-func (s *Service) matchTargets(orgID, projectID, envSlug string) ([]target, error) {
-	rows, err := s.DB.Query(`SELECT id, org_id, platform, project_id, env_slug, config_enc
-		FROM sync_targets WHERE org_id = ? AND enabled = 1
-		AND (project_id IS NULL OR project_id = ?)
-		AND (env_slug = '*' OR env_slug = ?)`, orgID, projectID, envSlug)
+func enqueue(tx *sql.Tx, tid string, e events.SecretEvent) error {
+	payload, err := json.Marshal(e)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
-	out := []target{}
-	for rows.Next() {
-		var t target
-		var pid sql.NullString
-		if err := rows.Scan(&t.id, &t.orgID, &t.platform, &pid, &t.envSlug, &t.configEnc); err != nil {
-			continue
-		}
-		t.projectID = pid.String
-		out = append(out, t)
-	}
-	return out, nil
-}
-
-// enqueue 幂等入队：同一事件同一目标同一 key 只保留最新一条 pending
-func (s *Service) enqueue(tid string, e events.SecretEvent, t target) error {
-	_, err := s.DB.Exec(`INSERT INTO sync_runs
-		(id, target_id, org_id, event_id, secret_key, action, status, trigger_type, created_at, updated_at)
-		SELECT ?, ?, ?, ?, ?, ?, 'pending', 'event', datetime('now'), datetime('now')
-		WHERE NOT EXISTS (SELECT 1 FROM sync_runs WHERE target_id = ? AND event_id = ? AND secret_key = ? AND status = 'pending')`,
-		tc.NewID(), tid, e.OrgID, e.EventID, e.Key, e.Action, tid, e.EventID, e.Key)
+	// Deterministic primary key deduplicates across every status, not only pending.
+	id := tc.SHA256(tid + "\x00" + e.EventID + "\x00" + e.ProjectID + "\x00" + e.EnvSlug + "\x00" + e.Folder + "\x00" + e.Key)
+	_, err = tx.Exec(`INSERT INTO sync_runs(id,target_id,org_id,event_id,secret_key,action,status,trigger_type,event_payload) VALUES(?,?,?,?,?,?,'pending','event',?) ON CONFLICT(id) DO NOTHING`, id, tid, e.OrgID, e.EventID, e.Key, e.Action, string(payload))
 	return err
 }
 
@@ -131,10 +125,10 @@ func (s *Service) drain() {
 		return
 	}
 	type job struct {
-		runID, orgID, key, action       string
-		attempts                        int
-		platform, configEnc, projectID  string
-		envSlug                         string
+		runID, orgID, key, action      string
+		attempts                       int
+		platform, configEnc, projectID string
+		envSlug                        string
 	}
 	jobs := []job{}
 	for rows.Next() {
@@ -156,6 +150,11 @@ func (s *Service) drain() {
 
 // execute 取明文（DEK 解密）→ 适配器推送 → 记录指纹
 func (s *Service) execute(runID, orgID, platform, configEnc, projectID, envSlug, key string, attempts int) {
+	lease, err := outbox.Claim(s.DB, "sync_runs", runID)
+	if err != nil || lease == "" {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -167,18 +166,23 @@ func (s *Service) execute(runID, orgID, platform, configEnc, projectID, envSlug,
 				map[string]any{"run_id": runID, "error": err.Error()}, "")
 		}
 		if _, e := s.DB.Exec(`UPDATE sync_runs SET status = ?, attempts = ?, next_attempt_at = ?, error = ?,
-			updated_at = datetime('now') WHERE id = ?`, status, attempts, nextAt, err.Error(), runID); e != nil {
+			updated_at = datetime('now'),lease_token='',lease_until=0 WHERE id = ? AND lease_token=?`, status, attempts, nextAt, "sync attempt failed", runID, lease); e != nil {
 			slog.Error("sync failRun update", "run", runID, "err", e)
 		}
 	}
 
 	// 明文取出：仅在内存短暂存在，绝不落库/日志
-	value, err := s.secretValue(ctx, orgID, projectID, envSlug, key)
+	value, err := s.snapshotValue(ctx, runID, orgID)
 	if err != nil {
 		failRun(err)
 		return
 	}
-	cfgJSON, err := tc.Decrypt(s.MasterKey, configEnc)
+	var targetID string
+	if err := s.DB.QueryRow(`SELECT r.target_id FROM sync_runs r JOIN sync_targets t ON t.id=r.target_id AND t.org_id=r.org_id WHERE r.id=? AND r.org_id=? AND t.enabled=1`, runID, orgID).Scan(&targetID); err != nil {
+		failRun(err)
+		return
+	}
+	cfgJSON, err := tc.Open(s.MasterKey, configEnc, tc.Context{Purpose: "sync-target", Org: orgID, Object: targetID, Version: 1})
 	if err != nil {
 		failRun(err)
 		return
@@ -199,8 +203,8 @@ func (s *Service) execute(runID, orgID, platform, configEnc, projectID, envSlug,
 	}
 	fingerprint := tc.SHA256(value)[:16]
 	if _, err := s.DB.Exec(`UPDATE sync_runs SET status = 'success', attempts = attempts + 1,
-		fingerprint = ?, error = '', updated_at = datetime('now') WHERE id = ?`,
-		fingerprint, runID); err != nil {
+		fingerprint = ?, error = '', updated_at = datetime('now'),lease_token='',lease_until=0 WHERE id = ? AND lease_token=?`,
+		fingerprint, runID, lease); err != nil {
 		slog.Error("sync success update", "run", runID, "err", err)
 	}
 	_ = auth.Audit(s.DB, orgID, nil, "sync.push", "sync/"+platform+"/"+key,
@@ -211,42 +215,30 @@ func errUnknownPlatform(p string) error {
 	return &apperr.Error{Status: 500, Code: "INTERNAL", Message: "unknown platform: " + p}
 }
 
-// secretValue 按 env + key 取最新版本明文（projectID/envSlug 为 '*' 或空时取首个匹配）
-func (s *Service) secretValue(ctx context.Context, orgID, projectID, envSlug, key string) (string, error) {
-	cond := `p.org_id = ? AND s.key = ?`
-	args := []any{orgID, key}
-	if projectID != "" {
-		cond += ` AND p.id = ?`
-		args = append(args, projectID)
+func (s *Service) snapshotValue(ctx context.Context, runID, orgID string) (string, error) {
+	var payload, dekEnc string
+	if err := s.DB.QueryRowContext(ctx, `SELECT event_payload FROM sync_runs WHERE id=? AND org_id=?`, runID, orgID).Scan(&payload); err != nil {
+		return "", err
 	}
-	if envSlug != "" && envSlug != "*" {
-		cond += ` AND e.slug = ?`
-		args = append(args, envSlug)
+	var e events.SecretEvent
+	if err := json.Unmarshal([]byte(payload), &e); err != nil {
+		return "", err
 	}
-	var ct, envID string
-	err := s.DB.QueryRowContext(ctx, `SELECT v.ciphertext, s.env_id FROM secrets s
-		JOIN secret_versions v ON v.secret_id = s.id AND v.version = s.latest_version
-		JOIN environments e ON e.id = s.env_id
-		JOIN projects p ON p.id = e.project_id
-		WHERE `+cond+` ORDER BY s.updated_at DESC LIMIT 1`, args...).Scan(&ct, &envID)
+	if e.OrgID != orgID || e.SecretID == "" || e.ProjectID == "" || e.EnvironmentID == "" || e.Version < 1 || e.Ciphertext == "" {
+		return "", fmt.Errorf("legacy job requires explicit requeue with an exact resource snapshot")
+	}
+	var n int
+	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=? AND p.id=? AND p.org_id=?`, e.EnvironmentID, e.ProjectID, orgID).Scan(&n); err != nil || n != 1 {
+		return "", fmt.Errorf("resource scope no longer exists")
+	}
+	if err := s.DB.QueryRowContext(ctx, `SELECT dek_encrypted FROM orgs WHERE id=?`, orgID).Scan(&dekEnc); err != nil {
+		return "", err
+	}
+	dek, err := s.DEKs.Get(s.MasterKey, orgID, dekEnc)
 	if err != nil {
 		return "", err
 	}
-	// DEK：按密钥所属环境 → 项目 → 组织解析
-	var orgID2 string
-	if err := s.DB.QueryRowContext(ctx, `SELECT p.org_id FROM environments e
-		JOIN projects p ON p.id = e.project_id WHERE e.id = ?`, envID).Scan(&orgID2); err != nil {
-		return "", err
-	}
-	var dekEnc string
-	if err := s.DB.QueryRowContext(ctx, `SELECT dek_encrypted FROM orgs WHERE id = ?`, orgID2).Scan(&dekEnc); err != nil {
-		return "", err
-	}
-	dek, err := s.DEKs.Get(s.MasterKey, orgID2, dekEnc)
-	if err != nil {
-		return "", err
-	}
-	return tc.Decrypt(dek, ct)
+	return tc.Open(dek, e.Ciphertext, tc.SecretContext(orgID, e.ProjectID, e.EnvironmentID, e.SecretID, e.Version))
 }
 
 // ---------- HTTP ----------
@@ -291,13 +283,13 @@ func (s *Service) Routes(r chi.Router) {
 }
 
 type targetOut struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Platform    string `json:"platform"`
-	ProjectID   string `json:"project_id,omitempty"`
-	EnvSlug     string `json:"env_slug"`
-	Enabled     bool   `json:"enabled"`
-	CreatedAt   string `json:"created_at"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Platform    string   `json:"platform"`
+	ProjectID   string   `json:"project_id,omitempty"`
+	EnvSlug     string   `json:"env_slug"`
+	Enabled     bool     `json:"enabled"`
+	CreatedAt   string   `json:"created_at"`
 	ConfigHints []string `json:"config_keys"` // 已配置的键名（不含值），便于 UI 回显
 }
 
@@ -325,7 +317,7 @@ func (s *Service) ListTargets(w http.ResponseWriter, r *http.Request) {
 		}
 		t.ProjectID = pid.String
 		t.Enabled = en == 1
-		if cfgJSON, err := tc.Decrypt(s.MasterKey, cfgEnc); err == nil {
+		if cfgJSON, err := tc.Open(s.MasterKey, cfgEnc, tc.Context{Purpose: "sync-target", Org: orgID, Object: t.ID, Version: 1}); err == nil {
 			var cfg map[string]string
 			if json.Unmarshal([]byte(cfgJSON), &cfg) == nil {
 				for k := range cfg {
@@ -387,12 +379,12 @@ func (s *Service) CreateTarget(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cfgJSON, _ := json.Marshal(b.Config)
-	cfgEnc, err := tc.Encrypt(s.MasterKey, string(cfgJSON))
+	id := tc.NewID()
+	cfgEnc, err := tc.Seal(s.MasterKey, string(cfgJSON), tc.Context{Purpose: "sync-target", Org: orgID, Object: id, Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	id := tc.NewID()
 	var pid interface{}
 	if b.ProjectID != "" {
 		pid = b.ProjectID
@@ -461,30 +453,53 @@ func (s *Service) RetryTarget(w http.ResponseWriter, r *http.Request) {
 		cond += ` AND e.slug = ?`
 		args = append(args, t.envSlug)
 	}
-	rows, err := s.DB.Query(`SELECT s.key FROM secrets s
+	rows, err := s.DB.Query(`SELECT s.key,p.id,e.slug,f.path,s.latest_version,s.id,e.id,v.ciphertext FROM secrets s
+ JOIN secret_versions v ON v.secret_id=s.id AND v.version=s.latest_version
+ JOIN folders f ON f.id=s.folder_id
 		JOIN environments e ON e.id = s.env_id JOIN projects p ON p.id = e.project_id WHERE `+cond, args...)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	keys := []string{}
+	items := []events.SecretEvent{}
+	eventID := "manual-" + tc.NewID()
 	for rows.Next() {
-		var k string
-		_ = rows.Scan(&k)
-		keys = append(keys, k)
+		e := events.SecretEvent{EventID: eventID, OrgID: orgID, Action: "updated"}
+		if err = rows.Scan(&e.Key, &e.ProjectID, &e.EnvSlug, &e.Folder, &e.Version, &e.SecretID, &e.EnvironmentID, &e.Ciphertext); err != nil {
+			rows.Close()
+			writeErr(w, apperr.New(500, "INTERNAL", "read failed"))
+			return
+		}
+		items = append(items, e)
 	}
+	err = rows.Err()
 	rows.Close()
-	e := events.SecretEvent{EventID: "manual-" + tc.NewID(), OrgID: orgID, ProjectID: t.projectID,
-		EnvSlug: t.envSlug, Action: "updated"}
-	enqueued := 0
-	for _, k := range keys {
-		e.Key = k
-		if s.enqueue(t.id, e, t) == nil {
-			enqueued++
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "read failed"))
+		return
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "enqueue failed"))
+		return
+	}
+	defer tx.Rollback()
+	enqueued := len(items)
+	for _, e := range items {
+		if err = enqueue(tx, id, e); err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", "enqueue failed"))
+			return
 		}
 	}
-	auth.Audit(s.DB, orgID, auth.From(r), "sync.retry", "org/"+slug+"/sync/"+id,
-		map[string]any{"keys": enqueued}, ipOf(r))
+	if err = auth.AuditReq(tx, r, orgID, auth.From(r), "sync.retry", "org/"+slug+"/sync/"+id, map[string]any{"keys": enqueued}); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "enqueue failed"))
+		return
+	}
+
 	writeJSON(w, 200, map[string]any{"target_id": id, "enqueued": enqueued})
 }
 

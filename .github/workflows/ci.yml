@@ -4,7 +4,7 @@ name: ci
 # 发布流水线见 release.yml（tag 触发，GoReleaser）
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 permissions:
@@ -99,3 +99,12 @@ jobs:
       - run: npm exec --workspace=@taboo/web -- tsc --noEmit
       - name: Public Keycloak, negative protocol tests and real browser
         run: TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
+
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - name: Required PostgreSQL RLS, recovery, migration and Keycloak interoperability
+        run: TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh

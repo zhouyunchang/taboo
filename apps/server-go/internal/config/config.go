@@ -12,29 +12,37 @@ import (
 )
 
 type Config struct {
-	PublicOrigin    string // Exact browser origin for OIDC callbacks.
-	IssuerAllowlist []string
-	SessionProfile  string // Explicit BOUNDED profile; no implicit online assurance.
-	Port            string // TABOO_PORT / PORT，默认 7100
-	DataDir         string // TABOO_DATA_DIR，默认 <exe>/../../data（开发期）或 cwd/data
-	MasterKey       string // TABOO_MASTER_KEY（hex/base64 32B）；空则读/生成 data/master.key
-	JWTSecret       string // TABOO_JWT_SECRET；空则随机（重启会话失效，并打印告警）
-	CORS            string // TABOO_CORS_ORIGIN，默认 *
-	WebDist         string // TABOO_WEB_DIST，默认 <module>/web（embed 优先）
-	LoginRate       int    // TABOO_LOGIN_RATE_LIMIT，每 IP 每窗口登录类请求上限，默认 5
-	DisableRegister bool   // TABOO_DISABLE_REGISTER：关闭邮箱注册（Keycloak 等外部用户源）
-	DisablePassword bool   // TABOO_DISABLE_PASSWORD：关闭密码登录，仅外部 Realm
+	DatabaseURL         string
+	DatabaseRuntimeRole string
+	PublicOrigin        string // Exact browser origin for OIDC callbacks.
+	IssuerAllowlist     []string
+	SessionProfile      string // Explicit BOUNDED profile; no implicit online assurance.
+	Port                string // TABOO_PORT / PORT，默认 7100
+	DataDir             string // TABOO_DATA_DIR，默认 <exe>/../../data（开发期）或 cwd/data
+	MasterKey           string // TABOO_MASTER_KEY（hex/base64 32B）；空则读/生成 data/master.key
+	JWTSecret           string // TABOO_JWT_SECRET；空则随机（重启会话失效，并打印告警）
+	CORS                string // TABOO_CORS_ORIGIN，默认 *
+	WebDist             string // TABOO_WEB_DIST，默认 <module>/web（embed 优先）
+	LoginRate           int    // TABOO_LOGIN_RATE_LIMIT，每 IP 每窗口登录类请求上限，默认 5
+	DisableRegister     bool   // TABOO_DISABLE_REGISTER：关闭邮箱注册（Keycloak 等外部用户源）
+	DisablePassword     bool   // TABOO_DISABLE_PASSWORD：关闭密码登录，仅外部 Realm
 }
 
 func Load() *Config {
+	if os.Getenv("TABOO_DATABASE_URL") != "" && (os.Getenv("TABOO_MASTER_KEY") == "" || os.Getenv("TABOO_JWT_SECRET") == "") {
+		log.Fatal("PostgreSQL requires explicit TABOO_MASTER_KEY and TABOO_JWT_SECRET shared by every instance")
+	}
+
 	c := &Config{
-		IssuerAllowlist: strings.Split(os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ","),
-		SessionProfile:  os.Getenv("TABOO_OIDC_SESSION_PROFILE"),
-		PublicOrigin:    os.Getenv("TABOO_PUBLIC_ORIGIN"),
-		Port:            getenv("TABOO_PORT", getenv("PORT", "7100")),
-		DataDir:         getenv("TABOO_DATA_DIR", "data"),
-		CORS:            getenv("TABOO_CORS_ORIGIN", "*"),
-		LoginRate:       5,
+		DatabaseURL:         os.Getenv("TABOO_DATABASE_URL"),
+		DatabaseRuntimeRole: os.Getenv("TABOO_DATABASE_RUNTIME_ROLE"),
+		IssuerAllowlist:     strings.Split(os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ","),
+		SessionProfile:      os.Getenv("TABOO_OIDC_SESSION_PROFILE"),
+		PublicOrigin:        os.Getenv("TABOO_PUBLIC_ORIGIN"),
+		Port:                getenv("TABOO_PORT", getenv("PORT", "7100")),
+		DataDir:             getenv("TABOO_DATA_DIR", "data"),
+		CORS:                getenv("TABOO_CORS_ORIGIN", "*"),
+		LoginRate:           5,
 	}
 	if v := os.Getenv("TABOO_LOGIN_RATE_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {

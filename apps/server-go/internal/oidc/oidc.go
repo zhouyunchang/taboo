@@ -113,7 +113,7 @@ func (s *Service) scanProvider(scanner interface {
 	p.Revision = auth.ProviderRevisionValues([13]string{p.ID, p.OrgID, p.Issuer, p.ClientID, secretEnc, p.Scopes, p.RoleClaim, p.UsernameClaim, roleMapJSON, p.DefaultRole, strconv.Itoa(auto), strconv.Itoa(syncR), strconv.Itoa(en)})
 	p.RoleMap = map[string]string{}
 	_ = json.Unmarshal([]byte(roleMapJSON), &p.RoleMap)
-	secret, err := tc.Decrypt(s.MasterKey, secretEnc)
+	secret, err := tc.Open(s.MasterKey, secretEnc, tc.Context{Purpose: "oidc-client", Org: p.OrgID, Object: p.ID, Version: 1})
 	if err != nil {
 		return nil, err
 	}
@@ -298,13 +298,13 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "IDP_UNREACHABLE", "identity provider unavailable or incompatible"))
 		return
 	}
-	secretEnc, err := tc.Encrypt(s.MasterKey, b.ClientSecret)
+	id := tc.NewID()
+	secretEnc, err := tc.Seal(s.MasterKey, b.ClientSecret, tc.Context{Purpose: "oidc-client", Org: orgID, Object: id, Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	roleMapJSON, _ := json.Marshal(b.RoleMap)
-	id := tc.NewID()
 	pub, auto, syncR := btoi(boolDefault(b.PublicLogin, true)), btoi(boolDefault(b.Autocreate, false)), btoi(boolDefault(b.SyncRole, true))
 	if err := s.mutateProvider(r, orgID, "oidc.create", "org/"+slug+"/oidc/"+id, `INSERT INTO oidc_providers
 		(id, org_id, name, issuer, client_id, client_secret_enc, scopes, role_claim, role_map, default_role,
@@ -369,7 +369,7 @@ func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
 		args = append(args, string(encoded))
 	}
 	if b.ClientSecret != "" {
-		enc, err := tc.Encrypt(s.MasterKey, b.ClientSecret)
+		enc, err := tc.Seal(s.MasterKey, b.ClientSecret, tc.Context{Purpose: "oidc-client", Org: orgID, Object: id, Version: 1})
 		if err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return

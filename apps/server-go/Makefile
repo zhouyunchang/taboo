@@ -10,6 +10,7 @@ web:
 
 build: web
 	go build -o bin/taboo-server ./cmd/server
+	go build -o bin/taboo-migrate ./cmd/taboo-migrate
 
 run:
 	go run ./cmd/server

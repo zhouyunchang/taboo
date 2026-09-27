@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 type DBTX interface {
 	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
 type Service struct {
@@ -71,16 +73,40 @@ func (s *Service) Drain() {
 	}
 	rows.Close()
 	for _, x := range list {
-		var e events.SecretEvent
-		if err := json.Unmarshal([]byte(x.payload), &e); err != nil {
-			_, _ = s.DB.Exec(`UPDATE outbox_events SET status = 'dead', error = ? WHERE id = ?`, err.Error(), x.id)
-			continue
-		}
-		if s.Bus != nil {
-			s.Bus.Publish(e)
-		}
-		if _, err := s.DB.Exec(`UPDATE outbox_events SET status = 'done' WHERE id = ?`, x.id); err != nil {
-			slog.Error("outbox mark done", "id", x.id, "err", err)
+		if err := s.materialize(x.id); err != nil {
+			slog.Error("outbox materialization failed", "id", x.id, "err", err)
 		}
 	}
+}
+
+func (s *Service) materialize(id string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Atomic claim: competitors block, then observe no pending row. An interrupted
+	// transaction leaves the event pending and does not strand partial tasks.
+	var payload string
+	err = tx.QueryRow(`UPDATE outbox_events SET status='done' WHERE id=? AND status='pending' RETURNING payload`, id).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var event events.SecretEvent
+	if err = json.Unmarshal([]byte(payload), &event); err != nil {
+		if _, err = tx.Exec(`UPDATE outbox_events SET status='dead',error='invalid event payload' WHERE id=?`, id); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if s.Bus == nil {
+		return fmt.Errorf("durable event consumers unavailable")
+	}
+	if err = s.Bus.Dispatch(tx, event); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

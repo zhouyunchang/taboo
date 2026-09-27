@@ -66,7 +66,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
 		return
 	}
-	enc, err := tc.Encrypt(s.MasterKey, verifier)
+	enc, err := tc.Seal(s.MasterKey, verifier, tc.Context{Purpose: "oidc-pkce", Org: p.OrgID, Object: tc.SHA256(state), Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
 		return
@@ -134,7 +134,7 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 		bad()
 		return
 	}
-	verifier, err := tc.Decrypt(s.MasterKey, enc)
+	verifier, err := tc.Open(s.MasterKey, enc, tc.Context{Purpose: "oidc-pkce", Org: p.OrgID, Object: tc.SHA256(q.Get("state")), Version: 1})
 	if err != nil {
 		bad()
 		return

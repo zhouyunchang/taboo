@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -48,6 +49,11 @@ type Deps struct {
 }
 
 func New(d *Deps) *chi.Mux {
+	copy := *d
+	d = &copy
+	if d.Dynamic == nil {
+		d.Dynamic = dynamic.New(d.DB, d.MasterKey)
+	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -59,28 +65,8 @@ func New(d *Deps) *chi.Mux {
 		DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir,
 		DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword,
 	}
-	bus := d.Events
-	if bus == nil {
-		bus = events.NewBus()
-	}
-	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs, Events: bus}
-	folders := &folder.Service{DB: d.DB}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
 	totps := &totpsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
-	syncs := d.Sync
-	if syncs == nil {
-		syncs = &syncsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
-		syncs.Subscribe(bus)
-	}
-	webhooks := d.Webhooks
-	if webhooks == nil {
-		webhooks = &whsvc.Service{DB: d.DB, MasterKey: d.MasterKey}
-		webhooks.Subscribe(bus)
-	}
-	dyn := d.Dynamic
-	if dyn == nil {
-		dyn = dynamic.New(d.DB, d.MasterKey)
-	}
 	loginRate := d.LoginRate
 	if loginRate <= 0 {
 		loginRate = 5
@@ -106,8 +92,8 @@ func New(d *Deps) *chi.Mux {
 				http.Error(w, `{"ok":false,"error":"db"}`, http.StatusServiceUnavailable)
 				return
 			}
-			var ver int
-			if err := d.DB.QueryRow(`PRAGMA user_version`).Scan(&ver); err != nil || ver != store.SchemaVersion {
+			ver, err := store.Version(d.DB)
+			if err != nil || ver != store.SchemaVersion {
 				http.Error(w, `{"ok":false,"error":"schema"}`, http.StatusServiceUnavailable)
 				return
 			}
@@ -134,30 +120,16 @@ func New(d *Deps) *chi.Mux {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(d.DB, d.JWTSecret, d.allowedBrowser))
 			r.Use(federatedScope(d.DB))
-			r.Post("/auth/logout", auth.BrowserLogout(d.DB))
-			orgs.Routes(r)
-			totps.Routes(r)
-			// 机器身份管理（组织级，需 owner）
-			r.Route("/orgs/{slug}/identities", func(r chi.Router) {
-				r.Get("/", identities.List)
-				r.Post("/", identities.Create)
-				r.Post("/{id}/revoke", identities.Revoke)
-			})
-			// Secret Sync 目标与同步记录（M5 #11）
-			syncs.Routes(r)
-			// Webhooks 订阅与投递日志（M5 #12）
-			webhooks.Routes(r)
-			// OIDC SSO 配置（M5 #13）
-			oidcSvc.Routes(r)
-			// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥 + 文件夹路由
-			r.Route("/projects/{pid}", func(r chi.Router) {
-				r.Use(projectCtx(d.DB))
-				r.Get("/environments", orgs.ListEnvs)
-				r.Post("/environments", orgs.CreateEnv)
-				folders.Routes(r)
-				secrets.Routes(r)
-				dyn.Routes(r)
-			})
+			handler := scopedHTTP(d)
+			if err := chi.Walk(protectedRoutes(d), func(method, path string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+				r.Method(method, path, handler)
+				if path != "/" && strings.HasSuffix(path, "/") {
+					r.Method(method, strings.TrimSuffix(path, "/"), handler)
+				}
+				return nil
+			}); err != nil {
+				panic(err)
+			}
 		})
 	})
 
@@ -227,4 +199,43 @@ func writeErr(w http.ResponseWriter, e *apperr.Error) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(e)
+}
+
+// No worker or subscription is started while building request-scoped handlers.
+func protectedRoutes(d *Deps) *chi.Mux {
+	r := chi.NewRouter()
+	orgs := &orgsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
+	folders := &folder.Service{DB: d.DB}
+	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs, Events: d.Events}
+	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
+	totps := &totpsvc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
+	syncs := &syncsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
+	webhooks := &whsvc.Service{DB: d.DB, MasterKey: d.MasterKey}
+	dyn := d.Dynamic.WithDB(d.DB)
+	oidcSvc := &oidc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, PublicOrigin: d.PublicOrigin, SessionProfile: d.SessionProfile, IssuerAllowlist: d.IssuerAllowlist, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
+	r.Post("/auth/logout", auth.BrowserLogout(d.DB))
+	orgs.Routes(r)
+	totps.Routes(r)
+	// 机器身份管理（组织级，需 owner）
+	r.Route("/orgs/{slug}/identities", func(r chi.Router) {
+		r.Get("/", identities.List)
+		r.Post("/", identities.Create)
+		r.Post("/{id}/revoke", identities.Revoke)
+	})
+	// Secret Sync 目标与同步记录（M5 #11）
+	syncs.Routes(r)
+	// Webhooks 订阅与投递日志（M5 #12）
+	webhooks.Routes(r)
+	// OIDC SSO 配置（M5 #13）
+	oidcSvc.Routes(r)
+	// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥 + 文件夹路由
+	r.Route("/projects/{pid}", func(r chi.Router) {
+		r.Use(projectCtx(d.DB))
+		r.Get("/environments", orgs.ListEnvs)
+		r.Post("/environments", orgs.CreateEnv)
+		folders.Routes(r)
+		secrets.Routes(r)
+		dyn.Routes(r)
+	})
+	return r
 }

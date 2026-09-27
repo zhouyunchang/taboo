@@ -1,11 +1,11 @@
 package store
 
-import "database/sql"
-
 // Additive schema: existing organizations and secrets retain their IDs. A
 // tombstoned admission is retained so JIT cannot recreate revoked membership.
-func migrateFederation(db *sql.DB) error {
+func migrateFederation(db migrationDB) error {
 	_, err := db.Exec(`
+CREATE TABLE IF NOT EXISTS mutation_receipts (org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, actor_id TEXT NOT NULL, request_key TEXT NOT NULL, request_hash TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY(org_id,actor_id,request_key));
+CREATE TABLE IF NOT EXISTS audit_heads (org_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS external_identities (
  issuer TEXT NOT NULL, subject TEXT NOT NULL,
  user_id TEXT NOT NULL UNIQUE REFERENCES users(id),

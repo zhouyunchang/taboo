@@ -68,10 +68,12 @@ type Postgres struct {
 	database string
 }
 
+func (p *Postgres) Close() error { return p.db.Close() }
+
 func (p *Postgres) Type() string { return "postgres" }
 
 func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
-func quoteLit(s string) string { return `'` + strings.ReplaceAll(s, `'`, `''`) + `'` }
+func quoteLit(s string) string   { return `'` + strings.ReplaceAll(s, `'`, `''`) + `'` }
 
 func (p *Postgres) Grant(ctx context.Context, username, password string, ttl time.Duration) error {
 	validUntil := time.Now().Add(ttl).UTC().Format("2006-01-02 15:04:05")

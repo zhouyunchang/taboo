@@ -4,14 +4,11 @@ import (
 	"testing"
 
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
-	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/testdb"
 )
 
 func TestHashChainAndTamper(t *testing.T) {
-	db, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	defer db.Close()
 	org := "org-1"
 	key := make([]byte, 32)

@@ -54,7 +54,8 @@ func BootstrapFromEnv(db *sql.DB, masterKey []byte) {
 		log.Printf("[taboo] OIDC bootstrap: discovery failed for %s: %v", issuer, err)
 		return
 	}
-	enc, err := tc.Encrypt(masterKey, secret)
+	id := tc.NewID()
+	enc, err := tc.Seal(masterKey, secret, tc.Context{Purpose: "oidc-client", Org: orgID, Object: id, Version: 1})
 	if err != nil {
 		log.Printf("[taboo] OIDC bootstrap: encrypt secret: %v", err)
 		return
@@ -76,7 +77,6 @@ func BootstrapFromEnv(db *sql.DB, masterKey []byte) {
 		_ = json.Unmarshal([]byte(raw), &roleMap)
 	}
 	roleJSON, _ := json.Marshal(roleMap)
-	id := tc.NewID()
 	if _, err := db.Exec(`INSERT INTO oidc_providers
 		(id, org_id, name, issuer, client_id, client_secret_enc, scopes, role_claim, role_map, default_role,
 		 username_claim, public_login, autocreate, sync_role, enabled)

@@ -65,12 +65,16 @@ func (s *Service) audit(u *auth.Actor, action, resource string, r *http.Request)
 	if err != nil {
 		return
 	}
-	defer rows.Close()
+	var orgs []string
 	for rows.Next() {
-		var orgID string
-		if rows.Scan(&orgID) == nil {
-			_ = auth.AuditReq(s.DB, r, orgID, u, action, resource, nil)
+		var org string
+		if rows.Scan(&org) == nil {
+			orgs = append(orgs, org)
 		}
+	}
+	rows.Close()
+	for _, org := range orgs {
+		_ = auth.AuditReq(s.DB, r, org, u, action, resource, nil)
 	}
 }
 
@@ -82,7 +86,7 @@ func (s *Service) Setup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	enc, err := tc.Encrypt(s.MasterKey, secret)
+	enc, err := tc.Seal(s.MasterKey, secret, tc.Context{Purpose: "user-totp", Object: u.ID, Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -120,7 +124,7 @@ func (s *Service) VerifyActivate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "NO_PENDING", "run setup first"))
 		return
 	}
-	secret, err := tc.Decrypt(s.MasterKey, enc)
+	secret, err := tc.Open(s.MasterKey, enc, tc.Context{Purpose: "user-totp", Object: u.ID, Version: 1})
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -209,7 +213,7 @@ func (s *Service) Login2FA(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		secret, err := tc.Decrypt(s.MasterKey, enc)
+		secret, err := tc.Open(s.MasterKey, enc, tc.Context{Purpose: "user-totp", Object: userID, Version: 1})
 		if err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
@@ -287,4 +291,3 @@ func base32HexLower(b []byte) string {
 	}
 	return string(out)
 }
-

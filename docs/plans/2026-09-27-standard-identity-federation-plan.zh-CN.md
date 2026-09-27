@@ -1,9 +1,9 @@
 # taboo 标准身份联邦与多租户改造计划
 
-- 编号：KTI-PLAN；版本：0.3；日期：2026-09-27；状态：已批准，首批实现与验证中。
+- 编号：KTI-PLAN；版本：0.4；日期：2026-09-27；状态：已批准，持续实施至全部 P0 完成后合并 develop。
 - 改造对象：开源 taboo 项目；源码核对基线 `d5724d3`。
 - 本版替代此前面向单一 Identity 工程的 v0.1 计划：改为开放标准、提供方无关的产品设计。
-- 架构基准：[OpenVault 功能与详细设计](../../doc/OpenVault_密钥管理平台_功能与详细设计.md)。首批代码与未完成门槛见 [实施记录](../design/standard-identity-federation-m0.zh-CN.md)，不代表全部 P0 完成。
+- 架构基准：[OpenVault 功能与详细设计](../../doc/OpenVault_密钥管理平台_功能与详细设计.md)。首批代码与未完成门槛见 [实施记录](../design/standard-identity-federation-m0.zh-CN.md)，以及 [存储、加密与投递记录](../design/standard-identity-storage.zh-CN.md)。仍不代表全部 P0 完成。
 
 ## 1. 产品目标和不可违反的边界
 
