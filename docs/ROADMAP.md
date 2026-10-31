@@ -138,10 +138,11 @@
 | 备份 | `backups/taboo-20261031-p1.dump`（0600，pg_restore -l 可读） |
 | DNS | Aliyun A 记录待用户添加；dev122 `/etc/hosts` 已加 `10.0.30.122 taboo.swetcc.com`（原文件备份为 `/etc/hosts.bak-taboo-20261031`） |
 
-遗留问题（转入 Phase 2）：
-- 390px 窄屏下密钥表格的操作按钮横向溢出（页面可横向滚动）。
-- 列表“更新时间”显示 UTC，未按浏览器时区显示。
-- 镜像未注入版本号（Dockerfile 无 ldflags 版本）。
+遗留问题（转入 Phase 2，均已在 Phase 2 解决）：
+- ~~390px 窄屏下密钥表格的操作按钮横向溢出（页面可横向滚动）~~ → ≤640px 卡片布局。
+- ~~列表“更新时间”显示 UTC，未按浏览器时区显示~~ → `apps/web/src/time.ts` 按浏览器时区显示，悬停显示 UTC。
+- ~~镜像未注入版本号~~ → ldflags + OCI 标签。
+- ~~冒烟测试遗留 `smoke-*@taboo.dev` 账号~~ → 已禁用（未删除）；以后冒烟使用专用账号且结束后禁用。
 
 ---
 
@@ -158,6 +159,27 @@
 6. 可选：Woodpecker（`ci-dev122`）流水线，在 `develop` push 时构建 amd64 镜像并推本地 registry（需用户确认是否启用及仓库授权）。
 
 验证：一次完整的“升级 → 冒烟 → 回滚 → 冒烟 → 再升级”；恢复演练数据一致；版本号在 UI/接口中可见。部署：用新脚本把 Phase 2 版本发到 dev122。
+
+### 2.1 执行记录（2026-10-31，完成）
+
+| 项 | 结果 |
+|---|---|
+| 版本可见 | `internal/buildinfo`；`taboo-server --version`；`/api/v1/healthz` 返回 `version/commit/build_time`（OpenAPI + api-types 同步）；镜像 OCI 标签；前端侧栏与登录页 `taboo v0.1.0 · d7093f4` |
+| 运维脚本 | `deploy/dev122/taboo-ctl.sh`：status / upgrade / rollback / history / backup / backups / restore-drill / restore / smoke / user / install-timers；`deploy.sh --image`、`--rollback` |
+| 账号管理 | `taboo-server user create|status|enable|disable`（审计 `admin.user.*`，禁用即吊销会话）；登录拒绝非 active 用户 |
+| 本机全量验证 | `scripts/verify-all.sh --container`：14 步全部 PASS（含 consumers、federation+browser、postgres+keycloak、docker build、容器恢复） |
+| dev122 升级 | `taboo:dev-c4cfe39` → `taboo:dev-d7093f4`，升级前备份 `20261031-144553-pre-upgrade` |
+| 回滚演练 | 升级 → 冒烟 15/15 → 回滚到 c4cfe39 → 冒烟 15/15（SQL 兜底启停账号）→ 再升级 d7093f4 → 冒烟 15/15；`releases.log` 记录 baseline/upgrade/rollback/upgrade |
+| 浏览器检查 | `scripts/browser-check.mjs` 经 HTTPS 对 dev122：1280 与 390 均通过（版本显示、更新时间为 Asia/Shanghai 本地时间、无横向溢出、操作按钮完整可见） |
+| 恢复演练 | `20261031-144859-pre-upgrade` → `taboo_restore_test`：39 表 154 行一致，`taboo-migrate verify` 通过，临时实例 readyz OK，PASS（见 `docs/runbooks/dev122-operations.zh-CN.md`） |
+| 定时器 | `taboo-backup.timer` 每日 03:30（保留 7 份），`taboo-restore-drill.timer` 每周日 04:15；已手动触发一次 daily 备份成功 |
+| 遗留账号 | `smoke-1793427846712@taboo.dev` 已禁用（未删除） |
+
+与计划的差异：
+- 备份为在线 `pg_dump`（一致性快照），未停机；回滚仅切换镜像，数据回退走 `restore`。
+- 冒烟改为专用账号 `smoke@taboo.swetcc.com`（平时禁用，冒烟时临时启用），冒烟共 15 项（新增清理步骤）。
+- Woodpecker CI 跳过（可选项，待用户决定）。
+- 备份仍在 dev122 本机，异地拷贝待安排。
 
 ---
 
@@ -212,6 +234,8 @@
 
 ## 通用验证（每阶段必须通过）
 
+一条命令：`./scripts/verify-all.sh --container`（`--quick` 跳过重型套件；`VERIFY_LOG_DIR` 指定日志目录）。等价于：
+
 ```sh
 npm ci && git checkout -- apps/cli/taboo.js 2>/dev/null || true   # npm ci 会改可执行位
 npm run types && git diff --exit-code -- apps/web/src/api-types.ts
@@ -226,7 +250,7 @@ TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
 TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 ```
 
-线上：`TABOO_BASE=https://taboo.swetcc.com` 冒烟（或只读健康检查 + 浏览器登录，视注册开关而定）。
+线上：`ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh smoke`（专用账号，15 项）+ `scripts/browser-check.mjs`（1280/390）。
 
 ## 需用户决定 / 风险
 
@@ -242,7 +266,7 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 |---|---|---|
 | Phase 0 评估与计划 | 完成 | 2026-10-31 |
 | Phase 1 dev122 部署与 HTTPS | 完成（DNS A 记录待用户添加） | 2026-10-31 |
-| Phase 2 | 未开始 | |
+| Phase 2 可重复部署、备份恢复与工程基线 | 完成（Woodpecker 跳过） | 2026-10-31 |
 | Phase 3 | 未开始 | |
 | Phase 4 | 未开始 | |
 | Phase 5 | 未开始 | |

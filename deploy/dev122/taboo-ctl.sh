@@ -192,7 +192,8 @@ cmd_smoke() {
     log "created dedicated smoke account $email (credentials: $creds, 0600)"
   fi
   email="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["email"])' "$creds")"
-  smoke_off() { user_status disable "$email" && log "smoke account $email disabled again"; }
+  SMOKE_EMAIL="$email"   # global: the EXIT trap runs after this function's locals are gone
+  smoke_off() { user_status disable "$SMOKE_EMAIL" && log "smoke account $SMOKE_EMAIL disabled again"; }
   trap smoke_off EXIT
   user_status enable "$email"
   docker run --rm --network host --add-host "${PUBLIC_URL#https://}:$PUBLIC_IP" \

@@ -17,13 +17,14 @@ const check = (name, ok, extra = '') => { if (ok) console.log(`  ✓ ${name}`); 
 
 const args = process.env.TABOO_HOST_MAP ? [`--host-resolver-rules=MAP ${process.env.TABOO_HOST_MAP}`] : [];
 const browser = await chromium.launch({ args });
-// API 调用也走浏览器网络栈（共享 host 映射与证书校验）
+// API 调用在浏览器页面内 fetch（APIRequestContext 走 Node 解析器，不认 --host-resolver-rules）
 const apiCtx = await browser.newContext();
-const req = apiCtx.request;
-const call = async (method, path, { token, body } = {}) => {
-  const r = await req.fetch(BASE + path, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, data: body ? JSON.stringify(body) : undefined });
-  return { status: r.status(), data: await r.json().catch(() => ({})) };
-};
+const apiPage = await apiCtx.newPage();
+await apiPage.goto(BASE + '/api/v1/healthz');
+const call = (method, path, { token, body } = {}) => apiPage.evaluate(async ({ url, method, token, body }) => {
+  const r = await fetch(url, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  return { status: r.status, data: await r.json().catch(() => ({})) };
+}, { url: BASE + path, method, token, body });
 
 const health = (await call('GET', '/api/v1/healthz')).data;
 check('healthz reports version', !!health.version && !!health.commit, JSON.stringify(health));
