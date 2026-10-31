@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/buildinfo"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
@@ -97,8 +98,10 @@ func New(d *Deps) *chi.Mux {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			bi := buildinfo.Get()
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true}`))
+			w.Header().Set("Cache-Control", "no-store")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "version": bi.Version, "commit": bi.Commit, "build_time": bi.BuildTime})
 		})
 		r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 			if d.DB == nil {
@@ -115,8 +118,10 @@ func New(d *Deps) *chi.Mux {
 				http.Error(w, `{"ok":false,"error":"schema"}`, http.StatusServiceUnavailable)
 				return
 			}
+			bi := buildinfo.Get()
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true}`))
+			w.Header().Set("Cache-Control", "no-store")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "version": bi.Version, "commit": bi.Commit, "build_time": bi.BuildTime})
 		})
 		orgs.PublicRoutes(r)
 		// client_credentials 换 token（公开，登录同窗口限流）

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import ValidatedForm from '../components/ValidatedForm';
 import type { User } from '../api';
+import VersionTag from '../components/VersionTag';
 
 interface Tokens { access: string; refresh: string }
 interface Props { onSuccess: (d: { user: User; tokens: Tokens }) => void }
@@ -161,6 +162,7 @@ export default function Login({ onSuccess }: Props) {
             {mode === 'login' ? '没有账号？注册（自动创建个人组织）' : '已有账号？去登录'}
           </button>
         )}
+      <VersionTag />
       </ValidatedForm>
     </div>
   );

@@ -10,6 +10,10 @@ Aliyun DNS-01). **No secret is stored in this repository.**
 | Deploy dir on dev122 | `/var/snap/docker/common/swetcc-dev/taboo` (0700) |
 | Secrets | `<deploy dir>/.env` (0600, generated on first deploy) |
 | Bootstrap owner | `<deploy dir>/bootstrap-owner.json` (0600) |
+| Smoke account | `smoke@taboo.swetcc.com`, credentials `<deploy dir>/smoke-account.json` (0600); **disabled** except while `taboo-ctl.sh smoke` runs |
+| Backups | `<deploy dir>/backups/<YYYYmmdd-HHMMSS>-<label>/` (0700): `taboo.dump`, `data.tar.gz`, `env` (0600), `counts.tsv`, `meta.txt`, `SHA256SUMS` |
+| Release log | `<deploy dir>/releases.log` (time, action, tag, image id, version, commit) |
+| Timers | `taboo-backup.timer` daily 03:30 (keep 7), `taboo-restore-drill.timer` Sun 04:15 (dev122 local time, CST) |
 | Container / alias | `taboo` on network `swetcc`, host bind `127.0.0.1:7100` |
 | Data volume | `taboo_data` (`/data`, local state only; system of record is PostgreSQL) |
 | Database | `taboo` on `swetcc-postgres`, owner `taboo_control` (LOGIN, NOSUPERUSER, NOBYPASSRLS); runtime role `taboo_runtime` (NOLOGIN) granted to it; FORCE RLS |
@@ -21,8 +25,12 @@ Aliyun DNS-01). **No secret is stored in this repository.**
 - `compose.yaml` – the service (image tag comes from `TABOO_IMAGE` in `.env`).
 - `env.example` – shape of `.env`; real values are random and only on dev122.
 - `deploy.sh` – run from a developer checkout: ships sources (`git ls-files`) to dev122,
-  builds the linux/amd64 image natively there (`taboo:dev-<sha>`), syncs these files,
-  creates `.env` on first run, runs `init-db.sh`, `docker compose up -d`, waits for health.
+  builds the linux/amd64 image natively there (`taboo:dev-<sha>`, version/commit/build time
+  baked in via `--build-arg` → ldflags + OCI labels), syncs these files, creates `.env` on the
+  first run, then `taboo-ctl.sh upgrade` and checks that `/api/v1/healthz` reports the commit.
+  `--image TAG` switches to an existing tag; `--rollback [TAG]` rolls back.
+- `taboo-ctl.sh` – day-2 operations on dev122: `status`, `upgrade`, `rollback`, `history`,
+  `backup`, `backups`, `restore-drill`, `restore`, `smoke`, `user`, `install-timers`.
 - `init-db.sh` – idempotent DB/role setup on `swetcc-postgres` (admin via container socket).
 - `bootstrap-owner.sh` – one-shot: registers the first owner with a random password into
   `bootstrap-owner.json` (0600), then sets `TABOO_DISABLE_REGISTER=true` and recreates.
@@ -44,19 +52,48 @@ Health: `curl -fsS https://taboo.swetcc.com/api/v1/readyz`; self-check:
 DNS: public record `taboo.swetcc.com A 10.0.30.122` (Aliyun). Until it exists, use a hosts
 override (`10.0.30.122 taboo.swetcc.com`); dev122 itself has one in `/etc/hosts`.
 
-## Backup / restore
-
-The encryption root is `TABOO_MASTER_KEY` in `.env`; a database dump is useless without it.
+## Upgrade / rollback
 
 ```bash
-docker exec swetcc-postgres pg_dump -U postgres -Fc taboo > taboo-$(date +%F).dump   # on dev122
+deploy/dev122/deploy.sh                    # one command: build + pre-upgrade backup + switch + health/version check
+deploy/dev122/deploy.sh --rollback         # back to the previous release (image only)
+deploy/dev122/deploy.sh --rollback taboo:dev-abc1234
+ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh status
+ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh smoke   # HTTPS smoke, 15 checks
 ```
 
-Keep dump and `.env` together (both 0600). Never run `docker compose down -v` in
-`infra/` – the PostgreSQL volume is shared by other services. `docker compose down` here
-only touches the `taboo` container; `taboo_data` holds no system-of-record data in PG mode.
+`upgrade` takes a `pre-upgrade` backup first (keep 5) and automatically switches back if the
+new image never becomes healthy. Rollback only swaps the image: schema migrations are
+forward-only, so if the newer release migrated the schema, roll the data back with
+`restore <pre-upgrade backup> --yes` as well.
 
-## Rollback
+## Backup / restore
 
-Set `TABOO_IMAGE` in `.env` to a previous `taboo:dev-<sha>` tag and `docker compose up -d`.
-Schema migrations are forward-only; take a `pg_dump` before deploying a new schema version.
+The encryption root is `TABOO_MASTER_KEY` in `.env`; a database dump is useless without it,
+so every backup set carries an `env` snapshot (0600). Backups stay on dev122 — copy them off
+the host if dev122 itself must be survivable.
+
+```bash
+T=/var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh
+ssh dev122-root $T backup                    # manual backup (label "manual", keep 5)
+ssh dev122-root $T backups                   # list
+ssh dev122-root $T restore-drill             # latest backup → temp DB taboo_restore_test → verify → drop
+ssh dev122-root $T restore 20261031-153000-pre-upgrade --yes   # overwrite live taboo DB (takes a pre-restore backup first)
+ssh dev122-root $T install-timers            # (re)install systemd timers
+```
+
+The drill checks SHA256SUMS, restores into `taboo_restore_test`, compares per-table row
+counts with `counts.tsv`, decrypts every envelope with `taboo-migrate verify` using the
+backup's own master key, starts a throwaway server on `127.0.0.1:7198` against it and
+waits for `readyz`, then drops the temporary database. A log is written next to the backup.
+
+Never run `docker compose down -v` in `infra/` – the PostgreSQL volume is shared by other
+services. `docker compose down` here only touches the `taboo` container; `taboo_data`
+holds no system-of-record data in PG mode.
+
+## Accounts
+
+Registration is disabled. Manage local accounts with
+`docker exec -i taboo taboo-server user create EMAIL [--name N] [--disabled]` (password on
+stdin), `taboo-server user status|enable|disable EMAIL`. Disabling revokes refresh tokens and
+browser sessions; every change is audited as `admin.user.*`.

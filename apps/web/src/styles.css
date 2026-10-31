@@ -99,7 +99,9 @@ label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--f
 .table td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .table tr.latest td { background: rgba(88, 166, 255, 0.06); }
 .key { cursor: pointer; color: var(--accent); }
-.actions { white-space: nowrap; display: flex; gap: 6px; }
+/* 操作列保持 table-cell（display:flex 会让单元格脱离表格布局，窄屏溢出视口） */
+.actions { white-space: nowrap; }
+.actions > * + * { margin-left: 6px; }
 .tag {
   display: inline-block; background: var(--bg2); border: 1px solid var(--border);
   border-radius: 20px; padding: 1px 8px; font-size: 11px; margin-right: 4px; color: var(--muted);
@@ -214,4 +216,26 @@ select { color-scheme: dark; background: var(--bg); color: var(--fg); border: 1p
   .topbar .org-switch select { width:calc(100% - 48px); max-width:none; min-width:0; }
   .topbar .spacer { display:none; }
   .table-scroll table { min-width:620px; }
+}
+
+/* 版本标识（/api/v1/healthz） */
+.version-tag { margin: 0; font-size: 11px; overflow-wrap: anywhere; }
+.sidebar-version { margin-top: auto; padding: 12px 8px 0; }
+/* 密钥表：操作按钮允许换行，长 Key 可断行，避免在列表容器内被横向裁切 */
+.secrets-table th { white-space: nowrap; }
+.secrets-table td.actions { white-space: normal; min-width: 120px; }
+.secrets-table td.actions > * { margin: 0 6px 6px 0; }
+.secrets-table td.actions > * + * { margin-left: 0; }
+.secrets-table .key button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+/* 密钥表：窄屏改为卡片式，每行 Key + 字段 + 操作按钮换行显示，不再横向溢出 */
+@media (max-width: 640px) {
+  .secrets-table thead { display: none; }
+  .secrets-table, .secrets-table tbody, .secrets-table tr, .secrets-table td { display: block; width: 100%; box-sizing: border-box; }
+  .secrets-table tr { border-bottom: 1px solid var(--border); padding: 8px 0; }
+  .secrets-table td { border: 0; padding: 3px 6px; }
+  .secrets-table td.empty { display: none; }
+  .secrets-table td[data-label]::before { content: attr(data-label) "："; color: var(--muted); font-size: 12px; }
+  .secrets-table td.mono { overflow-wrap: anywhere; }
+  .secrets-table td.actions { min-width: 0; padding-top: 6px; }
+  .sidebar-version { margin-top: 8px; }
 }

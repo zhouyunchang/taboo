@@ -4,6 +4,7 @@ import { GrantEditor, ConnectionSecurity, OrganizationSecurity, WorkloadGovernan
 import Modal from '../components/Modal';
 import ValidatedForm from '../components/ValidatedForm';
 import type { SyncTarget, SyncRun, Webhook, OIDCProvider } from '../api';
+import { fmtTime, timeTitle } from '../time';
 
 // 组织设置（M5 #11/#12/#13）：Secret Sync / Webhooks / OIDC SSO
 export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role: string }) {
@@ -105,7 +106,7 @@ function SyncTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean }
         <tbody>
           {runs.map((r) => (
             <tr key={r.id}>
-              <td className="muted nowrap">{r.updated_at}</td>
+              <td className="muted nowrap" title={timeTitle(r.updated_at)}>{fmtTime(r.updated_at)}</td>
               <td className="mono">{r.secret_key}</td>
               <td className="muted">{r.trigger_type}</td>
               <td><span className={`tag ${r.status === 'success' ? 'ok' : r.status === 'dead' ? 'bad' : ''}`}>{r.status}</span></td>
@@ -239,7 +240,7 @@ function WebhooksTab({ orgSlug, canManage }: { orgSlug: string; canManage: boole
               <tbody>
                 {(deliveries[h.id ?? ''] ?? []).map((d) => (
                   <tr key={String(d.id)}>
-                    <td className="muted nowrap">{String(d.delivered_at ?? d.created_at ?? '')}</td>
+                    <td className="muted nowrap" title={timeTitle(d.delivered_at ?? d.created_at)}>{fmtTime(d.delivered_at ?? d.created_at)}</td>
                     <td><span className="tag">{String(d.event)}</span></td>
                     <td><span className={`tag ${d.status === 'success' ? 'ok' : d.status === 'dead' ? 'bad' : ''}`}>{String(d.status)}</span></td>
                     <td className="muted">{String(d.http_code ?? '')}</td>

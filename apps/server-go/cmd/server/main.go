@@ -2,9 +2,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -19,11 +21,13 @@ import (
 	"time"
 
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/buildinfo"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/config"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
+	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/server"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
@@ -46,6 +50,10 @@ var mime = map[string]string{
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "version") {
+		fmt.Println("taboo-server " + buildinfo.Get().String())
+		return
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	cfg := config.Load()
 
@@ -78,6 +86,12 @@ func main() {
 	}
 	if err != nil {
 		log.Fatalf("[taboo] open db: %v", err)
+	}
+
+	if len(args) > 0 && args[0] == "user" {
+		code := runUserCmd(db, masterKey, args[1:])
+		_ = db.Close()
+		os.Exit(code)
 	}
 
 	for _, arg := range args {
@@ -161,6 +175,7 @@ func main() {
 	addr := ":" + cfg.Port
 	srv := &http.Server{Addr: addr, Handler: r}
 	go func() {
+		log.Printf("[taboo] version %s", buildinfo.Get().String())
 		log.Printf("[taboo] server listening on http://localhost%s", addr)
 		log.Printf("[taboo] data dir: %s", cfg.DataDir)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -240,4 +255,77 @@ func runSelfCheck(db *sql.DB, masterKey []byte) {
 		os.Exit(1)
 	}
 	log.Printf("[check] all checks passed")
+}
+
+// runUserCmd：本地账号运维（注册关闭时建号、停用/启用测试或离职账号）。
+//
+//	taboo-server user status  EMAIL
+//	taboo-server user disable EMAIL
+//	taboo-server user enable  EMAIL
+//	taboo-server user create  EMAIL [--name NAME] [--disabled]   # 密码从 stdin 第一行读取
+//
+// 输出单行 JSON，便于脚本处理；从不回显密码。
+func runUserCmd(db *sql.DB, masterKey []byte, args []string) int {
+	usage := func() int {
+		fmt.Fprintln(os.Stderr, "usage: taboo-server user status|disable|enable EMAIL | user create EMAIL [--name NAME] [--disabled] (password on stdin)")
+		return 2
+	}
+	if len(args) < 2 {
+		return usage()
+	}
+	cmd, email := args[0], args[1]
+	out := func(v map[string]any) int {
+		b, _ := json.Marshal(v)
+		fmt.Println(string(b))
+		return 0
+	}
+	fail := func(err error) int {
+		fmt.Fprintf(os.Stderr, "[taboo] user %s: %v\n", cmd, err)
+		if errors.Is(err, orgsvc.ErrUserNotFound) {
+			return 3
+		}
+		return 1
+	}
+	switch cmd {
+	case "status":
+		st, err := orgsvc.AdminUserStatus(db, email)
+		if err != nil {
+			return fail(err)
+		}
+		return out(map[string]any{"email": email, "status": st})
+	case "disable", "enable":
+		status := map[string]string{"disable": "disabled", "enable": "active"}[cmd]
+		changed, err := orgsvc.AdminSetUserStatus(db, email, status)
+		if err != nil {
+			return fail(err)
+		}
+		return out(map[string]any{"email": email, "status": status, "changed": changed})
+	case "create":
+		name, status := "", "active"
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--name":
+				if i+1 >= len(args) {
+					return usage()
+				}
+				name = args[i+1]
+				i++
+			case "--disabled":
+				status = "disabled"
+			default:
+				return usage()
+			}
+		}
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && line == "" {
+			return fail(errors.New("password must be provided on stdin"))
+		}
+		u, err := orgsvc.AdminCreateUser(db, masterKey, email, name, strings.TrimRight(line, "\r\n"), status)
+		if err != nil {
+			return fail(err)
+		}
+		return out(map[string]any{"email": email, "status": status, "user_id": u.UserID, "org_slug": u.Slug})
+	default:
+		return usage()
+	}
 }

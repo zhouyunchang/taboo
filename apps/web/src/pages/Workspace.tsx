@@ -7,6 +7,8 @@ import IdentityReplacement from '../components/IdentityReplacement';
 import useSecretMutation from '../components/useSecretMutation';
 import Modal from '../components/Modal';
 import ValidatedForm from '../components/ValidatedForm';
+import { fmtTime, timeTitle } from '../time';
+import VersionTag from '../components/VersionTag';
 
 interface Props {
   user: User;
@@ -100,6 +102,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
             </button>
           ))}
           {error && <div className="error">{error}</div>}
+          <VersionTag className="sidebar-version" />
         </aside>
 
         <main className="main">
@@ -306,7 +309,7 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite: legacyCanWrite }:
           <FolderTree folders={folders} cur={cur} onSelect={selectFolder} />
         </aside>
         <div className="grow" tabIndex={0} role="region" aria-label="密钥列表">
-          <table className="table">
+          <table className="table secrets-table">
             <thead>
               <tr><th>Key</th><th>值</th><th>标签</th><th>版本</th><th>更新时间</th><th /></tr>
             </thead>
@@ -419,13 +422,13 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
   return (
     <tr>
       <td className="mono key"><button className="ghost" onClick={onDetail} title="查看详情/版本">{s.key}</button></td>
-      <td className="mono">
+      <td className="mono" data-label="值">
         {value === null ? '••••••••' : value}
         {err && <span className="error"> {err}</span>}
       </td>
-      <td>{s.tags.map((t) => <span key={t} className="tag">{t}</span>)}</td>
-      <td>v{s.version}</td>
-      <td className="muted">{s.updated_at}</td>
+      <td data-label="标签" className={s.tags.length ? '' : 'empty'}>{s.tags.map((t) => <span key={t} className="tag">{t}</span>)}</td>
+      <td data-label="版本">v{s.version}</td>
+      <td className="muted nowrap" data-label="更新时间" title={timeTitle(s.updated_at)}>{fmtTime(s.updated_at)}</td>
       <td className="actions">
         {s.canReveal && <button className="ghost" onClick={reveal}>{value === null ? '显示' : '隐藏'}</button>}
         {s.canReveal && <button className="ghost" onClick={copy}>复制</button>}
@@ -522,7 +525,7 @@ function DetailDrawer({ projectId, env, meta, onClose, onChanged }: {
               <tr key={v.version} className={v.version === latest ? 'latest' : ''}>
                 <td>v{v.version}{v.version === latest && '（当前）'}</td>
                 <td className="muted">{v.created_by.slice(0, 8)}</td>
-                <td className="muted">{v.created_at}</td>
+                <td className="muted" title={timeTitle(v.created_at)}>{fmtTime(v.created_at)}</td>
                 <td>{canRollback && v.version !== latest && <button className="ghost" onClick={() => rollback(v.version)}>回滚到此</button>}</td>
               </tr>
             ))}
@@ -594,7 +597,7 @@ function AuditPanel({ orgSlug }: { orgSlug: string }) {
         <tbody>
           {logs.map((l) => (
             <tr key={l.id}>
-              <td className="muted nowrap">{l.created_at}</td>
+              <td className="muted nowrap" title={timeTitle(l.created_at)}>{fmtTime(l.created_at)}</td>
               <td>{l.actor_name}</td>
               <td><span className="tag">{l.action}</span></td>
               <td className="mono">{l.resource}</td>

@@ -195,6 +195,8 @@ func failClosed(action string) bool {
 		return true
 	case strings.HasPrefix(action, "identity.") && action != "identity.list":
 		return true
+	case strings.HasPrefix(action, "admin."):
+		return true
 	case strings.HasPrefix(action, "auth.totp."), strings.HasPrefix(action, "members."), strings.HasPrefix(action, "oidc."), strings.HasPrefix(action, "workload."):
 		return true
 	case action == "auth.session.refresh", action == "auth.logout", action == "auth.oidc.login", action == "auth.login", action == "auth.register", action == "project.create", action == "env.create":

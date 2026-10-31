@@ -145,11 +145,36 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	userID := tc.NewID()
-	if _, err := tx.Exec(`INSERT INTO users (id, email, name, password_hash, auth_source) VALUES (?, ?, ?, ?, 'local')`,
-		userID, email, b.Name, hash); err != nil {
+	created, cerr := CreateLocalUser(tx, s.MasterKey, email, b.Name, hash)
+	if cerr != nil {
+		writeErr(w, cerr)
+		return
+	}
+	userID, orgID := created.UserID, created.OrgID
+	u := &auth.Actor{ID: userID, Email: email, Name: b.Name, Kind: auth.KindUser}
+
+	tk, err := auth.IssueTokens(tx, s.JWTSecret, u)
+	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
+	}
+	if !auth.CommitMutation(tx, w, r, orgID, u, "auth.register", "user/"+email, nil) {
+		return
+	}
+	writeJSON(w, 201, map[string]any{"user": u, "tokens": tk})
+}
+
+// NewLocalUser 是 CreateLocalUser 的结果。
+type NewLocalUser struct{ UserID, OrgID, Slug string }
+
+// CreateLocalUser 在调用方事务内创建本地账号 + 个人组织（DEK 经 Root Key 加密落库）
+// + 默认项目 + dev/staging/prod。注册接口与运维 CLI（taboo-server user create）共用。
+func CreateLocalUser(tx *sql.Tx, masterKey []byte, email, name, passwordHash string) (NewLocalUser, *apperr.Error) {
+	hash := passwordHash
+	userID := tc.NewID()
+	if _, err := tx.Exec(`INSERT INTO users (id, email, name, password_hash, auth_source) VALUES (?, ?, ?, ?, 'local')`,
+		userID, email, name, hash); err != nil {
+		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
 	}
 	// 个人组织（DEK 经 Root Key 加密落库）+ 默认项目 + dev/staging/prod
 	orgID := tc.NewID()
@@ -162,24 +187,20 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		slug += "-" + tc.NewID()[:4]
 	}
 	dek := randomBytes(tc.KeyLen)
-	dekPlain, err := tc.Seal(s.MasterKey, hexEncode(dek), tc.DEKContext(orgID))
+	dekPlain, err := tc.Seal(masterKey, hexEncode(dek), tc.DEKContext(orgID))
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", "DEK encryption failed"))
-		return
+		return NewLocalUser{}, apperr.New(500, "INTERNAL", "DEK encryption failed")
 	}
 	if _, err := tx.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, ?, ?, ?)`,
 		orgID, email+"'s org", slug, dekPlain); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
+		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
 	}
 	if _, err := tx.Exec(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')`, orgID, userID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
+		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
 	}
 	projectID := tc.NewID()
 	if _, err := tx.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'default', 'default')`, projectID, orgID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
+		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
 	}
 	for i, env := range []string{"dev", "staging", "prod"} {
 		envID := tc.NewID()
@@ -189,25 +210,13 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
 			envID, projectID, env, env, i, prot); err != nil {
-			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-			return
+			return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
 		}
 		if err := ensureRootFolder(tx, envID); err != nil {
-			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
-			return
+			return NewLocalUser{}, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed")
 		}
 	}
-	u := &auth.Actor{ID: userID, Email: email, Name: b.Name, Kind: auth.KindUser}
-
-	tk, err := auth.IssueTokens(tx, s.JWTSecret, u)
-	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	if !auth.CommitMutation(tx, w, r, orgID, u, "auth.register", "user/"+email, nil) {
-		return
-	}
-	writeJSON(w, 201, map[string]any{"user": u, "tokens": tk})
+	return NewLocalUser{UserID: userID, OrgID: orgID, Slug: slug}, nil
 }
 
 func randomBytes(n int) []byte {
@@ -249,6 +258,12 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || !ok {
 		_ = auth.AuditReq(s.DB, r, "-", nil, "auth.login.failed", "user/"+email, map[string]any{"reason": "bad_credentials"})
+		writeErr(w, apperr.BadCredentials)
+		return
+	}
+	if status != "active" {
+		// 停用账号：与密码错误同一响应，不泄露账号状态
+		_ = auth.AuditReq(s.DB, r, "-", nil, "auth.login.failed", "user/"+email, map[string]any{"reason": "account_" + status})
 		writeErr(w, apperr.BadCredentials)
 		return
 	}

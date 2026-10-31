@@ -91,7 +91,18 @@ paths:
       summary: 进程存活
       operationId: healthz
       responses:
-        '200': { description: 进程活着 }
+        '200':
+          description: 进程活着，附带构建版本（-ldflags 注入；未注入时 version=dev）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, version, commit]
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string, example: 0.1.0 }
+                  commit: { type: string, example: 815f0a7 }
+                  build_time: { type: string, example: '2026-10-31T08:00:00Z' }
   /api/v1/readyz:
     get:
       tags: [orgs]

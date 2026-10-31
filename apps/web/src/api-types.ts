@@ -1677,12 +1677,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 进程活着 */
+            /** @description 进程活着，附带构建版本（-ldflags 注入；未注入时 version=dev） */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        /** @example 0.1.0 */
+                        version: string;
+                        /** @example 815f0a7 */
+                        commit: string;
+                        /** @example 2026-10-31T08:00:00Z */
+                        build_time?: string;
+                    };
+                };
             };
         };
     };
