@@ -3,6 +3,7 @@ import { api, ApiError } from '../api';
 import ValidatedForm from '../components/ValidatedForm';
 import type { User } from '../api';
 import VersionTag from '../components/VersionTag';
+import { githubErrorMessage } from '../components/GitHub';
 
 interface Tokens { access: string; refresh: string }
 interface Props { onSuccess: (d: { user: User; tokens: Tokens }) => void }
@@ -21,15 +22,35 @@ export default function Login({ onSuccess }: Props) {
   const [sources, setSources] = useState<AuthSource[]>([]);
   const [registerEnabled, setRegisterEnabled] = useState(true);
   const [passwordEnabled, setPasswordEnabled] = useState(true);
+  const [githubEnabled, setGithubEnabled] = useState(false);
 
   useEffect(() => {
-    api.get<{ register_enabled?: boolean; password_enabled?: boolean; sources?: AuthSource[] }>('/api/v1/auth/sources')
+    api.get<{ register_enabled?: boolean; password_enabled?: boolean; github_enabled?: boolean; sources?: AuthSource[] }>('/api/v1/auth/sources')
       .then((d) => {
+        setGithubEnabled(d.github_enabled === true);
         setSources(d.sources ?? []);
         setRegisterEnabled(d.register_enabled !== false);
         setPasswordEnabled(d.password_enabled !== false);
       })
       .catch(() => {});
+  }, []);
+
+  // GitHub 回调落地：?github=ok 用一次性 ticket cookie 换 token；?github=error 显示原因。
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const gh = q.get('github');
+    if (!gh) return;
+    window.history.replaceState({}, '', '/');
+    if (gh === 'error') { setError(githubErrorMessage(q.get('reason'))); return; }
+    if (gh !== 'ok') return;
+    setBusy(true);
+    api.post<{ user: User; tokens: Tokens; totp_required?: boolean; challenge?: string }>('/api/v1/auth/github/session')
+      .then((d) => {
+        if (d.totp_required && d.challenge) setChallenge(d.challenge);
+        else if (d.tokens) onSuccess(d as { user: User; tokens: Tokens });
+      })
+      .catch((err) => setError(err instanceof ApiError ? `GitHub 登录失败：${err.message}` : String(err)))
+      .finally(() => setBusy(false));
   }, []);
 
   async function submit(e: React.FormEvent) {
@@ -106,8 +127,13 @@ export default function Login({ onSuccess }: Props) {
           </div>
         </div>
 
-        {sources.length > 0 && mode === 'login' && (
+        {(sources.length > 0 || githubEnabled) && mode === 'login' && (
           <div className="sso-block">
+            {githubEnabled && (
+              <button type="button" className="sso-btn" disabled={busy} onClick={() => { window.location.href = '/api/v1/auth/github/login'; }}>
+                使用 GitHub 登录
+              </button>
+            )}
             {sources.map((s) => (
               <button key={s.id} type="button" className="sso-btn" onClick={() => { window.location.href = s.login_url; }}>
                 使用 {s.name} 登录
@@ -139,7 +165,7 @@ export default function Login({ onSuccess }: Props) {
         )}
 
         {!showPassword && error && <div className="error" role="alert">{error}</div>}
-        {!passwordEnabled && sources.length === 0 && (
+        {!passwordEnabled && sources.length === 0 && !githubEnabled && (
           <p className="muted">未配置外部用户源，且已关闭密码登录。请联系管理员配置身份连接。</p>
         )}
 

@@ -12,6 +12,7 @@
 #   taboo-ctl.sh smoke                      用专用 smoke 账号跑 HTTPS 冒烟（运行时启用，结束即禁用）
 #   taboo-ctl.sh user status|enable|disable EMAIL   本地账号启停（taboo-server user）
 #   taboo-ctl.sh install-timers             安装 systemd 定时任务（每日备份、每周恢复演练）
+#   taboo-ctl.sh reload                     修改 .env 后（如 TABOO_GITHUB_*）重建容器使之生效，并显示 GitHub 登录状态
 #
 # Only ever touches taboo's own container, image tags, database (taboo / taboo_restore_test)
 # and this directory. Never prints secrets.
@@ -244,8 +245,25 @@ UNIT
   systemctl list-timers --no-pager 'taboo-*'
 }
 
+github_state() {
+  curl -fsS --max-time 5 "http://127.0.0.1:${TABOO_HTTP_PORT:-7100}/api/v1/auth/sources" 2>/dev/null \
+    | grep -q '"github_enabled":true' && echo enabled || echo disabled
+}
+
+cmd_reload() {
+  chmod 600 .env
+  docker compose up -d >/dev/null
+  if ! wait_healthy; then
+    log "taboo failed to start with the current .env; last log lines (config errors never contain secret values):"
+    docker logs --tail 15 taboo 2>&1 | sed 's/^/  /'
+    die "fix .env and run reload again"
+  fi
+  echo "healthz: $(healthz)"; echo "github login: $(github_state)"
+}
+
 cmd_status() {
   echo "image:   $(current_tag)"; echo "healthz: $(healthz 2>/dev/null || echo unavailable)"
+  echo "github login: $(github_state)"
   docker compose ps --format '{{.Name}}  {{.Status}}'
   echo "latest backup: $(latest_backup || true)"
   [ -s "$RELEASES" ] && { echo "recent releases:"; tail -5 "$RELEASES"; } || true
@@ -263,5 +281,6 @@ case "${1:-}" in
   smoke) cmd_smoke ;;
   user) shift; cmd_user "$@" ;;
   install-timers) cmd_install_timers ;;
-  *) sed -n '2,16p' "$0"; exit 2 ;;
+  reload) cmd_reload ;;
+  *) sed -n '2,17p' "$0"; exit 2 ;;
 esac

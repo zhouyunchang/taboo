@@ -42,6 +42,7 @@ type Service struct {
 	SessionProfile  string
 	DisableRegister bool
 	DisablePassword bool
+	GitHubEnabled   bool // instance-level GitHub OAuth login (internal/github)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -158,6 +159,7 @@ func (s *Service) ListSources(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"register_enabled": !s.DisableRegister,
 		"password_enabled": !s.DisablePassword,
+		"github_enabled":   s.GitHubEnabled,
 		"sources":          out,
 	})
 }

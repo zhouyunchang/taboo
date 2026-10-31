@@ -294,6 +294,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/github/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 使用 GitHub 登录（OAuth App 授权码 + state + PKCE S256）；302 到 github.com，未配置时 404 */
+        get: operations["githubLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/github/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GitHub OAuth 回调（校验 state/PKCE、已验证主邮箱、准入策略；GitHub token 用后即吊销、不落库） */
+        get: operations["githubCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/github/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 用一次性 ticket cookie 换 Taboo token（要求 Origin 与 TABOO_PUBLIC_ORIGIN 一致；已开 2FA 返回 totp challenge） */
+        post: operations["githubSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/github/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 当前用户的 GitHub 绑定状态 */
+        get: operations["githubLinkStatus"];
+        put?: never;
+        /** 发起绑定 GitHub（返回授权 URL；组织 SSO 会话不可用） */
+        post: operations["githubLinkStart"];
+        /** 解绑 GitHub（同时吊销该用户全部 refresh token；无密码账号拒绝，避免锁死） */
+        delete: operations["githubUnlink"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -1739,6 +1809,8 @@ export interface operations {
                     "application/json": {
                         register_enabled?: boolean;
                         password_enabled?: boolean;
+                        /** @description 实例级「使用 GitHub 登录」是否已配置（TABOO_GITHUB_*） */
+                        github_enabled?: boolean;
                         sources?: components["schemas"]["AuthSource"][];
                     };
                 };
@@ -1947,6 +2019,151 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             429: components["responses"]["RateLimited"];
+        };
+    };
+    githubLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 跳转 GitHub 授权页（设置 10 分钟 HttpOnly 加密 flow cookie） */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    githubCallback: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成功：/?github=ok（设置 60 秒 SameSite=Strict 一次性 ticket cookie）或 /?github=linked； 失败：/?github=error&reason=state_mismatch|flow_expired|missing_code|authorization_denied|token_exchange_failed|github_api_failed| no_verified_primary_email|not_allowed|not_linked|email_in_use|account_disabled|already_linked|already_linked_elsewhere|external_identity_exists|internal */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    githubSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 登录成功（或需二次验证） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    githubLinkStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 绑定状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        enabled?: boolean;
+                        linked?: boolean;
+                        github_id?: string;
+                        has_password?: boolean;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    githubLinkStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 授权 URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uri */
+                        authorization_url?: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    githubUnlink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已解绑 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        linked?: boolean;
+                        refresh_tokens_revoked?: boolean;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     me: {

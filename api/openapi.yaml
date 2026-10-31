@@ -126,6 +126,7 @@ paths:
                 properties:
                   register_enabled: { type: boolean }
                   password_enabled: { type: boolean }
+                  github_enabled: { type: boolean, description: 实例级「使用 GitHub 登录」是否已配置（TABOO_GITHUB_*） }
                   sources:
                     type: array
                     items: { $ref: '#/components/schemas/AuthSource' }
@@ -259,6 +260,81 @@ paths:
         '200': { description: 登录成功, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/github/login:
+    get:
+      tags: [auth]
+      summary: 使用 GitHub 登录（OAuth App 授权码 + state + PKCE S256）；302 到 github.com，未配置时 404
+      operationId: githubLogin
+      responses:
+        '302': { description: 跳转 GitHub 授权页（设置 10 分钟 HttpOnly 加密 flow cookie） }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/github/callback:
+    get:
+      tags: [auth]
+      summary: GitHub OAuth 回调（校验 state/PKCE、已验证主邮箱、准入策略；GitHub token 用后即吊销、不落库）
+      operationId: githubCallback
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        '302':
+          description: >-
+            成功：/?github=ok（设置 60 秒 SameSite=Strict 一次性 ticket cookie）或 /?github=linked；
+            失败：/?github=error&reason=state_mismatch|flow_expired|missing_code|authorization_denied|token_exchange_failed|github_api_failed|
+            no_verified_primary_email|not_allowed|not_linked|email_in_use|account_disabled|already_linked|already_linked_elsewhere|external_identity_exists|internal
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/auth/github/session:
+    post:
+      tags: [auth]
+      summary: 用一次性 ticket cookie 换 Taboo token（要求 Origin 与 TABOO_PUBLIC_ORIGIN 一致；已开 2FA 返回 totp challenge）
+      operationId: githubSession
+      responses:
+        '200': { description: 登录成功（或需二次验证）, content: { application/json: { schema: { $ref: '#/components/schemas/LoginResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/auth/github/link:
+    get:
+      tags: [auth]
+      summary: 当前用户的 GitHub 绑定状态
+      operationId: githubLinkStatus
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      responses:
+        '200':
+          description: 绑定状态
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  linked: { type: boolean }
+                  github_id: { type: string }
+                  has_password: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [auth]
+      summary: 发起绑定 GitHub（返回授权 URL；组织 SSO 会话不可用）
+      operationId: githubLinkStart
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 授权 URL, content: { application/json: { schema: { type: object, properties: { authorization_url: { type: string, format: uri } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [auth]
+      summary: 解绑 GitHub（同时吊销该用户全部 refresh token；无密码账号拒绝，避免锁死）
+      operationId: githubUnlink
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 已解绑, content: { application/json: { schema: { type: object, properties: { linked: { type: boolean }, refresh_tokens_revoked: { type: boolean } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/v1/me:
     get:
       tags: [orgs]

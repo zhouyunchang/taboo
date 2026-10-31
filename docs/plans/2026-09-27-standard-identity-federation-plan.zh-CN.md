@@ -122,7 +122,7 @@ KTI-00 至 KTI-11 的实现和本地公开验收已收口，证据与真实部�
 
 机器方式的 CLI/SDK/MCP 是 P0。个人 CLI 浏览器登录、SAML SP、Device Authorization Grant 等不因“使用开放标准”自动进入本期，应在明确注册画像与需求后另排工作包。
 
-第三方人员登录的提供方已定为 GitHub OAuth（授权码，「使用 GitHub 登录」）。2026-10-31 只记录该需求：不进入 P0/P1，不实现接口、页面或 GitHub OAuth App 配置。组织级标准 OIDC 连接保持现有能力，GitHub 登录不替代通用 IdP，也不包含 Google、微信或其他社交账号。
+第三方人员登录的提供方已定为 GitHub OAuth（授权码，「使用 GitHub 登录」）。2026-10-31 已实现为实例级可选登录（ROADMAP Phase 3）：授权码 + state + PKCE、已验证主邮箱、用户/组织/团队准入、按 GitHub 数字 ID 绑定或可选 JIT、审计与吊销；未配置 `TABOO_GITHUB_*` 时完全关闭。组织级标准 OIDC 连接保持现有能力，GitHub 登录不替代通用 IdP，也不包含 Google、微信或其他社交账号。
 
 ### 5.1 可选扩展工作包
 

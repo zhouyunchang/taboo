@@ -18,6 +18,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
+	ghsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/github"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/identity"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
@@ -51,6 +52,7 @@ type Deps struct {
 	DisableRegister bool
 	DisablePassword bool
 	WorkerCtx       context.Context
+	GitHub          ghsvc.Config // Instance-level "Sign in with GitHub" (disabled unless configured).
 }
 
 func New(d *Deps) *chi.Mux {
@@ -134,6 +136,17 @@ func New(d *Deps) *chi.Mux {
 			DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret,
 			DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword,
 		}
+		gh := &ghsvc.Service{Cfg: d.GitHub, DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, PublicOrigin: d.PublicOrigin}
+		oidcSvc.GitHubEnabled = gh.Enabled()
+		// Sign in with GitHub (OAuth App, instance-level; disabled unless TABOO_GITHUB_* set).
+		r.Route("/auth/github", func(r chi.Router) {
+			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/login", gh.Login)
+			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/callback", gh.Callback)
+			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/session", gh.Session)
+			r.With(auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Get("/link", gh.LinkStatus)
+			r.With(auth.LoginRateLimit(time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/link", gh.StartLink)
+			r.With(auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Delete("/link", gh.Unlink)
+		})
 		r.Get("/auth/session", auth.BrowserSession(d.DB, oidcSvc.CheckSession))
 		r.With(auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Get("/auth/organizations", oidcSvc.Organizations)
 		r.Post("/auth/logout", oidcSvc.Logout)

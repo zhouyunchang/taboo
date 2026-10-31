@@ -97,3 +97,26 @@ Registration is disabled. Manage local accounts with
 `docker exec -i taboo taboo-server user create EMAIL [--name N] [--disabled]` (password on
 stdin), `taboo-server user status|enable|disable EMAIL`. Disabling revokes refresh tokens and
 browser sessions; every change is audited as `admin.user.*`.
+
+## Sign in with GitHub (optional)
+
+Disabled until the operator adds credentials. Create a GitHub **OAuth App** (not a GitHub App):
+
+| Field | Value |
+| --- | --- |
+| Homepage URL | `https://taboo.swetcc.com` |
+| Authorization callback URL | `https://taboo.swetcc.com/api/v1/auth/github/callback` |
+| Enable Device Flow | off |
+
+Then on dev122 (never paste the secret anywhere else):
+
+```sh
+ssh dev122-root
+cd /var/snap/docker/common/swetcc-dev/taboo
+vi .env      # append TABOO_GITHUB_CLIENT_ID=..., TABOO_GITHUB_CLIENT_SECRET=..., and one policy, e.g. TABOO_GITHUB_ALLOWED_USERS=alice
+./taboo-ctl.sh reload   # recreates the container, prints "github login: enabled"
+```
+
+All variables (policy, auto-create, join org) are documented in `env.example`. The server
+refuses to start if credentials are set without an access policy (fail closed); `reload` then
+prints the error line. To disable again, comment the two credential lines and `reload`.

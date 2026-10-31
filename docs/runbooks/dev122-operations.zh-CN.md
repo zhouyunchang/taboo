@@ -76,3 +76,35 @@ ssh dev122-root $D/taboo-ctl.sh user status|enable|disable <email>
 - 初始 owner 凭据：`$D/bootstrap-owner.json`（0600）。
 - 浏览器检查（本机，经 HTTPS）：先 `user enable smoke@taboo.swetcc.com`，然后
   `ssh dev122-root cat $D/smoke-account.json | TABOO_BASE=https://taboo.swetcc.com TABOO_HOST_MAP='taboo.swetcc.com 10.0.30.122' node scripts/browser-check.mjs`，最后再 `user disable`。
+
+## 6. GitHub 登录（OAuth App）
+
+默认关闭（`/api/v1/auth/sources` 返回 `github_enabled:false`，`/api/v1/auth/github/login` 为 404）。
+
+1. GitHub → Settings → Developer settings → **OAuth Apps** → New OAuth App（组织所有则在组织设置中创建）：
+   - Homepage URL：`https://taboo.swetcc.com`
+   - Authorization callback URL：`https://taboo.swetcc.com/api/v1/auth/github/callback`
+   - 不勾选 Enable Device Flow。生成 Client secret。
+2. 在 dev122 上**自己**写入凭据（不经过聊天/工单）：
+   ```sh
+   ssh dev122-root
+   cd /var/snap/docker/common/swetcc-dev/taboo && vi .env   # 文件 0600，目录 0700
+   # TABOO_GITHUB_CLIENT_ID=Ov23li...
+   # TABOO_GITHUB_CLIENT_SECRET=...
+   # TABOO_GITHUB_ALLOWED_USERS=alice,bob       # 至少一种准入策略
+   ./taboo-ctl.sh reload                         # 输出 github login: enabled
+   ```
+3. 准入（至少设一项，否则服务拒绝启动；多项之间为“任一满足即可”）：
+   - `TABOO_GITHUB_ALLOWED_USERS`：GitHub 登录名白名单。
+   - `TABOO_GITHUB_ALLOWED_ORGS`：组织的 active 成员（会额外申请 `read:org`；若组织启用了 OAuth App access restrictions，需组织 owner 批准该应用，否则一律 not_allowed）。
+   - `TABOO_GITHUB_ALLOWED_TEAMS`：`org/team-slug` 的 active 成员。
+   - `TABOO_GITHUB_ALLOW_ANY=true`：任意 GitHub 账号（不建议）。
+4. 账号对应：
+   - 默认 `TABOO_GITHUB_AUTOCREATE=false`：用户先用密码登录，顶栏「GitHub」→ 绑定；之后可用 GitHub 登录。按 GitHub 数字 ID 绑定，不按邮箱合并。
+   - `TABOO_GITHUB_AUTOCREATE=true`：通过准入且未绑定的账号自动创建（无密码、个人组织），主邮箱已被占用时拒绝（email_in_use）；
+     `TABOO_GITHUB_JOIN_ORG=<slug>` + `TABOO_GITHUB_JOIN_ROLE=viewer|developer` 可同时加入共享组织。
+5. 撤权：移出白名单/组织/团队后下一次 GitHub 登录即被拒绝；已签发的 Taboo 会话需 `./taboo-ctl.sh user disable <email>` 立即吊销
+   （refresh token 与浏览器会话一并作废，access token 立即失效）。解绑 GitHub 也会吊销该用户全部 refresh token。
+   GitHub access token 只在回调中使用一次，随即调用 GitHub API 吊销，不落库。
+6. 审计：`auth.github.login` / `auth.github.provision` / `auth.github.link` / `auth.github.unlink` / `auth.github.denied`（meta.reason）。
+7. 关闭：注释掉两行凭据 → `./taboo-ctl.sh reload`。

@@ -68,7 +68,7 @@
 |---|---|
 | Phase 1 | 当前 develop 在 dev122 重新部署，复用共享 PG 与 NPM，`https://taboo.swetcc.com` 可用并经过端到端验证 |
 | Phase 2 | 部署可重复、可回滚、可恢复：仓库内 dev122 部署脚本、备份/恢复演练、版本可见、重型测试套件本机常态化 |
-| Phase 3 | 接入真实 OIDC 提供方（dev122 Identity V2 或 Keycloak），完成真实登录、回调、撤权与 OAuth 工作负载验证 |
+| Phase 3 | 「使用 GitHub 登录」（GitHub OAuth App，OAuth2 授权码）：准入策略、账号绑定/JIT、审计与撤权；dev122 默认关闭，凭据由用户在 dev122 自行写入后启用 |
 | Phase 4 | 补齐设计文档 Must 缺口：密钥引用、.env 导入/导出增强、版本 diff、扫描报告页、Node/Python SDK |
 | Phase 5 | Should 能力：MySQL 动态引擎、轮换策略、Doppler/1Password 导入、安全清单补齐（日志脱敏、IP 白名单） |
 | Phase 6 | Could / 联邦 P1：审批流、访问请求、SCIM、Back-Channel Logout、CLI 浏览器登录、HA 验证 |
@@ -183,18 +183,45 @@
 
 ---
 
-## Phase 3：真实 OIDC 提供方接入
+## Phase 3：使用 GitHub 登录（GitHub OAuth App）
 
-**目标**：在 `https://taboo.swetcc.com` 上用真实提供方完成人员登录和机器 OAuth，补上旧部署 README 中“真实外部身份提供方待验证”的缺口。
+**决定（2026-10-31，用户）**：第三方人员登录使用 GitHub OAuth App，替代原计划的 Identity V2 / Keycloak 接入。GitHub 是 OAuth2（无 ID Token / discovery / JWKS），
+因此不复用组织级 OIDC 联邦（BFF 会话、上游刷新、issuer 白名单），而是实现为**实例级、运维配置**的登录方式，成功后签发普通的本地 Taboo 会话（access 15 分钟 + 旋转 refresh）。
+组织级标准 OIDC 联邦保持不变。
 
-任务：
-1. 选择提供方（需用户决定）：A）dev122 已有 Identity V2（`identity-dev122.swetcc.com`，平台管理员尚未初始化）；B）在 dev122 部署 Keycloak 26（固定镜像，复用共享 PG 新库 `keycloak`，NPM 代理 `keycloak-dev122.swetcc.com`）。
-2. 提供方侧：Confidential Client，回调 `https://taboo.swetcc.com/api/v1/auth/oidc/<org-slug>/callback`，组/角色 claim。
-3. taboo 侧：`TABOO_ISSUER_ALLOWLIST` 精确 issuer、`TABOO_OIDC_SESSION_PROFILE=BOUNDED`；控制台登记连接；如需信任内部 CA，镜像或挂载 CA 证书。
-4. 端到端：外部登录/JIT（如开启）/角色映射/退出/禁用用户后的撤权窗口/身份替换；OAuth 工作负载（client credentials → JWT 或内省）用 SDK/CLI/MCP 真实读取。
-5. 将结果写入 `docs/design/standard-federation-acceptance.zh-CN.md` 的“部署验证”小节。
+**现状核对**：原 OIDC 联邦代码要求 discovery + ID Token 验签，GitHub 不支持；需新增提供方。
 
-验证：Playwright 对 `https://taboo.swetcc.com` 运行登录场景；CLI `taboo` 以 OAuth 工作负载读取 dev 环境密钥；越权访问 prod 被拒绝并记审计。
+### 3.1 设计
+
+| 方面 | 做法 |
+|---|---|
+| 协议 | 授权码 + `state`（常量时间比较）+ PKCE S256（GitHub 已支持）；`allow_signup=false`；scope `read:user user:email`，仅当配置组织/团队准入时加 `read:org` |
+| 流程状态 | 不改 schema：流程参数（state、verifier、模式、绑定用户、到期）用 master key 派生密钥加密进 HttpOnly cookie `taboo.github.flow`（Path `/api/v1/auth/github`，SameSite=Lax，10 分钟）；回调成功后发 60 秒一次性 `taboo.github.ticket`（SameSite=Strict），前端 `POST /auth/github/session`（校验 Origin）换 token，token 不出现在 URL |
+| 身份 | `GET /user` + `GET /user/emails`，必须存在 primary 且 verified 的邮箱；按 `external_identities(issuer=https://github.com, subject=<GitHub 数字 ID>)` 绑定，改名不影响；不按邮箱合并 |
+| 准入 | `TABOO_GITHUB_ALLOWED_USERS` / `_ALLOWED_ORGS`（`/user/memberships/orgs/{org}` state=active）/ `_ALLOWED_TEAMS`（`org/team`）任一满足；`_ALLOW_ANY=true` 显式放开；配置了凭据但无策略时服务拒绝启动（fail closed）。每次登录与绑定都重新检查 |
+| 账号 | 默认必须先由本地账号在「GitHub」面板绑定（`not_linked`）；`TABOO_GITHUB_AUTOCREATE=true` 时 JIT 创建无密码本地账号（个人组织 + 默认项目 + 三环境），邮箱冲突拒绝（`email_in_use`），可选 `JOIN_ORG` + `JOIN_ROLE`（viewer/developer，禁止 owner/admin） |
+| 2FA | 已开 TOTP 的账号经 GitHub 登录后仍需动态码（复用 challenge 流程） |
+| 撤权 | GitHub token 回调内一次使用后立即调用 `DELETE /applications/{client_id}/token` 吊销，不落库；移出名单/组织/团队下一次登录即拒绝；`taboo-server user disable` 立即使 access/refresh/浏览器会话失效；解绑时吊销该用户全部 refresh token；无密码账号禁止解绑（防锁死） |
+| 审计 | `auth.github.login`、`auth.github.provision`、`auth.github.link`、`auth.github.unlink`、`auth.github.denied`（meta.reason，如 state_mismatch / not_allowed / not_linked / email_in_use / account_disabled） |
+| 配置 | `TABOO_GITHUB_CLIENT_ID`、`TABOO_GITHUB_CLIENT_SECRET`（或 `_SECRET_FILE`）及上面的策略变量；回调固定为 `<TABOO_PUBLIC_ORIGIN>/api/v1/auth/github/callback` |
+
+### 3.2 任务
+
+1. `internal/github`：配置解析、授权 URL、回调、session 换取、绑定状态/发起绑定/解绑。
+2. 路由 `/api/v1/auth/github/{login,callback,session,link}`（限流），`/auth/sources` 增加 `github_enabled`；OpenAPI + `npm run types`。
+3. 前端：登录页「使用 GitHub 登录」按钮、回调落地（ok/error 中文原因）、顶栏「GitHub」绑定面板。
+4. 测试：模拟 GitHub（token 端点校验 client 凭据、redirect_uri、PKCE verifier；/user、/user/emails、组织/团队成员、token 吊销），覆盖关闭态、绑定→登录→解绑、各类拒绝、组织/团队准入、JIT 与邮箱冲突、停用账号。SQLite 与 PG（RLS）都跑。
+5. dev122：`env.example` / README / 运维手册第 6 节；`taboo-ctl.sh reload`；部署时**不配置**凭据（保持关闭），验证 `github_enabled:false`、`/auth/github/login` 404。
+6. 用户创建 OAuth App 并在 dev122 `.env` 写入凭据后：真实登录联调，补记执行记录。
+
+验证：`./scripts/verify-all.sh --container`；dev122 `taboo-ctl.sh smoke`；启用后用真实 GitHub 账号完成 绑定 / 登录 / 被拒（不在名单）/ 解绑 并核对审计。
+
+### 3.3 执行记录（2026-10-31，代码完成，待凭据）
+
+- 实现见 `apps/server-go/internal/github/`，测试 `internal/server/github_test.go`（5 组，模拟 GitHub 端点）。
+- dev122 已部署本阶段镜像，GitHub 登录处于关闭态；启用步骤见 `docs/runbooks/dev122-operations.zh-CN.md` §6。
+- OAuth App 参数：Homepage `https://taboo.swetcc.com`，Authorization callback `https://taboo.swetcc.com/api/v1/auth/github/callback`。
+- 原 Phase 3 的真实 OIDC 提供方（Identity V2 / Keycloak）联调移入 Phase 6 备选，不再阻塞。
 
 ---
 
@@ -228,7 +255,7 @@
 
 ## Phase 6：Could / 联邦 P1
 
-审批流（修改 prod 需二次批准）、访问请求（限时提权、到期自动回收）、SCIM 用户同步、Back-Channel Logout、AuthZEN、CLI 浏览器登录（device/PKCE loopback）、PG 多副本 + 共享导出卷 HA 验证。开始前单独写设计文档并与用户确认范围。
+（备选）真实 OIDC 提供方（Identity V2 / Keycloak）在 dev122 联调；审批流（修改 prod 需二次批准）、访问请求（限时提权、到期自动回收）、SCIM 用户同步、Back-Channel Logout、AuthZEN、CLI 浏览器登录（device/PKCE loopback）、PG 多副本 + 共享导出卷 HA 验证。开始前单独写设计文档并与用户确认范围。
 
 ---
 
@@ -256,7 +283,7 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 
 1. ~~名称解析~~：已决定，用户在 Aliyun DNS 添加 `taboo.swetcc.com A 10.0.30.122`（待完成）。
 2. ~~dev122 旧部署~~：已决定，全新初始化，旧目录保留不动。
-3. Phase 3 提供方选 Identity V2 还是 Keycloak；Identity V2 需要先由负责人初始化平台管理员。
+3. ~~Phase 3 提供方~~：已决定，使用 GitHub OAuth App；待用户在 GitHub 创建 OAuth App 并在 dev122 `.env` 写入凭据。
 4. Git：已决定每阶段 push 到 `origin/develop`；是否合并 `main`、是否启用 Woodpecker CI 待定。
 5. ~~架构差异~~：Phase 1 采用 dev122 原生构建（`deploy/dev122/deploy.sh`）。
 

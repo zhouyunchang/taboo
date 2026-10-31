@@ -26,6 +26,7 @@ import (
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
+	ghsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/github"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
@@ -123,6 +124,16 @@ func main() {
 	webhooks.Subscribe(bus)
 	ob := &outbox.Service{DB: db, Bus: bus}
 
+	ghCfg, err := ghsvc.ConfigFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("[taboo] %v", err)
+	}
+	if ghCfg.Enabled() {
+		if cfg.PublicOrigin == "" {
+			log.Fatal("[taboo] GitHub login requires TABOO_PUBLIC_ORIGIN (callback = <origin>/api/v1/auth/github/callback)")
+		}
+		log.Printf("[taboo] GitHub login enabled (callback %s/api/v1/auth/github/callback, autocreate=%v)", strings.TrimRight(cfg.PublicOrigin, "/"), ghCfg.AutoCreate)
+	}
 	r := server.New(&server.Deps{
 		PublicOrigin:    cfg.PublicOrigin,
 		SessionProfile:  cfg.SessionProfile,
@@ -141,6 +152,7 @@ func main() {
 		DisableRegister: cfg.DisableRegister,
 		DisablePassword: cfg.DisablePassword,
 		WorkerCtx:       ctx,
+		GitHub:          ghCfg,
 	})
 
 	dynSvc.StartWorker(ctx, 20*time.Second)

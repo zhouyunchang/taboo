@@ -9,6 +9,7 @@ import Modal from '../components/Modal';
 import ValidatedForm from '../components/ValidatedForm';
 import { fmtTime, timeTitle } from '../time';
 import VersionTag from '../components/VersionTag';
+import { GitHubPanel, githubErrorMessage } from '../components/GitHub';
 
 interface Props {
   user: User;
@@ -28,6 +29,16 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
   const [env, setEnv] = useState('dev');
   const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings'>('secrets');
   const [switchOrg,setSwitchOrg] = useState(false);
+  const [showGitHub, setShowGitHub] = useState(false);
+  const [githubNotice, setGithubNotice] = useState('');
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const gh = q.get('github');
+    if (!gh) return;
+    window.history.replaceState({}, '', '/');
+    if (gh === 'linked') setGithubNotice('GitHub 已绑定，之后可使用 GitHub 登录。');
+    else if (gh === 'error') setGithubNotice(githubErrorMessage(q.get('reason')));
+  }, []);
   const [show2FA, setShow2FA] = useState(false);
  const [showIdentity, setShowIdentity] = useState(false);
   const [error, setError] = useState('');
@@ -79,11 +90,13 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
         <div className="spacer" />
         {federated && <button className="ghost" onClick={() => setSwitchOrg(true)}>切换组织</button>}
         {!federated && <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>}
+        {!federated && <button className="ghost" onClick={() => setShowGitHub(true)}>GitHub</button>}
         <span>{user.name || user.email}</span>
  <button className="ghost" onClick={() => setShowIdentity(true)}>登录身份</button>
         <button className="ghost" onClick={onLogout}>退出</button>
       </header>
 
+      {githubNotice && <p className="session-notice" role="status">{githubNotice} <button className="ghost" onClick={() => setGithubNotice('')}>知道了</button></p>}
       {federated && <p className="session-notice" role="status">外部登录 · 当前组织：{org.name} · {session?.revocation_profile === 'ONLINE_REQUIRED' ? '每次访问检查上游状态，故障时拒绝访问。' : '会话有效期内使用已验证身份，上游停用最迟在会话到期时生效。'}
         {session?.expires_at && <> 会话到期：{new Date(session.expires_at * 1000).toLocaleTimeString()}。</>}
         {session?.rp_logout ? ' 退出时同时前往身份提供方结束会话。' : ' 退出仅结束本系统会话。'}
@@ -132,6 +145,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
       {switchOrg && <OrganizationSwitcher onClose={() => setSwitchOrg(false)} />}
       {showIdentity && <IdentityReplacement key={org.id} orgSlug={org.slug} onClose={() => setShowIdentity(false)} />}
  {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
+      {showGitHub && <GitHubPanel onClose={() => setShowGitHub(false)} />}
     </div>
   );
 }
