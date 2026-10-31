@@ -59,6 +59,10 @@
 - 密钥扫描的 Git 历史深度扫描 + pre-commit hook
 - 多副本高可用、读写分离
 
+### 已记录、暂不实现
+
+- **第三方登录**：人员侧第三方登录只采用 **GitHub**（GitHub OAuth 授权码）。登录入口为「使用 GitHub 登录」，不接 Google、微信或其他社交账号。它与已落地的组织级 OIDC SSO、以及把密钥推送到 GitHub Actions 的 Secret Sync 是不同需求。2026-10-31 只冻结这一选择，不排期，也不实现接口、页面或凭据配置。
+
 ---
 
 ## 3. 系统架构
@@ -276,7 +280,7 @@ Agent 申请 lease → 服务端连 PG 执行 CREATE USER (TTL 1h)
 
 | 页面 | 说明 |
 |---|---|
-| 登录/注册/2FA | 邮箱密码 + TOTP |
+| 登录/注册/2FA | 邮箱密码 + TOTP。第三方登录仅 GitHub，已记录、暂不实现 |
 | 组织/项目总览 | 卡片式项目列表 |
 | **密钥工作台**（核心页） | 左：环境 Tab + 文件夹树；中：密钥表格（key/值掩码/标签/更新时间）；右：详情抽屉（值、版本历史、回滚、审计片段） |
 | 版本对比 | 两版本 diff 视图 |
@@ -321,3 +325,5 @@ Agent 申请 lease → 服务端连 PG 执行 CREATE USER (TTL 1h)
 秘密 mutation、审计和 outbox 同事务；版本 CAS 与幂等收据支持响应丢失恢复。消费者任务先落库再确认，租约/fencing 防旧 worker 覆盖，多任务同步按组织序号推进。动态账号发放/续期先持久化回收责任，再调用数据库并发布密码；回收失败可重试/人工接管。
 
 Web、SDK、CLI、MCP 和 Docker/Helm 的实现及验收以 [验收矩阵](../docs/design/standard-federation-acceptance.zh-CN.md) 为准；运维按 [升级恢复手册](../docs/runbooks/standard-federation-release.zh-CN.md) 执行。SCIM/AuthZEN/Back-Channel 与具体部署投运保留为独立工作。
+
+人员第三方登录的提供方定为 GitHub OAuth。该条只更新需求，不进入当前实现。
