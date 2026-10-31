@@ -75,15 +75,15 @@ ssh dev122-root $D/taboo-ctl.sh user status|enable|disable <email>
 - 禁用账号会同时吊销其 refresh token 与浏览器会话，并写审计 `admin.user.disable`。
 - 初始 owner 凭据：`$D/bootstrap-owner.json`（0600）。
 - 浏览器检查（本机，经 HTTPS）：先 `user enable smoke@taboo.swetcc.com`，然后
-  `ssh dev122-root cat $D/smoke-account.json | TABOO_BASE=https://taboo.swetcc.com TABOO_HOST_MAP='taboo.swetcc.com 10.0.30.122' node scripts/browser-check.mjs`，最后再 `user disable`。
+  `ssh dev122-root cat $D/smoke-account.json | TABOO_BASE=https://taboo-dev122.swetcc.com TABOO_HOST_MAP='taboo-dev122.swetcc.com 10.0.30.122' node scripts/browser-check.mjs`，最后再 `user disable`。
 
 ## 6. GitHub 登录（OAuth App）
 
 默认关闭（`/api/v1/auth/sources` 返回 `github_enabled:false`，`/api/v1/auth/github/login` 为 404）。
 
 1. GitHub → Settings → Developer settings → **OAuth Apps** → New OAuth App（组织所有则在组织设置中创建）：
-   - Homepage URL：`https://taboo.swetcc.com`
-   - Authorization callback URL：`https://taboo.swetcc.com/api/v1/auth/github/callback`
+   - Homepage URL：`https://taboo-dev122.swetcc.com`
+   - Authorization callback URL：`https://taboo-dev122.swetcc.com/api/v1/auth/github/callback`
    - 不勾选 Enable Device Flow。生成 Client secret。
 2. 在 dev122 上**自己**写入凭据（不经过聊天/工单）：
    ```sh

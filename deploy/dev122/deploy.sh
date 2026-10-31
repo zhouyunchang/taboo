@@ -48,8 +48,8 @@ if [ ! -f .env ]; then
   cat > .env <<ENV
 TABOO_IMAGE=$TAG
 TABOO_HTTP_PORT=7100
-TABOO_PUBLIC_ORIGIN=https://taboo.swetcc.com
-TABOO_CORS_ORIGIN=https://taboo.swetcc.com
+TABOO_PUBLIC_ORIGIN=https://taboo-dev122.swetcc.com
+TABOO_CORS_ORIGIN=https://taboo-dev122.swetcc.com
 TABOO_DISABLE_REGISTER=false
 TABOO_MASTER_KEY=$(openssl rand -hex 32)
 TABOO_JWT_SECRET=$(openssl rand -hex 32)

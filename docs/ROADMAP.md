@@ -1,7 +1,7 @@
 # taboo 开发路线图（2026-10-31 起）
 
 > 本文件是 2026-10-31 之后的执行路线图，由 Phase 0 评估产出。历史里程碑 M0–M5 与“标准身份联邦 P0”见 README 与 `docs/design/standard-federation-acceptance.zh-CN.md`。
-> 原则：编码与调试在本机（macOS arm64，可用本机 Docker）完成；每个阶段完成后部署到开发服务器 dev122（`ssh dev122-root`，x86_64）并在 `https://taboo.swetcc.com` 上验证。
+> 原则：编码与调试在本机（macOS arm64，可用本机 Docker）完成；每个阶段完成后部署到开发服务器 dev122（`ssh dev122-root`，x86_64）并在 `https://taboo-dev122.swetcc.com` 上验证。
 > 凭据只引用位置，不写入仓库：dev122 `/home/cloudzh/dev-services-credentials.txt`、`/var/snap/docker/common/swetcc-dev/`、taboo 部署目录 `/var/snap/docker/common/swetcc-dev/taboo/.env`（0600）。旧目录 `/home/cloudzh/taboo-dev122/` 保留不动。
 
 ## 0. 现状评估（Phase 0，2026-10-31）
@@ -60,13 +60,13 @@
   - `swetcc-postgres`：PostgreSQL 18.6，`postgres:5432`，强制 TLS（`hostssl` + scram，内部 CA `/var/snap/docker/common/swetcc-dev/infra/tls/ca.crt`）。约定每个服务独立数据库与运行账号。
   - `nginx-proxy-manager` 2.16（80/443/81，绑定 10.0.30.122），证书统一用 Let's Encrypt **DNS-01（Aliyun）**，无需公网可达；管理账号位置见 `infra/npm/admin.json`。
   - `swetcc-mailpit`（SMTP 捕获）、`identity-v2-api`（OIDC 提供方，`identity-dev122.swetcc.com`，平台管理员尚未初始化）、`woodpecker-server`（CI，`ci-dev122.swetcc.com`）、本地 registry / athens（Go 代理）/ verdaccio（npm 代理）/ devpi。
-- `taboo.swetcc.com`：NPM 中无代理主机、无证书；公网与内网 DNS 都没有记录。其他 `*-dev122.swetcc.com` 靠 Mac 与 dev122 的 `/etc/hosts` 指向 10.0.30.122。
+- taboo 主机名（原计划 `taboo.swetcc.com`，2026-10-31 改为 `taboo-dev122.swetcc.com`）：NPM 中无代理主机、无证书；公网与内网 DNS 都没有记录。其他 `*-dev122.swetcc.com` 同样没有 DNS 记录，只靠 Mac 与 dev122 的 `/etc/hosts` 指向 10.0.30.122。
 
 ## 阶段总览
 
 | 阶段 | 目标 |
 |---|---|
-| Phase 1 | 当前 develop 在 dev122 重新部署，复用共享 PG 与 NPM，`https://taboo.swetcc.com` 可用并经过端到端验证 |
+| Phase 1 | 当前 develop 在 dev122 重新部署，复用共享 PG 与 NPM，`https://taboo-dev122.swetcc.com` 可用并经过端到端验证 |
 | Phase 2 | 部署可重复、可回滚、可恢复：仓库内 dev122 部署脚本、备份/恢复演练、版本可见、重型测试套件本机常态化 |
 | Phase 3 | 「使用 GitHub 登录」（GitHub OAuth App，OAuth2 授权码）：准入策略、账号绑定/JIT、审计与撤权；dev122 默认关闭，凭据由用户在 dev122 自行写入后启用 |
 | Phase 4 | 补齐设计文档 Must 缺口：密钥引用、.env 导入/导出增强、版本 diff、扫描报告页、Node/Python SDK |
@@ -79,7 +79,7 @@
 
 ## Phase 1：恢复 dev122 部署并启用 HTTPS
 
-**目标**：当前 `develop`（schema 15）以 PostgreSQL 模式运行在 dev122，复用 `swetcc-postgres` 与 NPM，通过 `https://taboo.swetcc.com`（Let's Encrypt）访问，冒烟与浏览器验证通过。
+**目标**：当前 `develop`（schema 15）以 PostgreSQL 模式运行在 dev122，复用 `swetcc-postgres` 与 NPM，通过 `https://taboo-dev122.swetcc.com`（Let's Encrypt）访问，冒烟与浏览器验证通过。
 
 ### 1.1 本机准备
 
@@ -88,7 +88,7 @@
 3. 构建 amd64 镜像：`docker buildx build --platform linux/amd64 -f apps/server-go/Dockerfile -t taboo:dev-<sha> --load .`（本机 arm64，需 QEMU/buildx；如太慢，改为把 `git archive` 传到 dev122 原生构建，构建时使用 dev122 的 athens / verdaccio 代理）。
 4. 新增 `deploy/dev122/`（不含任何秘密）：
    - `compose.yaml`：只有 `taboo` 服务，加入外部网络 `swetcc`，`127.0.0.1:7100` 发布（仅供主机调试），镜像用 `${TABOO_IMAGE}` 固定 ID；挂载 CA 只读到 `/etc/taboo/ca.crt`，数据卷 `taboo_data:/data`。
-   - `env.example`：列出变量名（`TABOO_DATABASE_URL`、`TABOO_DATABASE_RUNTIME_ROLE`、`TABOO_MASTER_KEY`、`TABOO_JWT_SECRET`、`TABOO_PUBLIC_ORIGIN=https://taboo.swetcc.com`、`TABOO_CORS_ORIGIN`、`TABOO_DISABLE_REGISTER` 等）。
+   - `env.example`：列出变量名（`TABOO_DATABASE_URL`、`TABOO_DATABASE_RUNTIME_ROLE`、`TABOO_MASTER_KEY`、`TABOO_JWT_SECRET`、`TABOO_PUBLIC_ORIGIN=https://taboo-dev122.swetcc.com`、`TABOO_CORS_ORIGIN`、`TABOO_DISABLE_REGISTER` 等）。
    - `init-db.sql`：在共享 PG 创建 `taboo` 库、`taboo_control`（LOGIN，NOSUPERUSER，NOBYPASSRLS）与 `taboo_runtime`（NOLOGIN），等价 `deploy/postgres/initialize.sh`。
    - `deploy.sh`：传镜像（`docker save | ssh docker load`）、同步 compose、`docker compose up -d`、等待 readyz、运行冒烟。
    - `README.md`：运维说明。
@@ -100,17 +100,17 @@
 3. 根密钥：默认**全新生成** `TABOO_MASTER_KEY` / `TABOO_JWT_SECRET`（旧部署无业务数据）；旧 `.env` 保留在备份目录。
 4. `docker compose up -d`；确认 `readyz`、`taboo-server --check`，日志中 schema 15、RLS 角色检查通过。
 5. NPM：
-   - 证书：Let's Encrypt via DNS（Aliyun），域名 `taboo.swetcc.com`，复用 NPM 已保存的 Aliyun DNS 凭据配置方式（与 `npm-13` 相同）；传播等待 300 秒。
-   - Proxy Host：`taboo.swetcc.com` → `http://taboo:7100`（swetcc 网络），开启 Force SSL、HTTP/2、HSTS、WebSocket。
-6. 名称解析：在 dev122 的 `/etc/hosts` 增加 `10.0.30.122 taboo.swetcc.com`（与现有 `*-dev122` 一致）；Mac 的 `/etc/hosts` 需要 sudo，由用户添加，或在 Aliyun DNS 加 A 记录（见“需用户决定”）。
+   - 证书：Let's Encrypt via DNS（Aliyun），域名 `taboo-dev122.swetcc.com`，复用 NPM 已保存的 Aliyun DNS 凭据配置方式（与 `npm-13` 相同）；传播等待 300 秒。
+   - Proxy Host：`taboo-dev122.swetcc.com` → `http://taboo:7100`（swetcc 网络），开启 Force SSL、HTTP/2、HSTS、WebSocket。
+6. 名称解析：在 dev122 的 `/etc/hosts` 增加 `10.0.30.122 taboo-dev122.swetcc.com`（与现有 `*-dev122` 一致）；Mac 的 `/etc/hosts` 需要 sudo，由用户添加（与其他 `*-dev122` 相同，不加 DNS 记录）。
 7. 引导 owner：调用注册接口创建 owner（凭据写入 dev122 0600 文件），然后设置 `TABOO_DISABLE_REGISTER=true` 并重启。
 
 ### 1.3 验证
 
-- `curl -I https://taboo.swetcc.com` 返回 200，证书由 Let's Encrypt 签发，HTTP 跳转 HTTPS。
-- `TABOO_BASE=https://taboo.swetcc.com npm run smoke`（14 项；如果注册已关闭，在关闭前先运行）。
+- `curl -I https://taboo-dev122.swetcc.com` 返回 200，证书由 Let's Encrypt 签发，HTTP 跳转 HTTPS。
+- `TABOO_BASE=https://taboo-dev122.swetcc.com npm run smoke`（14 项；如果注册已关闭，在关闭前先运行）。
 - 重启 taboo 容器后原密钥仍能解密；PG 中 `taboo_runtime` 下 FORCE RLS 表数量与验收记录一致。
-- 浏览器：登录页、登录、项目/环境切换、密钥创建/reveal/复制、审计页在 `https://taboo.swetcc.com` 上无控制台错误；390px 窄屏检查。
+- 浏览器：登录页、登录、项目/环境切换、密钥创建/reveal/复制、审计页在 `https://taboo-dev122.swetcc.com` 上无控制台错误；390px 窄屏检查。
 - `pg_dump` 一次初始备份到 `/var/snap/docker/common/swetcc-dev/taboo/backups/`（0600）。
 
 **交付**：`deploy/dev122/*`、本文件 Phase 1 状态更新、部署记录（不含秘密）。
@@ -129,14 +129,14 @@
 | 容器 | `taboo`，网络 `swetcc`，`127.0.0.1:7100`，healthy |
 | 数据库 | `swetcc-postgres` 上的 `taboo` 库；`taboo_control`/`taboo_runtime`；连接 TLSv1.3（`pg_stat_ssl` 确认）；39 张表中 38 张 FORCE RLS（唯一例外 `schema_version`） |
 | `taboo-server --check` | all checks passed（schema 15） |
-| 证书 | NPM cert #14，Let's Encrypt（YE2），DNS-01 aliyun，到期 2027-01-29 |
-| Proxy Host | NPM #15 `taboo.swetcc.com` → `taboo:7100`，Force SSL、HTTP/2、HSTS、WebSocket；HTTP 301 → HTTPS |
-| HTTPS 冒烟（dev122 上经 hosts，`TABOO_BASE=https://taboo.swetcc.com`） | 14/14 通过（在关闭注册之前执行，留下一个 `smoke-*@taboo.dev` 测试账号） |
+| 证书 | NPM cert #14（`taboo.swetcc.com`），Let's Encrypt（YE2），DNS-01 aliyun；主机名更换后已删除，现为 cert #15，见 3.4 |
+| Proxy Host | NPM #15（`taboo.swetcc.com`）→ `taboo:7100`，Force SSL、HTTP/2、HSTS、WebSocket；HTTP 301 → HTTPS；主机名更换后已删除，现为 #16，见 3.4 |
+| HTTPS 冒烟（dev122 上经 hosts，`TABOO_BASE=https://taboo-dev122.swetcc.com`） | 14/14 通过（在关闭注册之前执行，留下一个 `smoke-*@taboo.dev` 测试账号） |
 | 引导 owner | 已创建，凭据在 dev122 `/var/snap/docker/common/swetcc-dev/taboo/bootstrap-owner.json`（0600）；之后 `TABOO_DISABLE_REGISTER=true`，注册返回 403 |
 | 重启后解密 | owner 登录写入密钥 → `docker restart taboo` → 登录并 reveal，值一致 |
 | 浏览器（Playwright，1280px 与 390px） | 登录、工作区、密钥列表正常，控制台无错误 |
 | 备份 | `backups/taboo-20261031-p1.dump`（0600，pg_restore -l 可读） |
-| DNS | Aliyun A 记录待用户添加；dev122 `/etc/hosts` 已加 `10.0.30.122 taboo.swetcc.com`（原文件备份为 `/etc/hosts.bak-taboo-20261031`） |
+| 名称解析 | 只用 hosts（与其他 `*-dev122` 一致，无 DNS 记录）；dev122 `/etc/hosts` 已有 `10.0.30.122 taboo-dev122.swetcc.com`（备份 `/etc/hosts.bak-taboo-20261031`、`/etc/hosts.bak-taboo-dev122-20261031`） |
 
 遗留问题（转入 Phase 2，均已在 Phase 2 解决）：
 - ~~390px 窄屏下密钥表格的操作按钮横向溢出（页面可横向滚动）~~ → ≤640px 卡片布局。
@@ -220,8 +220,17 @@
 
 - 实现见 `apps/server-go/internal/github/`，测试 `internal/server/github_test.go`（5 组，模拟 GitHub 端点）。
 - dev122 已部署本阶段镜像，GitHub 登录处于关闭态；启用步骤见 `docs/runbooks/dev122-operations.zh-CN.md` §6。
-- OAuth App 参数：Homepage `https://taboo.swetcc.com`，Authorization callback `https://taboo.swetcc.com/api/v1/auth/github/callback`。
+- OAuth App 参数：Homepage `https://taboo-dev122.swetcc.com`，Authorization callback `https://taboo-dev122.swetcc.com/api/v1/auth/github/callback`。
 - 原 Phase 3 的真实 OIDC 提供方（Identity V2 / Keycloak）联调移入 Phase 6 备选，不再阻塞。
+
+### 3.4 主机名更换（2026-10-31）
+
+用户要求开发环境主机名统一为 `*-dev122` 形式：`taboo.swetcc.com` → `taboo-dev122.swetcc.com`。
+
+- NPM：新证书 cert #15（Let's Encrypt，DNS-01 aliyun），新 Proxy Host #16 → `taboo:7100`（Force SSL、HTTP/2、HSTS、WebSocket）；旧 Proxy Host #15、旧证书 #14 已删除，其他主机未改动。
+- dev122 `.env`：`TABOO_PUBLIC_ORIGIN` / `TABOO_CORS_ORIGIN` 改为 `https://taboo-dev122.swetcc.com`；GitHub 回调随之变为 `https://taboo-dev122.swetcc.com/api/v1/auth/github/callback`。
+- 名称解析：与其他 `*-dev122` 一样只用 `/etc/hosts`（公网 DNS 无任何 `*-dev122` 记录）。
+- 账号邮箱 `smoke@taboo.swetcc.com`、`owner@taboo.swetcc.com` 是已存在账号的标识，不随主机名变化。
 
 ---
 
@@ -281,7 +290,7 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 
 ## 需用户决定 / 风险
 
-1. ~~名称解析~~：已决定，用户在 Aliyun DNS 添加 `taboo.swetcc.com A 10.0.30.122`（待完成）。
+1. ~~名称解析~~：已决定，主机名 `taboo-dev122.swetcc.com`，与其他 `*-dev122` 一样只用 `/etc/hosts`（不加 DNS 记录）；Mac 需用户用 sudo 添加 `10.0.30.122 taboo-dev122.swetcc.com`。
 2. ~~dev122 旧部署~~：已决定，全新初始化，旧目录保留不动。
 3. ~~Phase 3 提供方~~：已决定，使用 GitHub OAuth App；待用户在 GitHub 创建 OAuth App 并在 dev122 `.env` 写入凭据。
 4. Git：已决定每阶段 push 到 `origin/develop`；是否合并 `main`、是否启用 Woodpecker CI 待定。
@@ -292,9 +301,9 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 | 阶段 | 状态 | 日期 |
 |---|---|---|
 | Phase 0 评估与计划 | 完成 | 2026-10-31 |
-| Phase 1 dev122 部署与 HTTPS | 完成（DNS A 记录待用户添加） | 2026-10-31 |
+| Phase 1 dev122 部署与 HTTPS | 完成（主机名已改为 taboo-dev122.swetcc.com） | 2026-10-31 |
 | Phase 2 可重复部署、备份恢复与工程基线 | 完成（Woodpecker 跳过） | 2026-10-31 |
-| Phase 3 | 未开始 | |
+| Phase 3 GitHub OAuth 登录 | 代码完成并部署（待 OAuth App 凭据） | 2026-10-31 |
 | Phase 4 | 未开始 | |
 | Phase 5 | 未开始 | |
 | Phase 6 | 未开始 | |

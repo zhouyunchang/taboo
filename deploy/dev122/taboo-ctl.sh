@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 DIR="$PWD"
 PG="${PG_CONTAINER:-swetcc-postgres}"
-PUBLIC_URL="${TABOO_PUBLIC_URL:-https://taboo.swetcc.com}"
+PUBLIC_URL="${TABOO_PUBLIC_URL:-https://taboo-dev122.swetcc.com}"
 PUBLIC_IP="${TABOO_PUBLIC_IP:-10.0.30.122}"
 DRILL_DB=taboo_restore_test
 PG_CA="${TABOO_PG_CA:-/var/snap/docker/common/swetcc-dev/infra/tls/ca.crt}"

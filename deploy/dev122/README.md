@@ -1,4 +1,4 @@
-# taboo on dev122 (`https://taboo.swetcc.com`)
+# taboo on dev122 (`https://taboo-dev122.swetcc.com`)
 
 Dev/staging deployment that reuses the shared dev122 infrastructure
 (`/var/snap/docker/common/swetcc-dev`): the `swetcc` docker network, the shared
@@ -18,7 +18,7 @@ Aliyun DNS-01). **No secret is stored in this repository.**
 | Data volume | `taboo_data` (`/data`, local state only; system of record is PostgreSQL) |
 | Database | `taboo` on `swetcc-postgres`, owner `taboo_control` (LOGIN, NOSUPERUSER, NOBYPASSRLS); runtime role `taboo_runtime` (NOLOGIN) granted to it; FORCE RLS |
 | DB TLS | host `swetcc-postgres` (not the ambiguous `postgres` alias, which `swetcc-powerdata-postgres` also holds), `sslmode=verify-full`, CA `infra/tls/ca.crt` mounted at `/etc/taboo/pg-ca.crt` (server SAN: `postgres`, `swetcc-postgres`) |
-| Public URL | NPM proxy host `taboo.swetcc.com` → `http://taboo:7100`, force SSL, HTTP/2, HSTS |
+| Public URL | NPM proxy host `taboo-dev122.swetcc.com` → `http://taboo:7100`, force SSL, HTTP/2, HSTS |
 
 ## Files
 
@@ -46,11 +46,11 @@ ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/bootstrap-owner.sh   # 
 ssh dev122-root 'cd /var/snap/docker/common/swetcc-dev/taboo && NPM_DNS_CREDENTIALS=/path/aliyun.ini ./npm-proxy.py'
 ```
 
-Health: `curl -fsS https://taboo.swetcc.com/api/v1/readyz`; self-check:
+Health: `curl -fsS https://taboo-dev122.swetcc.com/api/v1/readyz`; self-check:
 `docker exec taboo taboo-server --check`.
 
-DNS: public record `taboo.swetcc.com A 10.0.30.122` (Aliyun). Until it exists, use a hosts
-override (`10.0.30.122 taboo.swetcc.com`); dev122 itself has one in `/etc/hosts`.
+Name resolution: like every other `*-dev122.swetcc.com` host there is no DNS record; add
+`10.0.30.122 taboo-dev122.swetcc.com` to `/etc/hosts` (dev122 already has it).
 
 ## Upgrade / rollback
 
@@ -104,8 +104,8 @@ Disabled until the operator adds credentials. Create a GitHub **OAuth App** (not
 
 | Field | Value |
 | --- | --- |
-| Homepage URL | `https://taboo.swetcc.com` |
-| Authorization callback URL | `https://taboo.swetcc.com/api/v1/auth/github/callback` |
+| Homepage URL | `https://taboo-dev122.swetcc.com` |
+| Authorization callback URL | `https://taboo-dev122.swetcc.com/api/v1/auth/github/callback` |
 | Enable Device Flow | off |
 
 Then on dev122 (never paste the secret anywhere else):

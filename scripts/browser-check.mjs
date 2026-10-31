@@ -1,7 +1,7 @@
 // 浏览器回归（1280 / 390）：登录 → 密钥表 → 版本标识 → 本地时区时间 → 无横向溢出。
 //
-//   echo '{"email":"…","password":"…"}' | TABOO_BASE=https://taboo.swetcc.com \
-//     [TABOO_HOST_MAP='taboo.swetcc.com 10.0.30.122'] [OUT=/tmp/shots] node scripts/browser-check.mjs
+//   echo '{"email":"…","password":"…"}' | TABOO_BASE=https://taboo-dev122.swetcc.com \
+//     [TABOO_HOST_MAP='taboo-dev122.swetcc.com 10.0.30.122'] [OUT=/tmp/shots] node scripts/browser-check.mjs
 //
 // 凭据只从 stdin 读取，不落盘。会以该账号在默认项目 dev 环境创建一个 BROWSER_CHECK_<ts>
 // 密钥用于渲染检查，结束时删除。浏览器时区固定为 Asia/Shanghai，用于验证 UTC → 本地换算。

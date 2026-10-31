@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Runs ON dev122. Ensures a Let's Encrypt (DNS-01, Aliyun) certificate and an NPM
-proxy host for taboo.swetcc.com -> taboo:7100 via the NPM REST API.
+proxy host for taboo-dev122.swetcc.com -> taboo:7100 via the NPM REST API.
 
 Inputs (never printed): NPM admin JSON (email/password) and a certbot-dns-aliyun
 credential file with the same content existing dev122 certificates use.
 Idempotent: reuses an existing certificate / proxy host for the domain."""
 import json, os, sys, urllib.request, urllib.error
 
-DOMAIN = os.environ.get('TABOO_DOMAIN', 'taboo.swetcc.com')
+DOMAIN = os.environ.get('TABOO_DOMAIN', 'taboo-dev122.swetcc.com')
 API = os.environ.get('NPM_API', 'http://10.0.30.122:81/api')
 ADMIN = os.environ.get('NPM_ADMIN_JSON', '/var/snap/docker/common/swetcc-dev/infra/npm/admin.json')
 DNS_CREDS = os.environ.get('NPM_DNS_CREDENTIALS')  # path to dns_aliyun ini
