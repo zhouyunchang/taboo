@@ -151,3 +151,28 @@ func startMySQL(t *testing.T) (string, func()) {
 	}
 	return fmt.Sprintf("mysql://root:fixture-root@127.0.0.1:%s/leasedb", portLine), cleanup
 }
+
+func TestMySQLDSNDropsDangerousFlags(t *testing.T) {
+	for _, in := range []string{
+		"u:p@tcp(db.example:3306)/app?allowAllFiles=true&allowCleartextPasswords=true&allowOldPasswords=true&sql_mode=x",
+		"mysql://u:p@db.example:3306/app?allowAllFiles=true",
+	} {
+		dsn, db, err := mysqlDSN(in)
+		if err != nil || db != "app" {
+			t.Fatalf("%s: %v %s", in, err, db)
+		}
+		cfg, err := mysql.ParseDSN(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.AllowAllFiles || cfg.AllowCleartextPasswords || cfg.AllowOldPasswords || cfg.MultiStatements || !cfg.InterpolateParams {
+			t.Fatalf("unsafe flags kept: %s", in)
+		}
+		if _, ok := cfg.Params["sql_mode"]; ok {
+			t.Fatalf("arbitrary session param kept: %s", in)
+		}
+	}
+	if _, _, err := mysqlDSN("u:p@unix(/tmp/mysql.sock)/app"); err == nil {
+		t.Fatal("unix socket dsn should be rejected")
+	}
+}

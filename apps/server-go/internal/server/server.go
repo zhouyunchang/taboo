@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	ghsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/github"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/identity"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
@@ -80,7 +82,8 @@ func New(d *Deps) *chi.Mux {
 	}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// 只采信受信代理的 X-Real-IP；机器身份 IP 白名单依赖这里。
+	r.Use(httpx.RealIP(httpx.ParseTrusted(os.Getenv("TABOO_TRUSTED_PROXIES"))))
 	r.Use(redact.AccessLog)
 	r.Use(middleware.Recoverer)
 	r.Use(cors(d.CORS))

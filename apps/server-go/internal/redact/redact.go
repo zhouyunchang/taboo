@@ -1,4 +1,5 @@
-// 请求日志脱敏：password/secret/token/value 等字段写成 [REDACTED]。
+// 请求日志脱敏：默认所有字符串值都写成 [REDACTED]，只有白名单里的元数据字段（name/env/role 等）原样保留；
+// password/secret/token/value 等敏感字段无论类型一律脱敏。
 package redact
 
 import (
@@ -17,6 +18,9 @@ import (
 
 const marker = "[REDACTED]"
 
+// maxLogged 是访问日志解析正文的上限；更大的正文只记“已省略”。
+const maxLogged = 64 << 10
+
 var sensitive = map[string]bool{
 	"password": true, "passwd": true, "secret": true, "token": true, "value": true,
 	"match": true, "content": true, "ciphertext": true, "authorization": true,
@@ -25,12 +29,24 @@ var sensitive = map[string]bool{
 	"recoverycode": true, "dek": true, "masterkey": true, "access": true,
 }
 
-func sensitiveKey(key string) bool {
+// visible 是允许原样写日志的字符串字段（规范化后的键名）。其它字符串字段一律脱敏，
+// 这样 connection、new_password、批量 {KEY: value} 映射、webhook/sync 配置等新字段默认安全。
+var visible = map[string]bool{
+	"name": true, "slug": true, "env": true, "environment": true, "role": true, "type": true,
+	"kind": true, "format": true, "file": true, "ruleid": true, "level": true, "key": true,
+	"email": true, "status": true, "action": true, "path": true, "folder": true, "description": true,
+	"mode": true, "provider": true, "scope": true, "id": true, "projectid": true, "orgid": true,
+}
+
+const maxVisible = 128
+
+func normKey(key string) string {
 	key = strings.ToLower(key)
 	key = strings.ReplaceAll(key, "_", "")
-	key = strings.ReplaceAll(key, "-", "")
-	return sensitive[key]
+	return strings.ReplaceAll(key, "-", "")
 }
+
+func sensitiveKey(key string) bool { return sensitive[normKey(key)] }
 
 // JSON 递归脱敏。非 JSON 文本不写进日志。
 func JSON(body []byte) string {
@@ -61,12 +77,22 @@ func redactValue(v *any) {
 				x[k] = marker
 				continue
 			}
+			if str, ok := child.(string); ok {
+				if !visible[normKey(k)] || len(str) > maxVisible {
+					x[k] = marker
+				}
+				continue
+			}
 			redactValue(&child)
 			x[k] = child
 		}
 	case []any:
 		for i := range x {
 			child := x[i]
+			if _, ok := child.(string); ok {
+				x[i] = marker
+				continue
+			}
 			redactValue(&child)
 			x[i] = child
 		}
@@ -97,12 +123,19 @@ func Query(raw string) string {
 func AccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var logged string
-		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
-			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20+8192))
-			_ = r.Body.Close()
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			if err == nil {
-				logged = JSON(body)
+		if r.Body != nil && r.Body != http.NoBody && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			// 只窥视前 64KB 用于日志，然后把已读部分与剩余流拼回去：处理器看到的正文不被截断。
+			head, err := io.ReadAll(io.LimitReader(r.Body, maxLogged+1))
+			r.Body = struct {
+				io.Reader
+				io.Closer
+			}{io.MultiReader(bytes.NewReader(head), r.Body), r.Body}
+			switch {
+			case err != nil:
+			case len(head) > maxLogged:
+				logged = "[large body omitted]"
+			default:
+				logged = JSON(head)
 			}
 		}
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)

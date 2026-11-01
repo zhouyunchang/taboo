@@ -75,6 +75,7 @@ taboo-server --check
 | `TABOO_DATABASE_RUNTIME_ROLE` | 预建的独立运行角色，默认 `taboo_runtime` |
 | `TABOO_PUBLIC_ORIGIN` | 精确回调和 CSRF Origin |
 | `TABOO_ISSUER_ALLOWLIST` | 操作员允许的完整 OIDC/OAuth issuer |
+| `TABOO_TRUSTED_PROXIES` | 可设置 `X-Real-IP`/`X-Forwarded-For` 的直连代理 IP/CIDR，逗号分隔；默认本机与私网，`none` 表示不采信 |
 | `TABOO_DISABLE_REGISTER` / `TABOO_DISABLE_PASSWORD` | 全局关闭本地注册 / 密码登录，默认 false |
 | `TABOO_MASTER_KEY` / `TABOO_JWT_SECRET` | PG 必须显式配置，所有副本相同 |
 

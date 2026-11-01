@@ -89,6 +89,8 @@ func (m *MySQL) Grant(ctx context.Context, username, password string, ttl time.D
 }
 
 func (m *MySQL) Revoke(ctx context.Context, username string) error {
+	// 先锁账号再 KILL 会话，避免 KILL 与 DROP 之间重新登录；DROP USER 不会断开已有会话。
+	_, _ = m.db.ExecContext(ctx, fmt.Sprintf("ALTER USER IF EXISTS %s ACCOUNT LOCK", mysqlUser(username)))
 	rows, err := m.db.QueryContext(ctx, `SELECT ID FROM information_schema.PROCESSLIST WHERE USER = ?`, username)
 	if err == nil {
 		var ids []int64
@@ -148,7 +150,7 @@ func mysqlDSN(conn string) (string, string, error) {
 		if tlsMode := q.Get("tls"); tlsMode != "" {
 			cfg.TLSConfig = tlsMode
 		}
-		return cfg.FormatDSN(), cfg.DBName, nil
+		return hardenMySQL(cfg), cfg.DBName, nil
 	}
 	parsed, err := mysql.ParseDSN(conn)
 	if err != nil || parsed.DBName == "" {
@@ -157,6 +159,22 @@ func mysqlDSN(conn string) (string, string, error) {
 	if parsed.MultiStatements {
 		return "", "", errors.New("multiStatements not allowed")
 	}
-	parsed.InterpolateParams = true
-	return parsed.FormatDSN(), parsed.DBName, nil
+	if parsed.Net != "tcp" || parsed.Addr == "" {
+		return "", "", errors.New("mysql dsn must use tcp(host:port)")
+	}
+	// 只拷贝白名单字段：丢弃 allowAllFiles（LOAD DATA LOCAL 读服务器本地文件）、
+	// allowCleartextPasswords/allowOldPasswords、任意会话参数等危险开关。
+	cfg.User, cfg.Passwd, cfg.Net, cfg.Addr, cfg.DBName = parsed.User, parsed.Passwd, "tcp", parsed.Addr, parsed.DBName
+	cfg.TLSConfig = parsed.TLSConfig
+	return hardenMySQL(cfg), cfg.DBName, nil
+}
+
+func hardenMySQL(cfg *mysql.Config) string {
+	cfg.AllowAllFiles = false
+	cfg.AllowCleartextPasswords = false
+	cfg.AllowOldPasswords = false
+	cfg.AllowFallbackToPlaintext = false
+	cfg.MultiStatements = false
+	cfg.InterpolateParams = true
+	return cfg.FormatDSN()
 }
