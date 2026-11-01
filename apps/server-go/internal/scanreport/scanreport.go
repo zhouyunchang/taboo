@@ -4,6 +4,7 @@ package scanreport
 import (
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -160,13 +161,13 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	id := tc.NewID()
 	tx, err := s.DB.Begin()
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer tx.Rollback()
 	if _, err = tx.Exec(`INSERT INTO scan_reports (id, org_id, created_by, actor_name, source, finding_count, critical_count, warning_count, findings_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, orgID, u.ID, u.Name, b.Source, len(b.Findings), critical, warning, string(raw)); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	if err = auth.AuditReq(tx, r, orgID, u, "scan_report.create", "org/"+slug+"/scan-report/"+id,
@@ -175,7 +176,7 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = tx.Commit(); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	writeJSON(w, 201, Report{ID: id, Source: b.Source, ActorName: u.Name, FindingCount: len(b.Findings), CriticalCount: critical, WarningCount: warning})
@@ -189,7 +190,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.DB.Query(`SELECT id, source, actor_name, finding_count, critical_count, warning_count, created_at
 		FROM scan_reports WHERE org_id = ? ORDER BY created_at DESC LIMIT 100`, orgID)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer rows.Close()
@@ -197,7 +198,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item Report
 		if err = rows.Scan(&item.ID, &item.Source, &item.ActorName, &item.FindingCount, &item.CriticalCount, &item.WarningCount, &item.CreatedAt); err != nil {
-			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			internalErr(w, err)
 			return
 		}
 		out = append(out, item)
@@ -220,7 +221,7 @@ func (s *Service) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	item.Findings = []Finding{}
@@ -229,4 +230,10 @@ func (s *Service) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, item)
+}
+
+// internalErr logs the cause server-side and returns a generic 500 (no DB details to clients).
+func internalErr(w http.ResponseWriter, err error) {
+	slog.Error("scan report internal error", "err", err)
+	writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 }

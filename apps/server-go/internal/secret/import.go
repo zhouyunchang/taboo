@@ -3,6 +3,7 @@ package secret
 import (
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
@@ -121,7 +122,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		for i, e := range entries {
 			_, version, exists, err := existingSecret(s.DB, envID, folderID, e.Key)
 			if err != nil {
-				writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+				internalErr(w, err)
 				return
 			}
 			planned[i] = planEntry(b.Strategy, e.Key, version, exists)
@@ -139,7 +140,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer tx.Rollback()
@@ -158,7 +159,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 	for i, e := range entries {
 		secretID, version, exists, err := existingSecret(tx, envID, folderID, e.Key)
 		if err != nil {
-			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			internalErr(w, err)
 			return
 		}
 		item := planEntry(b.Strategy, e.Key, version, exists)
@@ -185,7 +186,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 			secretID = tc.NewID()
 			if _, err = tx.Exec(`INSERT INTO secrets (id, env_id, folder, folder_id, key, comment, tags) VALUES (?, ?, ?, ?, ?, '', '[]')`,
 				secretID, envID, normPath, folderID, cur.item.Key); err != nil {
-				writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+				internalErr(w, err)
 				return
 			}
 		} else {
@@ -203,11 +204,11 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err = tx.Exec(`INSERT INTO secret_versions (id, secret_id, version, ciphertext, created_by) VALUES (?, ?, ?, ?, ?)`,
 			tc.NewID(), secretID, next, ct, u.ID); err != nil {
-			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			internalErr(w, err)
 			return
 		}
 		if _, err = s.enqueue(tx, r, p, envSlug, normPath, cur.item.Key, next, eventAction, secretID, envID); err != nil {
-			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			internalErr(w, err)
 			return
 		}
 	}
@@ -226,7 +227,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	writeJSON(w, 200, result)
@@ -235,4 +236,10 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 func isNotFound(err error) bool {
 	ae, ok := err.(*apperr.Error)
 	return ok && ae != nil && ae.Status == 404
+}
+
+// internalErr logs the cause server-side and returns a generic 500 (no DB details to clients).
+func internalErr(w http.ResponseWriter, err error) {
+	slog.Error("secret import internal error", "err", err)
+	writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 }
