@@ -146,6 +146,92 @@ type Identity struct {
 func (p *Provider) Verify(ctx context.Context, raw, clientID, nonce string) (Identity, error) {
 	return p.verify(ctx, raw, clientID, nonce, true)
 }
+
+// VerifyLogoutToken checks an OIDC back-channel logout token. A nonce is
+// rejected. sid and sub are returned separately so the caller can prefer sid.
+func (p *Provider) VerifyLogoutToken(ctx context.Context, raw, clientID string) (subject, sid, replay string, exp time.Time, err error) {
+	if len(raw) < 20 || len(raw) > 8192 || strings.Count(raw, ".") != 2 {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	parts := strings.Split(raw, ".")
+	hdrJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	var hdr struct {
+		Alg string `json:"alg"`
+	}
+	if json.Unmarshal(hdrJSON, &hdr) != nil || hdr.Alg != "RS256" {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	payload, err := p.keySet.VerifySignature(ctx, raw)
+	if err != nil {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	var claims map[string]json.RawMessage
+	if json.Unmarshal(payload, &claims) != nil {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	if _, present := claims["nonce"]; present {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	var iss, sub, jti, session string
+	var iat, expires int64
+	if json.Unmarshal(claims["iss"], &iss) != nil || iss != p.Issuer {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	_ = json.Unmarshal(claims["sub"], &sub)
+	_ = json.Unmarshal(claims["sid"], &session)
+	_ = json.Unmarshal(claims["jti"], &jti)
+	if json.Unmarshal(claims["iat"], &iat) != nil || json.Unmarshal(claims["exp"], &expires) != nil {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	if !audienceMatches(claims["aud"], clientID) {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	events := map[string]json.RawMessage{}
+	if json.Unmarshal(claims["events"], &events) != nil {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	if _, ok := events["http://schemas.openid.net/event/backchannel-logout"]; !ok {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	now := time.Now().Unix()
+	if iat <= 0 || iat > now+30 || expires <= now || expires <= iat || expires-iat > 180 {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	if !safeID(sub) && !safeID(session) {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	if sub != "" && !safeID(sub) || session != "" && !safeID(session) || len(jti) > 128 {
+		return "", "", "", time.Time{}, ErrToken
+	}
+	replay = jti
+	if replay == "" {
+		sum := sha256.Sum256([]byte(raw))
+		replay = base64.RawURLEncoding.EncodeToString(sum[:])
+	}
+	return sub, session, replay, time.Unix(expires, 0), nil
+}
+
+func audienceMatches(raw json.RawMessage, clientID string) bool {
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return one == clientID
+	}
+	var many []string
+	if json.Unmarshal(raw, &many) != nil {
+		return false
+	}
+	return contains(many, clientID)
+}
+
+func safeID(v string) bool {
+	if v == "" || len(v) > 256 || strings.ContainsAny(v, "\x00\r\n") {
+		return false
+	}
+	return true
+}
 func (p *Provider) verify(ctx context.Context, raw, clientID, nonce string, requireNonce bool) (Identity, error) {
 	v := core.NewVerifier(p.Issuer, p.keySet, &core.Config{ClientID: clientID, SupportedSigningAlgs: []string{"RS256"}})
 	t, err := v.Verify(ctx, raw)

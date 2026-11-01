@@ -71,7 +71,7 @@ func (s *Service) PublicRoutes(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/register", s.Register)
 		// 登录限流：5 次/分钟/IP（设计文档 §8）
-		r.With(auth.LoginRateLimit(time.Minute, 5)).Post("/login", s.Login)
+		r.With(auth.LoginRateLimit(s.DB, time.Minute, 5)).Post("/login", s.Login)
 		r.Post("/refresh", s.Refresh)
 	})
 }
@@ -204,12 +204,12 @@ func CreateLocalUser(tx *sql.Tx, masterKey []byte, email, name, passwordHash str
 	}
 	for i, env := range []string{"dev", "staging", "prod"} {
 		envID := tc.NewID()
-		prot := 0
+		prot, approval := 0, 0
 		if env == "prod" {
-			prot = 1
+			prot, approval = 1, 1
 		}
-		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
-			envID, projectID, env, env, i, prot); err != nil {
+		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			envID, projectID, env, env, i, prot, approval); err != nil {
 			return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
 		}
 		if err := ensureRootFolder(tx, envID); err != nil {
@@ -464,12 +464,12 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	for i, env := range []string{"dev", "staging", "prod"} {
 		envID := tc.NewID()
-		prot := 0
+		prot, approval := 0, 0
 		if env == "prod" {
-			prot = 1
+			prot, approval = 1, 1
 		}
-		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
-			envID, pid, env, env, i, prot); err != nil {
+		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			envID, pid, env, env, i, prot, approval); err != nil {
 			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
 			return
 		}
@@ -506,25 +506,27 @@ func (s *Service) ListEnvs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := s.DB.Query(`SELECT id, name, slug, sort_order, COALESCE(protected,0) FROM environments WHERE project_id = ? ORDER BY sort_order`, p.ID)
+	rows, err := s.DB.Query(`SELECT id, name, slug, sort_order, COALESCE(protected,0), COALESCE(approval_required,0) FROM environments WHERE project_id = ? ORDER BY sort_order`, p.ID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	defer rows.Close()
 	type env struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		Slug      string `json:"slug"`
-		Sort      int    `json:"sort_order"`
-		Protected bool   `json:"protected"`
+		ID               string `json:"id"`
+		Name             string `json:"name"`
+		Slug             string `json:"slug"`
+		Sort             int    `json:"sort_order"`
+		Protected        bool   `json:"protected"`
+		ApprovalRequired bool   `json:"approval_required"`
 	}
 	out := []env{}
 	for rows.Next() {
 		var e env
-		var prot int
-		_ = rows.Scan(&e.ID, &e.Name, &e.Slug, &e.Sort, &prot)
+		var prot, approval int
+		_ = rows.Scan(&e.ID, &e.Name, &e.Slug, &e.Sort, &prot, &approval)
 		e.Protected = prot == 1
+		e.ApprovalRequired = approval == 1
 		out = append(out, e)
 	}
 	writeJSON(w, 200, map[string]any{"environments": out})
@@ -539,8 +541,9 @@ func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var b struct {
-		Name      string `json:"name"`
-		Protected bool   `json:"protected"`
+		Name             string `json:"name"`
+		Protected        bool   `json:"protected"`
+		ApprovalRequired *bool  `json:"approval_required"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if strings.TrimSpace(b.Name) == "" {
@@ -555,13 +558,23 @@ func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
 	if b.Protected || slug == "prod" {
 		prot = 1
 	}
+	approval := 0
+	if slug == "prod" {
+		approval = 1
+	}
+	if b.ApprovalRequired != nil {
+		approval = 0
+		if *b.ApprovalRequired {
+			approval = 1
+		}
+	}
 	tx, started := auth.BeginMutation(s.DB, w, r)
 	if !started {
 		return
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, p.ID, b.Name, slug, maxSort+1, prot); err != nil {
+	if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, p.ID, b.Name, slug, maxSort+1, prot, approval); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
@@ -570,10 +583,51 @@ func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "env.create", "project/"+p.Slug+"/env/"+slug, map[string]any{"protected": prot == 1}) {
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "env.create", "project/"+p.Slug+"/env/"+slug, map[string]any{"protected": prot == 1, "approval_required": approval == 1}) {
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "slug": slug, "protected": prot == 1})
+	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "slug": slug, "protected": prot == 1, "approval_required": approval == 1})
+}
+
+func (s *Service) PatchEnv(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.projectOf(w, r)
+	if !ok {
+		return
+	}
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, rbac.Admin, "") {
+		return
+	}
+	var b struct {
+		ApprovalRequired *bool `json:"approval_required"`
+	}
+	if json.NewDecoder(r.Body).Decode(&b) != nil || b.ApprovalRequired == nil {
+		writeErr(w, apperr.InvalidInput)
+		return
+	}
+	flag := 0
+	if *b.ApprovalRequired {
+		flag = 1
+	}
+	slug := chi.URLParam(r, "env")
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE environments SET approval_required=? WHERE project_id=? AND slug=?`, flag, p.ID, slug)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		writeErr(w, apperr.NotFound)
+		return
+	}
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "env.approval", "project/"+p.Slug+"/env/"+slug, map[string]any{"approval_required": flag == 1}) {
+		return
+	}
+	writeJSON(w, 200, map[string]any{"slug": slug, "approval_required": flag == 1})
 }
 
 // ---------- 审计查询 ----------

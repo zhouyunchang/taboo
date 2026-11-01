@@ -260,6 +260,7 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		Comment         *string  `json:"comment"`
 		Tags            []string `json:"tags"`
 		ExpectedVersion *int     `json:"expectedVersion,omitempty"`
+		Reason          string   `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil || b.Key == "" || b.Value == nil {
 		writeErr(w, apperr.InvalidInput)
@@ -271,6 +272,21 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	// #16：key 与 folder 分离设计 —— 禁止路径分隔符，否则写入后无法经 {key} 路由读取
 	if !validKey(b.Key) {
 		writeErr(w, apperr.New(400, "INVALID_KEY", "key must not contain '/' or be '.'/'..'"))
+		return
+	}
+	normPath, err := folder.NormalizePath(q(r, "path", "/"))
+	if err != nil {
+		writeErr(w, apperr.New(400, "INVALID", "invalid folder path"))
+		return
+	}
+	comment := ""
+	if b.Comment != nil {
+		comment = *b.Comment
+	}
+	if !applying(r) && s.queueApproval(w, r, p, envSlug, approvalOp{
+		Action: "upsert", OrgID: p.OrgID, EnvID: envID, Key: b.Key, Folder: normPath, Value: *b.Value,
+		Comment: comment, Tags: b.Tags, Expected: b.ExpectedVersion, Reason: b.Reason,
+	}, b) {
 		return
 	}
 	folderID, normPath, err := s.folderRef(envID, q(r, "path", "/"), true)
@@ -291,6 +307,12 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if s.replayMutation(tx, w, r, p.OrgID, b) {
+		return
+	}
+	if s.claimApproval(tx, w, r, approvalOp{
+		Action: "upsert", OrgID: p.OrgID, EnvID: envID, Key: b.Key, Folder: normPath, Value: *b.Value,
+		Comment: comment, Tags: b.Tags, Expected: b.ExpectedVersion,
+	}) {
 		return
 	}
 	var secretID string
@@ -594,6 +616,11 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.VersionNotFound)
 		return
 	}
+	if !applying(r) && s.queueApproval(w, r, p, envSlug, approvalOp{
+		Action: "rollback", OrgID: p.OrgID, EnvID: envID, Key: key, Folder: norm, Expected: b.ExpectedVersion, Rollback: b.Version,
+	}, b) {
+		return
+	}
 	dek, err := s.orgDEK(p.OrgID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "DEK unavailable"))
@@ -617,6 +644,11 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if s.replayMutation(tx, w, r, p.OrgID, b) {
+		return
+	}
+	if s.claimApproval(tx, w, r, approvalOp{
+		Action: "rollback", OrgID: p.OrgID, EnvID: envID, Key: key, Folder: norm, Expected: b.ExpectedVersion, Rollback: b.Version,
+	}) {
 		return
 	}
 	if b.ExpectedVersion != nil && *b.ExpectedVersion != latest {
@@ -684,6 +716,7 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.SecretNotFound)
 		return
 	}
+	var expectedPtr *int
 	if expected := r.URL.Query().Get("expectedVersion"); expected != "" {
 		version, e := strconv.Atoi(expected)
 		if e != nil || version < 1 {
@@ -694,6 +727,12 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
 			return
 		}
+		expectedPtr = &version
+	}
+	if !applying(r) && s.queueApproval(w, r, p, envSlug, approvalOp{
+		Action: "delete", OrgID: p.OrgID, EnvID: envID, Key: key, Folder: normPath, Expected: expectedPtr,
+	}, nil) {
+		return
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -702,6 +741,11 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if s.replayMutation(tx, w, r, p.OrgID, nil) {
+		return
+	}
+	if s.claimApproval(tx, w, r, approvalOp{
+		Action: "delete", OrgID: p.OrgID, EnvID: envID, Key: key, Folder: normPath, Expected: expectedPtr,
+	}) {
 		return
 	}
 	if res, err := tx.Exec(`DELETE FROM secrets WHERE id = ? AND latest_version=?`, secretID, latest); !updatedOne(res, err) {

@@ -16,10 +16,12 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/buildinfo"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/device"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/dynamic"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/events"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 	ghsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/github"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/govern"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/identity"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
@@ -28,6 +30,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/redact"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rotation"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/scanreport"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/scim"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
@@ -104,6 +107,7 @@ func New(d *Deps) *chi.Mux {
 		wctx = context.Background()
 	}
 	orgs.StartExportWorker(wctx, 10*time.Second)
+	govern.Start(wctx, d.DB)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -134,9 +138,9 @@ func New(d *Deps) *chi.Mux {
 		})
 		orgs.PublicRoutes(r)
 		// client_credentials 换 token（公开，登录同窗口限流）
-		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/identities/token", identities.Token)
+		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/identities/token", identities.Token)
 		// TOTP 2FA 第二步（公开，登录同窗口限流）
-		r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/auth/totp/login", totps.Login2FA)
+		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/auth/totp/login", totps.Login2FA)
 		// OIDC SSO 登录跳转 + callback（公开，登录同窗口限流；M5 #13）
 		oidcSvc := &oidc.Service{
 			PublicOrigin: d.PublicOrigin, SessionProfile: d.SessionProfile, IssuerAllowlist: d.IssuerAllowlist,
@@ -147,11 +151,11 @@ func New(d *Deps) *chi.Mux {
 		oidcSvc.GitHubEnabled = gh.Enabled()
 		// Sign in with GitHub (OAuth App, instance-level; disabled unless TABOO_GITHUB_* set).
 		r.Route("/auth/github", func(r chi.Router) {
-			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/login", gh.Login)
-			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/callback", gh.Callback)
-			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Post("/session", gh.Session)
+			r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Get("/login", gh.Login)
+			r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Get("/callback", gh.Callback)
+			r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/session", gh.Session)
 			r.With(auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Get("/link", gh.LinkStatus)
-			r.With(auth.LoginRateLimit(time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/link", gh.StartLink)
+			r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/link", gh.StartLink)
 			r.With(auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Delete("/link", gh.Unlink)
 		})
 		r.Get("/auth/session", auth.BrowserSession(d.DB, oidcSvc.CheckSession))
@@ -159,11 +163,19 @@ func New(d *Deps) *chi.Mux {
 		r.Post("/auth/logout", oidcSvc.Logout)
 		r.Get("/auth/sources", oidcSvc.ListSources)
 		r.Route("/auth/oidc/{slug}", func(r chi.Router) {
-			r.With(auth.LoginRateLimit(time.Minute, loginRate)).Get("/login", oidcSvc.Login)
+			r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Get("/login", oidcSvc.Login)
 			r.Get("/callback", oidcSvc.Callback)
+			r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/backchannel-logout", oidcSvc.BackChannel)
 			r.With(auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Get("/connections", oidcSvc.Connections)
-			r.With(auth.LoginRateLimit(time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/replace", oidcSvc.Replace)
+			r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/replace", oidcSvc.Replace)
 		})
+		cli := &device.Service{DB: d.DB, JWTSecret: d.JWTSecret, Origin: d.PublicOrigin}
+		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/auth/device", cli.Start)
+		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/auth/device/token", cli.Token)
+		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/auth/cli/token", cli.Exchange)
+		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/auth/device/decision", cli.Decision)
+		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/auth/cli/authorize", cli.Authorize)
+		r.Route("/scim/v2", (&scim.Service{DB: d.DB, MasterKey: d.MasterKey}).Routes)
 		r.Group(func(r chi.Router) {
 			r.Use(auth.MiddlewareWithExternal(d.DB, d.JWTSecret, d.Workloads.Authenticate, oidcSvc.CheckSession))
 			r.Use(federatedScope(d.DB))
@@ -280,11 +292,16 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	// OIDC SSO 配置（M5 #13）
 	oidcSvc.Routes(r)
 	r.Route("/orgs/{slug}/scan-reports", (&scanreport.Service{DB: d.DB, MasterKey: d.MasterKey}).Routes)
+	gov := &govern.Service{DB: d.DB, Secrets: secrets}
+	r.Route("/orgs/{slug}/approvals", gov.ApprovalRoutes)
+	r.Route("/orgs/{slug}/access-requests", gov.AccessRoutes)
+	r.Route("/orgs/{slug}/scim/tokens", (&scim.Service{DB: d.DB, MasterKey: d.MasterKey}).TokenRoutes)
 	// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥 + 文件夹路由
 	r.Route("/projects/{pid}", func(r chi.Router) {
 		r.Use(projectCtx(d.DB))
 		r.Get("/environments", orgs.ListEnvs)
 		r.Post("/environments", orgs.CreateEnv)
+		r.Patch("/environments/{env}", orgs.PatchEnv)
 		folders.Routes(r)
 		secrets.Routes(r)
 		(&rotation.Service{DB: d.DB}).Routes(r)

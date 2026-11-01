@@ -137,6 +137,15 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, summarize(true, b.Strategy, planned))
 		return
 	}
+	required, err := s.needsApproval(envID)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if required {
+		writeErr(w, apperr.New(409, "APPROVAL_REQUIRED", "this environment requires approval; import individual changes or turn approval off"))
+		return
+	}
 	if s.checkReplay(w, r, p.OrgID, b) {
 		return
 	}

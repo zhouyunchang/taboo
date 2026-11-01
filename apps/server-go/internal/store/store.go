@@ -511,6 +511,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 			return err
 		}
 	}
+	if err := migratePhase6(db); err != nil {
+		return err
+	}
 	// PRAGMA 不支持参数绑定，整数直接内插（值来自本文件常量，无注入面）
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 		return err
@@ -519,7 +522,28 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 17
+const SchemaVersion = 18
+
+func migratePhase6(db migrationDB) error {
+	for _, stmt := range []string{
+		`ALTER TABLE environments ADD COLUMN approval_required INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE org_members ADD COLUMN scim_managed INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE browser_sessions ADD COLUMN sid TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE browser_sessions ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_browser_logout_sid ON browser_sessions(provider_id, sid)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_browser_logout_sub ON browser_sessions(provider_id, subject)`); err != nil {
+		return err
+	}
+	_, err := db.Exec(phase6Tables)
+	return err
+}
 
 // relaxDynamicEngineCheck 把旧的 postgres-only CHECK 放宽到 mysql。
 // 已有库的 CREATE TABLE 不会被 IF NOT EXISTS 改写，必须重建表。

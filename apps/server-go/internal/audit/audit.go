@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/cluster"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
 )
@@ -185,6 +186,10 @@ func StartCheckpointWorker(ctxDone <-chan struct{}, db *sql.DB, masterKey []byte
 			case <-ctxDone:
 				return
 			case <-t.C:
+				ok, err := cluster.Acquire(db, "audit-checkpoint", every*2)
+				if err != nil || !ok {
+					continue
+				}
 				rows, err := db.Query(`SELECT DISTINCT org_id FROM audit_logs WHERE entry_hash != ''`)
 				if err != nil {
 					continue

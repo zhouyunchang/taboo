@@ -263,7 +263,15 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, err = tx.Exec(`INSERT INTO browser_sessions(token_hash,user_id,org_id,provider_id,config_hash,origin,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?)`, tc.SHA256(raw), uid, p.OrgID, p.ID, revision, origin, expires.Unix(), time.Now().Unix())
+	sid := claimString(identity.Claims, "sid")
+	if len(sid) > 256 {
+		sid = ""
+	}
+	subject := identity.Subject
+	if len(subject) > 256 {
+		subject = ""
+	}
+	_, err = tx.Exec(`INSERT INTO browser_sessions(token_hash,user_id,org_id,provider_id,config_hash,origin,expires_at,created_at,sid,subject) VALUES(?,?,?,?,?,?,?,?,?,?)`, tc.SHA256(raw), uid, p.OrgID, p.ID, revision, origin, expires.Unix(), time.Now().Unix(), sid, subject)
 	if err != nil {
 		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
 		return

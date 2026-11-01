@@ -101,6 +101,9 @@ func Can(db *sql.DB, actor *Actor, orgID, projectID, action, envSlug string) boo
 	if !ok {
 		return false
 	}
+	if jitAllows(db, actor, orgID, projectID, action, envSlug) {
+		return true
+	}
 	grantRole, hasGrant := projectGrant(db, projectID, actor.ID)
 	eff, ok := rbac.EffectiveRole(orgRole, restricted, grantRole, hasGrant)
 	if !ok {
@@ -201,7 +204,9 @@ func failClosed(action string) bool {
 		return true
 	case strings.HasPrefix(action, "auth.totp."), strings.HasPrefix(action, "members."), strings.HasPrefix(action, "oidc."), strings.HasPrefix(action, "workload."):
 		return true
-	case action == "auth.session.refresh", action == "auth.logout", action == "auth.oidc.login", action == "auth.login", action == "auth.register", action == "project.create", action == "env.create":
+	case strings.HasPrefix(action, "approval."), strings.HasPrefix(action, "access."), strings.HasPrefix(action, "scim."), strings.HasPrefix(action, "auth.device"), strings.HasPrefix(action, "auth.cli"):
+		return true
+	case action == "auth.session.refresh", action == "auth.logout", action == "auth.oidc.login", action == "auth.login", action == "auth.register", action == "auth.backchannel_logout", action == "project.create", action == "env.create", action == "env.approval":
 		return true
 	}
 	return false

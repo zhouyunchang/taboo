@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -345,6 +345,11 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 		}
 		predicate := `org_id=nullif(current_setting('taboo.org_id',true),'')`
 		if _, err = tx.Exec(`ALTER TABLE rotation_policies ENABLE ROW LEVEL SECURITY; ALTER TABLE rotation_policies FORCE ROW LEVEL SECURITY; DROP POLICY IF EXISTS tenant_scope ON rotation_policies; CREATE POLICY tenant_scope ON rotation_policies USING (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)); GRANT SELECT,INSERT,UPDATE,DELETE ON rotation_policies TO ` + pq.QuoteIdentifier(role)); err != nil {
+			return err
+		}
+	}
+	if v < 18 {
+		if err = installPhase6(tx, owner, role); err != nil {
 			return err
 		}
 	}
@@ -454,6 +459,41 @@ func installBrowserSecurity(tx *sql.Tx, owner, role string) error {
 		condition := `current_user=` + pq.QuoteLiteral(owner) + ` OR org_id=nullif(current_setting('taboo.org_id',true),'')`
 		if _, err := tx.Exec(`ALTER TABLE ` + table + ` ENABLE ROW LEVEL SECURITY; ALTER TABLE ` + table + ` FORCE ROW LEVEL SECURITY; CREATE POLICY tenant_scope ON ` + table + ` USING (` + condition + `) WITH CHECK (` + condition + `); GRANT SELECT,INSERT,UPDATE,DELETE ON ` + table + ` TO ` + pq.QuoteIdentifier(role)); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func installPhase6(tx *sql.Tx, owner, role string) error {
+	for _, stmt := range []string{
+		`ALTER TABLE environments ADD COLUMN IF NOT EXISTS approval_required INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE org_members ADD COLUMN IF NOT EXISTS scim_managed INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE browser_sessions ADD COLUMN IF NOT EXISTS sid TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE browser_sessions ADD COLUMN IF NOT EXISTS subject TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_browser_logout_sid ON browser_sessions(provider_id, sid)`,
+		`CREATE INDEX IF NOT EXISTS idx_browser_logout_sub ON browser_sessions(provider_id, subject)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(phase6Tables); err != nil {
+		return err
+	}
+	orgScoped := []string{"approval_requests", "access_requests", "scim_tokens", "scim_users", "scim_groups", "scim_group_members"}
+	predicate := `org_id=nullif(current_setting('taboo.org_id',true),'')`
+	for _, table := range orgScoped {
+		q := `ALTER TABLE ` + pq.QuoteIdentifier(table) + ` ENABLE ROW LEVEL SECURITY; ALTER TABLE ` + pq.QuoteIdentifier(table) + ` FORCE ROW LEVEL SECURITY; DROP POLICY IF EXISTS tenant_scope ON ` + pq.QuoteIdentifier(table) + `; CREATE POLICY tenant_scope ON ` + pq.QuoteIdentifier(table) + ` USING (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)); GRANT SELECT,INSERT,UPDATE,DELETE ON ` + pq.QuoteIdentifier(table) + ` TO ` + pq.QuoteIdentifier(role)
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("RLS %s: %w", table, err)
+		}
+	}
+	// Device codes, logout replays, rate counters and leases stay on the control
+	// pool. The runtime role is not granted access.
+	for _, table := range []string{"device_authorizations", "cli_auth_codes", "logout_replays", "rate_counters", "cluster_leases"} {
+		q := `ALTER TABLE ` + pq.QuoteIdentifier(table) + ` ENABLE ROW LEVEL SECURITY; ALTER TABLE ` + pq.QuoteIdentifier(table) + ` FORCE ROW LEVEL SECURITY; DROP POLICY IF EXISTS tenant_scope ON ` + pq.QuoteIdentifier(table) + `; CREATE POLICY tenant_scope ON ` + pq.QuoteIdentifier(table) + ` USING (current_user=` + pq.QuoteLiteral(owner) + `) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + `)`
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("RLS %s: %w", table, err)
 		}
 	}
 	return nil

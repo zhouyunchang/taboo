@@ -27,7 +27,10 @@ type SecretEvent struct {
 	ActorKind     string // user | identity
 }
 
-// Bus 进程内事件总线（单体架构内足够；水平扩展时替换为队列实现）
+// Bus is the in-process list of durable consumers. Dispatch runs inside the
+// outbox transaction on whichever replica claimed the row, and those consumers
+// may only insert database work. Every replica registers the same consumers
+// before it drains. The bus itself holds no secret and no pending event.
 type Bus struct {
 	mu   sync.RWMutex
 	subs []func(*sql.Tx, SecretEvent) error

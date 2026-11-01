@@ -217,6 +217,9 @@ func (s *Service) PatchMember(w http.ResponseWriter, r *http.Request) {
 	}
 	sets := []string{"role = ?"}
 	args := []any{role}
+	if b.Role != nil {
+		sets = append(sets, "scim_managed = 0")
+	}
 	if b.Restricted != nil {
 		v := 0
 		if *b.Restricted {

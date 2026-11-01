@@ -161,6 +161,22 @@ func (p *Provider) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (p *Provider) Sign(claims map[string]any) (string, error) {
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: p.Key, KeyID: p.keyID}}, nil)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	signed, err := signer.Sign(b)
+	if err != nil {
+		return "", err
+	}
+	return signed.CompactSerialize()
+}
+
 func (p *Provider) issue(w http.ResponseWriter, claims map[string]any) {
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: p.Key, KeyID: p.keyID}}, nil)
 	if err != nil {
