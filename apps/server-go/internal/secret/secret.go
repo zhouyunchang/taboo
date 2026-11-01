@@ -103,12 +103,14 @@ func (s *Service) folderRef(envID, path string, create bool) (folderID, norm str
 
 func (s *Service) Routes(r chi.Router) {
 	r.Get("/export", s.Export)
+	r.Post("/import", s.Import)
 	r.Get("/secrets", s.List)
 	r.Post("/secrets", s.Upsert)
 	r.Route("/secrets/{key}", func(r chi.Router) {
 		r.Get("/", s.Reveal)
 		r.Delete("/", s.Delete)
 		r.Get("/versions", s.Versions)
+		r.Get("/versions/{version}", s.RevealVersion)
 		r.Post("/rollback", s.Rollback)
 	})
 }
@@ -160,6 +162,14 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		list[i].value = value
+		if queryBool(r, "resolve") {
+			resolved, aerr := s.resolveStored(r, p.OrgID, p, value)
+			if aerr != nil {
+				writeErr(w, aerr)
+				return
+			}
+			list[i].value = resolved
+		}
 	}
 	if err := auth.AuditReq(s.DB, r, p.OrgID, u, "secrets.export", "project/"+p.Slug+"/env/"+envSlug,
 		map[string]any{"count": len(list)}); err != nil {
@@ -401,16 +411,93 @@ func (s *Service) Reveal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "decrypt failed"))
 		return
 	}
+	resolved := false
+	if queryBool(r, "resolve") {
+		next, aerr := s.resolveStored(r, p.OrgID, p, val)
+		if aerr != nil {
+			writeErr(w, aerr)
+			return
+		}
+		val = next
+		resolved = true
+	}
 	if err := auth.AuditReq(s.DB, r, p.OrgID, u, "secrets.reveal", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key,
-		map[string]any{"version": latest}); err != nil {
+		map[string]any{"version": latest, "resolved": resolved}); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}
 	var tagsArr []string
 	_ = json.Unmarshal([]byte(tags), &tagsArr)
-	writeJSON(w, 200, map[string]any{
+	body := map[string]any{
 		"key": key, "value": val, "version": latest, "comment": comment, "tags": tagsArr,
-	})
+	}
+	if refs := referenceLiterals(val); len(refs) > 0 && !resolved {
+		body["references"] = refs
+	}
+	if resolved {
+		body["resolved"] = true
+	}
+	writeJSON(w, 200, body)
+}
+
+// GET /secrets/{key}/versions/{version} —— 读取某一历史版本的明文（reveal，默认掩码由界面负责）
+func (s *Service) RevealVersion(w http.ResponseWriter, r *http.Request) {
+	u := auth.From(r)
+	p := projectOf(r)
+	envSlug := q(r, "env", "dev")
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "reveal", envSlug) {
+		return
+	}
+	version, err := strconv.Atoi(chi.URLParam(r, "version"))
+	if err != nil || version < 1 {
+		writeErr(w, apperr.InvalidInput)
+		return
+	}
+	envID, err := s.envOf(p.ID, envSlug)
+	if err != nil {
+		writeErr(w, apperr.EnvNotFound)
+		return
+	}
+	key := chi.URLParam(r, "key")
+	folderID, _, ferr := s.folderRef(envID, q(r, "path", "/"), false)
+	if ferr != nil {
+		writeErr(w, apperr.SecretNotFound)
+		return
+	}
+	var secretID string
+	if err = s.DB.QueryRow(`SELECT id FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`, envID, folderID, key).Scan(&secretID); err != nil {
+		writeErr(w, apperr.SecretNotFound)
+		return
+	}
+	var ct string
+	if err = s.DB.QueryRow(`SELECT ciphertext FROM secret_versions WHERE secret_id = ? AND version = ?`, secretID, version).Scan(&ct); err != nil {
+		writeErr(w, apperr.VersionNotFound)
+		return
+	}
+	dek, err := s.orgDEK(p.OrgID)
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "dek unwrap failed"))
+		return
+	}
+	val, err := tc.Open(dek, ct, tc.SecretContext(p.OrgID, p.ID, envID, secretID, version))
+	if err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "decrypt failed"))
+		return
+	}
+	if queryBool(r, "resolve") {
+		next, aerr := s.resolveStored(r, p.OrgID, p, val)
+		if aerr != nil {
+			writeErr(w, aerr)
+			return
+		}
+		val = next
+	}
+	if err := auth.AuditReq(s.DB, r, p.OrgID, u, "secrets.reveal", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key,
+		map[string]any{"version": version}); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"key": key, "version": version, "value": val})
 }
 
 // GET /secrets/{key}/versions

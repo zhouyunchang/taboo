@@ -23,6 +23,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/scanreport"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
@@ -269,6 +270,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	webhooks.Routes(r)
 	// OIDC SSO 配置（M5 #13）
 	oidcSvc.Routes(r)
+	r.Route("/orgs/{slug}/scan-reports", (&scanreport.Service{DB: d.DB}).Routes)
 	// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥 + 文件夹路由
 	r.Route("/projects/{pid}", func(r chi.Router) {
 		r.Use(projectCtx(d.DB))

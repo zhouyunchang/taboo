@@ -733,6 +733,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{pid}/secrets/{key}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取指定版本明文（reveal 权限，记审计；不落新的明文存储） */
+        get: operations["revealSecretVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{pid}/secrets/{key}/rollback": {
         parameters: {
             query?: never;
@@ -757,10 +774,27 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 导出 .env 格式（reveal 权限；值仅出现在响应体） */
+        /** 导出 .env 格式（export 权限；resolve=true 时展开引用，值仅出现在响应体） */
         get: operations["exportSecrets"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 导入 .env（preview 只返回计划；已有 key 必须选择 skip 或 overwrite；单事务审计，响应不含值） */
+        post: operations["importSecrets"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1078,6 +1112,41 @@ export interface paths {
         patch: operations["updateOIDCProvider"];
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/scan-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 扫描报告列表（不含命中原文） */
+        get: operations["listScanReports"];
+        put?: never;
+        /** 上传扫描报告（只接受规则、相对路径、行号和 sha256 指纹） */
+        post: operations["createScanReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/scan-reports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 扫描报告详情（规则、文件、行号、指纹；没有命中原文） */
+        get: operations["getScanReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{slug}/audit/export": {
         parameters: {
             query?: never;
@@ -1326,6 +1395,66 @@ export interface components {
         };
         SecretValue: components["schemas"]["SecretMeta"] & {
             value: string;
+            /** @description resolve=true 时值为展开结果 */
+            resolved?: boolean;
+            /** @description 原文中的引用字面量，不含目标明文 */
+            references?: string[];
+        };
+        SecretVersionValue: {
+            key: string;
+            version: number;
+            value: string;
+            resolved?: boolean;
+        };
+        ImportRequest: {
+            /** @description .env 文本，最大 1MB */
+            content: string;
+            /**
+             * @description 已有 key 的处理；预览可省略
+             * @enum {string}
+             */
+            strategy?: "skip" | "overwrite";
+            /** @default false */
+            preview: boolean;
+        };
+        ImportEntry: {
+            key: string;
+            /** @enum {string} */
+            action: "create" | "overwrite" | "skip" | "conflict";
+            version: number;
+        };
+        ImportResult: {
+            preview: boolean;
+            strategy?: string;
+            created: number;
+            updated: number;
+            skipped: number;
+            conflicts: string[];
+            entries: components["schemas"]["ImportEntry"][];
+        };
+        ScanFinding: {
+            rule_id: string;
+            /** @enum {string} */
+            level: "critical" | "warning";
+            /** @description 相对路径 */
+            file: string;
+            line: number;
+            /** @description sha256 十六进制，64 字符；不是命中原文 */
+            fingerprint: string;
+        };
+        ScanReportInput: {
+            source?: string;
+            findings: components["schemas"]["ScanFinding"][];
+        };
+        ScanReport: {
+            id: string;
+            source: string;
+            actor_name?: string;
+            finding_count: number;
+            critical_count: number;
+            warning_count: number;
+            created_at?: string;
+            findings?: components["schemas"]["ScanFinding"][];
         };
         SecretVersion: {
             version: number;
@@ -1731,6 +1860,8 @@ export interface components {
         OrgSlug: string;
         Pid: string;
         Env: string;
+        /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
+        Resolve: boolean;
     };
     requestBodies: never;
     headers: never;
@@ -3001,6 +3132,8 @@ export interface operations {
             query?: {
                 env?: components["parameters"]["Env"];
                 path?: string;
+                /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
+                resolve?: components["parameters"]["Resolve"];
             };
             header?: never;
             path: {
@@ -3098,6 +3231,37 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    revealSecretVersion: {
+        parameters: {
+            query?: {
+                env?: components["parameters"]["Env"];
+                path?: string;
+                /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
+                resolve?: components["parameters"]["Resolve"];
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 该版本明文 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretVersionValue"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     rollbackSecret: {
         parameters: {
             query?: {
@@ -3142,6 +3306,8 @@ export interface operations {
         parameters: {
             query?: {
                 env?: components["parameters"]["Env"];
+                /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
+                resolve?: components["parameters"]["Resolve"];
             };
             header?: never;
             path: {
@@ -3161,6 +3327,41 @@ export interface operations {
                 };
             };
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    importSecrets: {
+        parameters: {
+            query?: {
+                env?: components["parameters"]["Env"];
+                path?: string;
+            };
+            header?: {
+                "Idempotency-Key"?: string;
+            };
+            path: {
+                pid: components["parameters"]["Pid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportRequest"];
+            };
+        };
+        responses: {
+            /** @description 预览或已导入 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     listDynamicEngines: {
@@ -3874,6 +4075,84 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listScanReports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 报告摘要 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        reports: components["schemas"]["ScanReport"][];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createScanReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScanReportInput"];
+            };
+        };
+        responses: {
+            /** @description 已保存 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getScanReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 报告详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanReport"];
+                };
+            };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };

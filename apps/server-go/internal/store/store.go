@@ -156,6 +156,20 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_org_time ON audit_logs(org_id, created_at);
 
+CREATE TABLE IF NOT EXISTS scan_reports (
+  id              TEXT PRIMARY KEY,
+  org_id          TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  created_by      TEXT NOT NULL,
+  actor_name      TEXT NOT NULL DEFAULT '',
+  source          TEXT NOT NULL DEFAULT '',
+  finding_count   INTEGER NOT NULL DEFAULT 0,
+  critical_count  INTEGER NOT NULL DEFAULT 0,
+  warning_count   INTEGER NOT NULL DEFAULT 0,
+  findings_json   TEXT NOT NULL,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_scan_reports_org ON scan_reports(org_id, created_at);
+
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -471,7 +485,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 15
+const SchemaVersion = 16
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录

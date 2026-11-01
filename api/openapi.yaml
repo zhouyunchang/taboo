@@ -851,6 +851,7 @@ paths:
         - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
+        - { $ref: '#/components/parameters/Resolve' }
       responses:
         '200': { description: 明文, content: { application/json: { schema: { $ref: '#/components/schemas/SecretValue' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -895,6 +896,23 @@ paths:
                   latest: { type: integer }
                   canRollback: { type: boolean }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/secrets/{key}/versions/{version}:
+    get:
+      tags: [secrets]
+      summary: 读取指定版本明文（reveal 权限，记审计；不落新的明文存储）
+      operationId: revealSecretVersion
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: key, in: path, required: true, schema: { type: string } }
+        - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+        - { name: path, in: query, schema: { type: string, default: / } }
+        - { $ref: '#/components/parameters/Resolve' }
+      responses:
+        '200': { description: 该版本明文, content: { application/json: { schema: { $ref: '#/components/schemas/SecretVersionValue' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/projects/{pid}/secrets/{key}/rollback:
     post:
       tags: [secrets]
@@ -923,16 +941,38 @@ paths:
   /api/v1/projects/{pid}/export:
     get:
       tags: [secrets]
-      summary: 导出 .env 格式（reveal 权限；值仅出现在响应体）
+      summary: 导出 .env 格式（export 权限；resolve=true 时展开引用，值仅出现在响应体）
       operationId: exportSecrets
       security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }, { $ref: '#/components/parameters/Resolve' }]
       responses:
         '200':
           description: text/plain .env 内容
           content:
             text/plain: {}
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/import:
+    post:
+      tags: [secrets]
+      summary: 导入 .env（preview 只返回计划；已有 key 必须选择 skip 或 overwrite；单事务审计，响应不含值）
+      operationId: importSecrets
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { $ref: '#/components/parameters/Env' }
+        - { name: path, in: query, schema: { type: string, default: / } }
+        - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImportRequest' }
+      responses:
+        '200': { description: 预览或已导入, content: { application/json: { schema: { $ref: '#/components/schemas/ImportResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/v1/projects/{pid}/dynamic-engines:
     get:
       tags: [secrets]
@@ -1357,6 +1397,52 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/orgs/{slug}/scan-reports:
+    get:
+      tags: [orgs]
+      summary: 扫描报告列表（不含命中原文）
+      operationId: listScanReports
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200':
+          description: 报告摘要
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reports]
+                properties:
+                  reports: { type: array, items: { $ref: '#/components/schemas/ScanReport' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [orgs]
+      summary: 上传扫描报告（只接受规则、相对路径、行号和 sha256 指纹）
+      operationId: createScanReport
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScanReportInput' }
+      responses:
+        '201': { description: 已保存, content: { application/json: { schema: { $ref: '#/components/schemas/ScanReport' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/orgs/{slug}/scan-reports/{id}:
+    get:
+      tags: [orgs]
+      summary: 扫描报告详情（规则、文件、行号、指纹；没有命中原文）
+      operationId: getScanReport
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 报告详情, content: { application/json: { schema: { $ref: '#/components/schemas/ScanReport' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   # ---------- 审计导出（M5 #14） ----------
   /api/v1/orgs/{slug}/audit/export:
     get:
@@ -1565,6 +1651,11 @@ components:
     OrgSlug: { name: slug, in: path, required: true, schema: { type: string } }
     Pid: { name: pid, in: path, required: true, schema: { type: string } }
     Env: { name: env, in: query, schema: { type: string, default: dev } }
+    Resolve:
+      name: resolve
+      in: query
+      description: 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。
+      schema: { type: boolean, default: false }
   responses:
     BadRequest: { description: 参数错误, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Unauthorized: { description: 未认证/凭证错误, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -1673,7 +1764,75 @@ components:
         - { $ref: '#/components/schemas/SecretMeta' }
         - type: object
           required: [value]
-          properties: { value: { type: string } }
+          properties:
+            value: { type: string }
+            resolved: { type: boolean, description: resolve=true 时值为展开结果 }
+            references:
+              type: array
+              items: { type: string }
+              description: 原文中的引用字面量，不含目标明文
+    SecretVersionValue:
+      type: object
+      required: [key, version, value]
+      properties:
+        key: { type: string }
+        version: { type: integer }
+        value: { type: string }
+        resolved: { type: boolean }
+    ImportRequest:
+      type: object
+      required: [content]
+      properties:
+        content: { type: string, description: .env 文本，最大 1MB }
+        strategy: { type: string, enum: [skip, overwrite], description: 已有 key 的处理；预览可省略 }
+        preview: { type: boolean, default: false }
+    ImportEntry:
+      type: object
+      required: [key, action, version]
+      properties:
+        key: { type: string }
+        action: { type: string, enum: [create, overwrite, skip, conflict] }
+        version: { type: integer }
+    ImportResult:
+      type: object
+      required: [preview, created, updated, skipped, conflicts, entries]
+      properties:
+        preview: { type: boolean }
+        strategy: { type: string }
+        created: { type: integer }
+        updated: { type: integer }
+        skipped: { type: integer }
+        conflicts: { type: array, items: { type: string } }
+        entries: { type: array, items: { $ref: '#/components/schemas/ImportEntry' } }
+    ScanFinding:
+      type: object
+      required: [rule_id, level, file, line, fingerprint]
+      additionalProperties: false
+      properties:
+        rule_id: { type: string }
+        level: { type: string, enum: [critical, warning] }
+        file: { type: string, description: 相对路径 }
+        line: { type: integer, minimum: 1 }
+        fingerprint: { type: string, description: sha256 十六进制，64 字符；不是命中原文 }
+    ScanReportInput:
+      type: object
+      required: [findings]
+      additionalProperties: false
+      properties:
+        source: { type: string }
+        findings: { type: array, maxItems: 2000, items: { $ref: '#/components/schemas/ScanFinding' } }
+    ScanReport:
+      type: object
+      required: [id, source, finding_count, critical_count, warning_count]
+      properties:
+        id: { type: string }
+        source: { type: string }
+        actor_name: { type: string }
+        finding_count: { type: integer }
+        critical_count: { type: integer }
+        warning_count: { type: integer }
+        created_at: { type: string }
+        findings: { type: array, items: { $ref: '#/components/schemas/ScanFinding' } }
     SecretVersion:
       type: object
       required: [version, created_by, created_at]

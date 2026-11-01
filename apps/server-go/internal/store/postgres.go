@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -285,6 +285,29 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 			return err
 		}
 
+	}
+	if v < 16 {
+		if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS scan_reports (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  created_by TEXT NOT NULL,
+  actor_name TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  finding_count INTEGER NOT NULL DEFAULT 0,
+  critical_count INTEGER NOT NULL DEFAULT 0,
+  warning_count INTEGER NOT NULL DEFAULT 0,
+  findings_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_scan_reports_org ON scan_reports(org_id, created_at)`); err != nil {
+			return err
+		}
+		predicate := `org_id=nullif(current_setting('taboo.org_id',true),'')`
+		if _, err = tx.Exec(`ALTER TABLE scan_reports ENABLE ROW LEVEL SECURITY; ALTER TABLE scan_reports FORCE ROW LEVEL SECURITY; DROP POLICY IF EXISTS tenant_scope ON scan_reports; CREATE POLICY tenant_scope ON scan_reports USING (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)); GRANT SELECT,INSERT,UPDATE,DELETE ON scan_reports TO ` + pq.QuoteIdentifier(role)); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.Exec(`INSERT INTO schema_version(singleton,version) VALUES(true,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version`, SchemaVersion); err != nil {
 		return err

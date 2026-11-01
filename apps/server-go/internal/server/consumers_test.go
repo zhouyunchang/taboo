@@ -97,7 +97,7 @@ func TestConsumerProcesses(t *testing.T) {
 			}
 			run := func(dir, name string, args ...string) {
 				t.Helper()
-				ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 				defer cancel()
 				cmd := exec.CommandContext(ctx, name, args...)
 				cmd.Dir = dir
@@ -108,6 +108,8 @@ func TestConsumerProcesses(t *testing.T) {
 				}
 			}
 			run(filepath.Join(root, "packages/sdk-go"), "go", "test", "-race", "-run", "^TestConsumerAPI$", "-count=1", ".")
+			run(filepath.Join(root, "packages/sdk-node"), "node", "--test", "consumer.test.js")
+			run(filepath.Join(root, "packages/sdk-python"), "python3", "test_consumer.py")
 			run(root, "node", "tests/federation/consumers.mjs")
 		})
 	}

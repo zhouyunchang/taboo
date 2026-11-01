@@ -22,12 +22,21 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 			}
 			if a.WorkloadBinding != "" {
 				parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/"), "/")
+				if len(parts) >= 3 && parts[0] == "orgs" && parts[2] == "scan-reports" {
+					var org string
+					if err := db.QueryRow(`SELECT id FROM orgs WHERE slug=?`, parts[1]).Scan(&org); err != nil || org != a.OrganizationID {
+						writeErr(w, apperr.Forbidden)
+						return
+					}
+					next.ServeHTTP(w, r)
+					return
+				}
 				if len(parts) < 3 || parts[0] != "projects" {
 					writeErr(w, apperr.Forbidden)
 					return
 				}
 				switch parts[2] {
-				case "secrets", "environments", "folders", "export":
+				case "secrets", "environments", "folders", "export", "import":
 				default:
 					writeErr(w, apperr.Forbidden)
 					return
@@ -55,7 +64,7 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 			switch parts[0] {
 			case "orgs":
 				switch parts[2] {
-				case "projects", "members", "security", "oidc", "oauth-trusts", "workloads", "audit", "identities", "sync", "webhooks", "invites":
+				case "projects", "members", "security", "oidc", "oauth-trusts", "workloads", "audit", "identities", "sync", "webhooks", "invites", "scan-reports":
 				default:
 					writeErr(w, apperr.Forbidden)
 					return
@@ -63,7 +72,7 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 
 				err = db.QueryRow(`SELECT id FROM orgs WHERE slug=?`, parts[1]).Scan(&org)
 			case "projects":
-				if parts[2] != "secrets" && parts[2] != "environments" && parts[2] != "folders" && parts[2] != "export" && parts[2] != "dynamic-engines" && parts[2] != "dynamic-leases" {
+				if parts[2] != "secrets" && parts[2] != "environments" && parts[2] != "folders" && parts[2] != "export" && parts[2] != "import" && parts[2] != "dynamic-engines" && parts[2] != "dynamic-leases" {
 					writeErr(w, apperr.Forbidden)
 					return
 				}
