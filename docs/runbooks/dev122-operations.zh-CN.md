@@ -25,6 +25,8 @@ ssh dev122-root $D/taboo-ctl.sh history       # 发布记录
 
 回滚**只切换镜像，不回退数据库**。如果新版本做了不兼容迁移，需要按 §4 用升级前备份恢复数据。
 
+**schema 17（Phase 5，代码已在 develop，尚未部署到本环境）**：新增 `rotation_policies`（ENABLE + FORCE RLS），`machine_identities` 增加 `allowed_cidrs` 与 `list_scan_reports`，`dynamic_engines.type` 允许 `mysql`。旧镜像启动时会拒绝 schema 17 的库。部署前本环境仍是 schema 16。
+
 **schema 16（Phase 4，`taboo:dev-967bdbd` 起）**：新增 `scan_reports` 表（ENABLE + FORCE RLS，`tenant_scope` 策略），
 迁移只加表不改旧表。旧镜像（schema ≤15）启动时会拒绝 schema 16 的库，所以单独 `--rollback` 到 Phase 3 镜像会因不健康被自动回退。
 确需回到 schema 15：

@@ -268,13 +268,25 @@ OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。
 
 ## Phase 5：Should 能力与安全清单
 
-1. MySQL 动态引擎：`internal/dynamic` 抽象 `Engine` 接口，新增 MySQL 实现（`CREATE USER … PASSWORD EXPIRE`、到期 DROP）；dev122 临时 MySQL 容器联调，测试后删除。
-2. 轮换策略：按密钥配置 cron/间隔，到期发出 outbox 事件 → webhook 通知外部轮换器回写新版本；审计。
-3. 导入扩展：Doppler（JSON 导出）、1Password CLI（`op` JSON）格式适配器，复用 4.2 管道。
-4. 安全清单：请求日志脱敏中间件（password/secret/token/value 字段）、机器身份 token 可选 IP/CIDR 白名单、响应 `Cache-Control: no-store` 全覆盖检查。
-5. 评估 SAML（可能留待 Phase 6）。
+**状态（2026-11-01）**：代码完成，schema 17。本阶段按要求只提交到本机 `develop`，未 push、未部署 dev122（dev122 仍是 schema 16，待协调者发布）。
 
-验证：各自单测 + 真实 MySQL 联调 + 冒烟扩展；部署 dev122。
+| 子项 | 实现 | 验证 |
+|---|---|---|
+| 5.1 MySQL 动态引擎 | `Engine` 按 `type` 分发。MySQL：`CREATE USER … IDENTIFIED BY … PASSWORD EXPIRE INTERVAL n DAY`、`GRANT SELECT`，续期走 `ALTER USER`，回收 `KILL` 后 `DROP USER`。`PASSWORD EXPIRE` 最少 1 天，精确到期仍由既有 lease worker 删除账号。连接串接受 `mysql://user:pass@host:3306/db` | `TestMySQLDSN`、`TestMySQLGrantAndRevoke`（本机 Docker `mysql:8.4`）、`TestPhase5ImportRotationAndScanBoundaries` |
+| 5.2 轮换策略 | `rotation_policies`。`PUT/GET/DELETE …/secrets/{key}/rotation`，间隔（最少 300 秒）或五段 UTC cron（两次触发至少间隔 5 分钟）。到期写入 outbox `rotation_due`，webhook 事件名 `secret.rotation_due`，不含明文。同步器忽略该事件。审计 `secrets.rotation.update/delete/due` | `TestCronNextAndMinimumGap`、Phase 5 集成测试、冒烟 |
+| 5.3 导入 | `format=dotenv\|doppler\|1password`。Doppler 扁平 JSON 或 `secrets.*.computed`，跳过 `DOPPLER_*`。1Password `op` JSON 的 `fields[].value`，标签转成环境变量名。文件夹在导入事务内创建，冲突或审计失败会一起回滚 | `TestDopplerAndOnePasswordImport`、`TestImportFolderRollsBackWithAudit`、控制台格式选择 |
+| 5.4 安全清单 | 访问日志脱敏中间件；机器身份 `allowed_cidrs`（签发和后续请求都检查，工作负载同样）；`Cache-Control: no-store` 放进安全响应头。SAML 留在 Phase 6：现有登录是 OIDC 与 GitHub OAuth，没有 dev122 身份源要求 SAML | `TestJSONRedactsSecretFields`、`TestMachineTokenAllowlistAndScanVisibility`、冒烟检查 no-store |
+
+**Phase 4 评审修正（并入本阶段）**：
+
+- 新扫描报告的指纹是 `HMAC-SHA256(组织指纹密钥, rule ‖ file ‖ line ‖ match)`。组织指纹密钥由 Master Key 和 `taboo/scan-fingerprint/v1`、组织 ID 做 HMAC 得出，不离开服务端。`match` 是只写字段，响应和 `findings_json` 都没有它。已存在的报告无法重算，读取时 `alg=sha256`。
+- 导入文件夹改到事务内。版本 reveal 的审计带 `resolved`。`DELETE /orgs/{slug}/scan-reports/{id}` 仅 owner/admin，并写 `scan_report.delete`。
+- 机器身份和工作负载默认只能列出、读取自己上传的扫描报告；`list_scan_reports=true` 才可看整个组织。
+- `secret.go` 的 500 不再把 `err.Error()` 返回给客户端。
+
+OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 17 新增 `rotation_policies`（PostgreSQL 上 ENABLE + FORCE RLS），`machine_identities.allowed_cidrs` / `list_scan_reports`，并把 `dynamic_engines.type` 放宽到 `postgres` 或 `mysql`。
+
+**部署**：未执行。协调者发布后 dev122 会从 schema 16 迁到 17；旧镜像不能打开 schema 17 的库。
 
 ---
 
@@ -321,5 +333,5 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 | Phase 2 可重复部署、备份恢复与工程基线 | 完成（Woodpecker 跳过） | 2026-10-31 |
 | Phase 3 GitHub OAuth 登录 | 代码完成并部署（待 OAuth App 凭据） | 2026-10-31 |
 | Phase 4 设计文档 Must 缺口 | 完成并部署（schema 16） | 2026-11-01 |
-| Phase 5 | 未开始 | |
+| Phase 5 Should 能力与安全清单 | 代码完成（schema 17，未部署） | 2026-11-01 |
 | Phase 6 | 未开始 | |

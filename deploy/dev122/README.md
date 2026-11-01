@@ -59,7 +59,7 @@ deploy/dev122/deploy.sh                    # one command: build + pre-upgrade ba
 deploy/dev122/deploy.sh --rollback         # back to the previous release (image only)
 deploy/dev122/deploy.sh --rollback taboo:dev-abc1234
 ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh status
-ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh smoke   # HTTPS smoke, 15 checks
+ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh smoke   # HTTPS smoke, 21 checks after Phase 5
 ```
 
 `upgrade` takes a `pre-upgrade` backup first (keep 5) and automatically switches back if the
