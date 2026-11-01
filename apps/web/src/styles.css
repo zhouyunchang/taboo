@@ -255,3 +255,5 @@ label.check { display: flex; gap: 8px; align-items: center; }
 .import-preview { max-height: 240px; overflow: auto; }
 .phase6 { max-width: 100%; }
 .phase6 input, .phase6 select, .auth-card input, .auth-card select { width: 100%; max-width: 100%; }
+
+.warning { border-left: 3px solid #d97706; padding: 6px 10px; background: rgba(217, 119, 6, 0.08); }

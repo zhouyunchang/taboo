@@ -80,6 +80,16 @@ func (op approvalOp) mac(dek []byte) (string, error) {
 	return hex.EncodeToString(m.Sum(nil)), nil
 }
 
+// currentVersion returns the latest version of a secret, or 0 when it does not exist.
+func (s *Service) currentVersion(envID, folder, key string) (int, error) {
+	var v int
+	err := s.DB.QueryRow(`SELECT latest_version FROM secrets WHERE env_id=? AND folder=? AND key=?`, envID, folder, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return v, err
+}
+
 func applying(r *http.Request) bool {
 	_, ok := r.Context().Value(applyKey{}).(applyTicket)
 	return ok
@@ -106,6 +116,21 @@ func (s *Service) queueApproval(w http.ResponseWriter, r *http.Request, p projec
 	if actor == nil {
 		writeErr(w, apperr.Unauthorized)
 		return true
+	}
+	if op.Expected == nil {
+		// Pin the version the requester saw. A change that lands while the
+		// request is pending makes the approval fail with VERSION_CONFLICT
+		// instead of silently overwriting it.
+		base, berr := s.currentVersion(op.EnvID, op.Folder, op.Key)
+		if berr != nil {
+			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+			return true
+		}
+		if op.Action != "upsert" && base == 0 {
+			writeErr(w, apperr.SecretNotFound)
+			return true
+		}
+		op.Expected = &base
 	}
 	dek, err := s.orgDEK(op.OrgID)
 	if err != nil {
@@ -198,7 +223,7 @@ func (s *Service) claimApproval(tx *sql.Tx, w http.ResponseWriter, r *http.Reque
 		return true
 	}
 	var action, key, folder, env, stored string
-	err = tx.QueryRow(`UPDATE approval_requests SET status='applied', approver_id=?, decided_at=datetime('now')
+	err = tx.QueryRow(`UPDATE approval_requests SET status='applied', approver_id=?, payload_enc='', decided_at=datetime('now')
 		WHERE id=? AND org_id=? AND status='pending' AND expires_at>? AND requester_id<>?
 		RETURNING action, secret_key, folder, env_id, payload_mac`,
 		actor.ID, ticket.ID, op.OrgID, time.Now().Unix(), actor.ID).Scan(&action, &key, &folder, &env, &stored)

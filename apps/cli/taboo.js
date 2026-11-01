@@ -86,7 +86,7 @@ async function publicJSON(p, body) {
 }
 async function deviceLogin() {
   const start = await publicJSON('/api/v1/auth/device', { client_id: 'taboo-cli' });
-  const link = start.verification_uri_complete || start.verification_uri;
+  const link = start.verification_uri;
   console.error(`打开 ${link}`);
   console.error(`代码 ${start.user_code}`);
   openURL(link);
@@ -95,7 +95,7 @@ async function deviceLogin() {
     const res = await fetch(BASE + '/api/v1/auth/device/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: 'taboo-cli', device_code: start.device_code, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }) });
     const data = await res.json().catch(() => ({}));
     if (res.ok) return data;
-    if (data.error === 'slow_down') wait += 5;
+    if (data.error === 'slow_down' || res.status === 429) wait += 5;
     else if (data.error !== 'authorization_pending') throw new Error(data.error || 'device login failed');
     await new Promise((resolve) => setTimeout(resolve, wait * 1000));
   }

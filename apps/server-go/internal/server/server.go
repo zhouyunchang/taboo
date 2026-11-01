@@ -171,7 +171,9 @@ func New(d *Deps) *chi.Mux {
 		})
 		cli := &device.Service{DB: d.DB, JWTSecret: d.JWTSecret, Origin: d.PublicOrigin}
 		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/auth/device", cli.Start)
-		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/auth/device/token", cli.Token)
+		// Polling is paced per device with slow_down (5s); the address cap only
+		// stops device_code guessing, so it sits above one poller's 12/min.
+		r.With(auth.LoginRateLimit(d.DB, time.Minute, 30)).Post("/auth/device/token", cli.Token)
 		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate)).Post("/auth/cli/token", cli.Exchange)
 		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/auth/device/decision", cli.Decision)
 		r.With(auth.LoginRateLimit(d.DB, time.Minute, loginRate), auth.Middleware(d.DB, d.JWTSecret, oidcSvc.CheckSession)).Post("/auth/cli/authorize", cli.Authorize)

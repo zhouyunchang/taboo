@@ -3,7 +3,7 @@ package device
 import "testing"
 
 func TestLoopback(t *testing.T) {
-	ok := []string{"http://127.0.0.1:43123/callback", "http://localhost:9/callback", "http://[::1]:44000/callback"}
+	ok := []string{"http://127.0.0.1:43123/callback", "http://[::1]:44000/callback"}
 	bad := []string{
 		"https://127.0.0.1:43123/callback",
 		"http://127.0.0.1/callback",
@@ -13,6 +13,9 @@ func TestLoopback(t *testing.T) {
 		"http://127.0.0.1.evil.com:43123/callback",
 		"http://user:pass@127.0.0.1:43123/callback",
 		"http://127.0.0.1:43123/other",
+		"http://localhost:43123/callback",
+		"http://127.0.0.1:http/callback",
+		"http://127.0.0.1:043123/callback",
 	}
 	for _, u := range ok {
 		if !Loopback(u) {

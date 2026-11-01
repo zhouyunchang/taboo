@@ -9,9 +9,9 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,12 +67,13 @@ func (s *Service) Start(w http.ResponseWriter, r *http.Request) {
 	}
 	verification := origin + "/device"
 	writeJSON(w, 200, map[string]any{
-		"device_code":               deviceRaw,
-		"user_code":                 formatCode(userCode),
-		"verification_uri":          verification,
-		"verification_uri_complete": verification + "?user_code=" + url.QueryEscape(formatCode(userCode)),
-		"expires_in":                int(deviceTTL.Seconds()),
-		"interval":                  pollEvery,
+		"device_code": deviceRaw,
+		"user_code":   formatCode(userCode),
+		// No verification_uri_complete: a link that carries the code lets a
+		// phisher send a ready-to-approve page. The user types the code.
+		"verification_uri": verification,
+		"expires_in":       int(deviceTTL.Seconds()),
+		"interval":         pollEvery,
 	})
 }
 
@@ -100,14 +101,18 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		oauthErr(w, 400, "expired_token")
 		return
 	}
-	if last > 0 && now-last < int64(interval) {
-		oauthErr(w, 400, "slow_down")
-		return
-	}
-	if _, err = s.DB.Exec(`UPDATE device_authorizations SET last_polled_at=? WHERE id=?`, now, id); err != nil {
+	// Claim this poll slot atomically so parallel polls (or replicas) cannot
+	// both pass the interval check.
+	res, err := s.DB.Exec(`UPDATE device_authorizations SET last_polled_at=? WHERE id=? AND (last_polled_at=0 OR last_polled_at<=?)`, now, id, now-int64(interval))
+	if err != nil {
 		oauthErr(w, 503, "temporarily_unavailable")
 		return
 	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		oauthErr(w, 400, "slow_down")
+		return
+	}
+	_ = last
 	switch status {
 	case "pending":
 		oauthErr(w, 400, "authorization_pending")
@@ -309,23 +314,24 @@ func (s *Service) tokens(tx *sql.Tx, userID string) (*auth.TokenPair, error) {
 	return auth.IssueTokens(tx, s.JWTSecret, &auth.Actor{ID: userID, Email: email, Name: name, Kind: auth.KindUser})
 }
 
-// Loopback accepts only http://127.0.0.1, localhost or [::1] with an explicit
+// Loopback accepts only http://127.0.0.1 or [::1] with an explicit numeric
 // port and the path /callback. There is no query, fragment or userinfo.
+// "localhost" is refused: it depends on name resolution (RFC 8252 §8.3).
 func Loopback(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Scheme != "http" || u.Path != "/callback" {
 		return false
 	}
 	host := u.Hostname()
-	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+	if host != "127.0.0.1" && host != "::1" {
 		return false
 	}
 	port := u.Port()
 	if port == "" {
 		return false
 	}
-	n, err := net.LookupPort("tcp", port)
-	return err == nil && n > 0 && n < 65536
+	n, err := strconv.Atoi(port)
+	return err == nil && n > 0 && n < 65536 && strconv.Itoa(n) == port
 }
 
 func validChallenge(v string) bool {

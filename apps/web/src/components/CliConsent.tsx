@@ -5,9 +5,11 @@ import type { Org } from '../api';
 // 命令行登录确认。授权码只交给回环地址，不写进控制台状态。
 export default function CliConsent({ orgs }: { orgs: Org[] }) {
   const q = new URLSearchParams(location.search);
-  const device = location.pathname === '/device' || q.has('user_code');
+  const device = location.pathname === '/device';
   const [org, setOrg] = useState(orgs[0]?.slug || '');
-  const [code, setCode] = useState(q.get('user_code') || '');
+  // 代码必须手工输入，不从链接预填：带代码的链接可以被别人发来钓鱼。
+  const [code, setCode] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -36,7 +38,7 @@ export default function CliConsent({ orgs }: { orgs: Org[] }) {
         org_slug: org,
       });
       const target = new URL(result.redirect);
-      if (target.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(target.hostname) || target.pathname !== '/callback') {
+      if (target.protocol !== 'http:' || !['127.0.0.1', '[::1]', '::1'].includes(target.hostname) || target.pathname !== '/callback') {
         setError('服务器返回的地址不是本机回调。');
         return;
       }
@@ -62,11 +64,16 @@ export default function CliConsent({ orgs }: { orgs: Org[] }) {
         </label>
         {device ? (
           <>
-            <label>代码
+            <p role="note" className="warning">只在你自己刚刚在终端运行 <code>taboo login --device</code> 时批准。别人发给你的代码或链接一律拒绝：批准后对方的终端会拿到你在所选组织的权限。</p>
+            <label>代码（照着你自己终端上显示的输入）
               <input value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" spellCheck={false} />
             </label>
+            <label className="check">
+              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+              这个代码来自我自己正在使用的终端
+            </label>
             <div className="row">
-              <button type="button" disabled={busy || !code || !org} onClick={() => void decide(true)}>批准</button>
+              <button type="button" disabled={busy || !code || !org || !confirmed} onClick={() => void decide(true)}>批准</button>
               <button type="button" className="ghost" disabled={busy || !code || !org} onClick={() => void decide(false)}>拒绝</button>
             </div>
           </>

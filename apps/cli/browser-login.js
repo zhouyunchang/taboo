@@ -45,6 +45,12 @@ export function waitForCode(server, state, timeoutMs = 5 * 60 * 1000) {
     }, timeoutMs);
     server.on('request', (req, res) => {
       const here = new URL(req.url || '/', 'http://127.0.0.1');
+      // Favicon or stray requests must not end the login.
+      if (req.method !== 'GET' || here.pathname !== '/callback') {
+        res.writeHead(404, { 'cache-control': 'no-store' });
+        res.end();
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       res.end('<!doctype html><meta charset="utf-8"><title>taboo</title><p>可以关闭这个页面。</p>');
       clearTimeout(timer);

@@ -103,7 +103,7 @@ func (s *Service) cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE approval_requests SET status='cancelled', decision_note=?, decided_at=datetime('now') WHERE id=? AND org_id=? AND requester_id=? AND status='pending' AND expires_at>?`,
+	res, err := tx.Exec(`UPDATE approval_requests SET status='cancelled', payload_enc='', decision_note=?, decided_at=datetime('now') WHERE id=? AND org_id=? AND requester_id=? AND status='pending' AND expires_at>?`,
 		note, chi.URLParam(r, "id"), org, actor.ID, time.Now().Unix())
 	if err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
@@ -133,7 +133,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request, status, action 
 		return
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE approval_requests SET status=?, approver_id=?, decision_note=?, decided_at=datetime('now') WHERE id=? AND org_id=? AND status='pending' AND expires_at>? AND requester_id<>?`,
+	res, err := tx.Exec(`UPDATE approval_requests SET status=?, approver_id=?, payload_enc='', decision_note=?, decided_at=datetime('now') WHERE id=? AND org_id=? AND status='pending' AND expires_at>? AND requester_id<>?`,
 		status, actor.ID, note, chi.URLParam(r, "id"), org, time.Now().Unix(), actor.ID)
 	if err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
@@ -329,7 +329,7 @@ func Sweep(db *sql.DB) {
 		return
 	}
 	now := time.Now().Unix()
-	expire(db, `UPDATE approval_requests SET status='expired', decided_at=datetime('now') WHERE id=? AND status='pending' AND expires_at<=?`,
+	expire(db, `UPDATE approval_requests SET status='expired', payload_enc='', decided_at=datetime('now') WHERE id=? AND status='pending' AND expires_at<=?`,
 		`SELECT id, org_id FROM approval_requests WHERE status='pending' AND expires_at<=? LIMIT 100`, "approval.expire", now)
 	expire(db, `UPDATE access_requests SET status='expired', decided_at=datetime('now') WHERE id=? AND status='approved' AND expires_at<=? AND expires_at>0`,
 		`SELECT id, org_id FROM access_requests WHERE status='approved' AND expires_at<=? AND expires_at>0 LIMIT 100`, "access.expire", now)

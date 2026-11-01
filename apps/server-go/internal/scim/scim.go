@@ -19,6 +19,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
@@ -32,7 +33,6 @@ const (
 )
 
 var filterEq = regexp.MustCompile(`^(userName|externalId|displayName) eq "((?:[^"\\]|\\.){0,200})"$`)
-var emailish = regexp.MustCompile(`^[^@\s]+@[^@\s]+$`)
 
 type Service struct {
 	DB        *sql.DB
@@ -65,21 +65,67 @@ func (s *Service) Routes(r chi.Router) {
 
 func (s *Service) auth(next func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ip := httpx.ClientIP(r)
+		// Shared counters: a per-address request ceiling, and a much lower
+		// ceiling once an address has presented bad tokens.
+		if ok, err := s.underLimit("scim-fail:"+ip, failLimit); err != nil {
+			scimErr(w, 503, "try again")
+			return
+		} else if !ok {
+			scimErr(w, 429, "too many failed attempts")
+			return
+		}
+		if ok, err := auth.Hit(s.DB, "scim:"+ip, time.Minute, requestLimit); err != nil {
+			scimErr(w, 503, "try again")
+			return
+		} else if !ok {
+			scimErr(w, 429, "too many requests")
+			return
+		}
 		raw := bearer(r)
 		if !strings.HasPrefix(raw, "taboo_scim_") || len(raw) > 200 {
+			s.fail(ip)
 			scimErr(w, 401, "invalid token")
 			return
 		}
 		var org string
 		var exp, revoked int64
 		err := s.DB.QueryRow(`SELECT org_id, expires_at, revoked_at FROM scim_tokens WHERE token_hash=?`, tc.SHA256(raw)).Scan(&org, &exp, &revoked)
+		if err != nil && err != sql.ErrNoRows {
+			scimErr(w, 503, "try again")
+			return
+		}
 		if err != nil || revoked != 0 || (exp > 0 && exp <= time.Now().Unix()) {
+			s.fail(ip)
 			scimErr(w, 401, "invalid token")
 			return
 		}
 		_, _ = s.DB.Exec(`UPDATE scim_tokens SET last_used_at=? WHERE token_hash=?`, time.Now().Unix(), tc.SHA256(raw))
 		next(w, r, org)
 	}
+}
+
+const (
+	requestLimit = 600 // SCIM requests per address per minute
+	failLimit    = 20  // bad tokens per address per minute
+)
+
+func (s *Service) fail(ip string) {
+	_, _ = auth.Hit(s.DB, "scim-fail:"+ip, time.Minute, failLimit)
+}
+
+// underLimit reads the failure counter without adding to it.
+func (s *Service) underLimit(bucket string, limit int) (bool, error) {
+	start := time.Now().Unix() / 60 * 60
+	var hits int
+	err := s.DB.QueryRow(`SELECT hits FROM rate_counters WHERE bucket=? AND window_start=?`, bucket, start).Scan(&hits)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return hits < limit, nil
 }
 
 func (s *Service) config(w http.ResponseWriter, _ *http.Request) {
@@ -169,7 +215,7 @@ func (s *Service) insertUser(tx *sql.Tx, w http.ResponseWriter, r *http.Request,
 		}
 	}
 	userID := tc.NewID()
-	email := scimEmail(tx, org, in.UserName, userID)
+	email := scimEmail(org, userID)
 	if _, err := tx.Exec(`INSERT INTO users(id,email,name,password_hash,auth_source,external_sub,status) VALUES(?,?,?,'!','scim',?,?)`,
 		userID, email, name, org+":"+id, map[bool]string{true: "active", false: "disabled"}[active]); err != nil {
 		slog.Error("scim user insert", "err", err)
@@ -934,15 +980,11 @@ func (s *Service) orgAdmin(w http.ResponseWriter, r *http.Request) (string, bool
 	return org, true
 }
 
-func scimEmail(tx *sql.Tx, org, userName, userID string) string {
-	email := "scim-" + tc.SHA256(org + "\x00" + userID)[:32] + "@external.invalid"
-	if emailish.MatchString(userName) && len(userName) <= 200 {
-		var n int
-		if tx.QueryRow(`SELECT COUNT(*) FROM users WHERE email=?`, strings.ToLower(userName)).Scan(&n) == nil && n == 0 {
-			return strings.ToLower(userName)
-		}
-	}
-	return email
+// scimEmail is always a synthetic address. The SCIM userName is kept in
+// scim_users only: a provisioning token must not be able to claim a global
+// email that a local, GitHub or invited account could later need.
+func scimEmail(org, userID string) string {
+	return "scim-" + tc.SHA256(org + "\x00" + userID)[:32] + "@external.invalid"
 }
 
 func validRole(role string) bool {
