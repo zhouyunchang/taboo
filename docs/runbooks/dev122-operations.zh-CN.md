@@ -25,7 +25,15 @@ ssh dev122-root $D/taboo-ctl.sh history       # 发布记录
 
 回滚**只切换镜像，不回退数据库**。如果新版本做了不兼容迁移，需要按 §4 用升级前备份恢复数据。
 
-**schema 17（Phase 5，代码已在 develop，尚未部署到本环境）**：新增 `rotation_policies`（ENABLE + FORCE RLS），`machine_identities` 增加 `allowed_cidrs` 与 `list_scan_reports`，`dynamic_engines.type` 允许 `mysql`。旧镜像启动时会拒绝 schema 17 的库。部署前本环境仍是 schema 16。
+**schema 17（Phase 5，`taboo:dev-d1c0cc0` 起，2026-11-01 部署）**：新增 `rotation_policies`（ENABLE + FORCE RLS，`tenant_scope` 策略），`machine_identities` 增加 `allowed_cidrs` 与 `list_scan_reports`，`dynamic_engines.type` 允许 `mysql`。旧镜像（schema ≤16）启动时会拒绝 schema 17 的库，单独 `--rollback` 到 Phase 4 镜像会因不健康被自动回退。
+确需回到 schema 16：
+1. `taboo-ctl.sh backup manual` 留底（升级后写入的数据会丢失）；
+2. 把 `$D/.env` 的 `TABOO_IMAGE=` 改为 `taboo:dev-967bdbd`（见 `backups/20261101-115152-pre-upgrade/meta.txt`）；
+3. `taboo-ctl.sh restore backups/20261101-115152-pre-upgrade --yes`。
+schema 17 后的核对：`schema_version` = 17；41 张 taboo 表有 40 张 `relforcerowsecurity=true`；`taboo-server --check` 通过（含 `rotation_policies`）。
+2026-11-01 11:55 CST 对该备份做恢复演练：PASS（40 表 4158 行一致，迁移后 schema 17）。
+
+**客户端地址 / IP 白名单**：taboo 只采信 `TABOO_TRUSTED_PROXIES` 内直连对端的 `X-Real-IP`（compose 默认 `172.18.0.4`，即 NPM 在 swetcc 网络的地址），忽略 `True-Client-IP`。NPM 重建后地址若变化，需在 `.env` 设置 `TABOO_TRUSTED_PROXIES=<新地址>` 并 `docker compose up -d`；不更新时机器身份白名单会按 NPM 地址判断（拒绝而非放行）。注意 NPM 全局配置对私网与 CDN 段启用了 `real_ip_header X-Real-IP`，局域网客户端可自带该头伪造地址，此问题需在 NPM 侧收窄。
 
 **schema 16（Phase 4，`taboo:dev-967bdbd` 起）**：新增 `scan_reports` 表（ENABLE + FORCE RLS，`tenant_scope` 策略），
 迁移只加表不改旧表。旧镜像（schema ≤15）启动时会拒绝 schema 16 的库，所以单独 `--rollback` 到 Phase 3 镜像会因不健康被自动回退。
@@ -78,7 +86,7 @@ ssh dev122-root $D/taboo-ctl.sh restore backups/<dir> --yes     # 真正恢复�
 ## 5. 账号与冒烟
 
 ```sh
-ssh dev122-root $D/taboo-ctl.sh smoke                       # 15 项 HTTPS 冒烟（含清理）
+ssh dev122-root $D/taboo-ctl.sh smoke                       # 21 项 HTTPS 冒烟（含清理）
 ssh dev122-root $D/taboo-ctl.sh user status|enable|disable <email>
 ```
 

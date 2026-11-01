@@ -216,12 +216,13 @@
 
 验证：`./scripts/verify-all.sh --container`；dev122 `taboo-ctl.sh smoke`；启用后用真实 GitHub 账号完成 绑定 / 登录 / 被拒（不在名单）/ 解绑 并核对审计。
 
-### 3.3 执行记录（2026-10-31，代码完成，待凭据）
+### 3.3 执行记录（2026-10-31 代码完成；2026-11-01 端到端验证，完成）
 
 - 实现见 `apps/server-go/internal/github/`，测试 `internal/server/github_test.go`（5 组，模拟 GitHub 端点）。
 - dev122 已部署本阶段镜像，GitHub 登录处于关闭态；启用步骤见 `docs/runbooks/dev122-operations.zh-CN.md` §6。
 - OAuth App 参数：Homepage `https://taboo-dev122.swetcc.com`，Authorization callback `https://taboo-dev122.swetcc.com/api/v1/auth/github/callback`。
 - 原 Phase 3 的真实 OIDC 提供方（Identity V2 / Keycloak）联调移入 Phase 6 备选，不再阻塞。
+- 2026-11-01 11:07–11:09 CST 用真实 GitHub 账号在 dev122 端到端验证：审计依次为 `auth.github.denied`（`not_linked`）、`auth.github.link`、`auth.github.login`，GitHub 用户 `zhouyunchang` 已绑定到 owner 账号。Phase 3 完成。
 
 ### 3.4 主机名更换（2026-10-31）
 
@@ -268,14 +269,14 @@ OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。
 
 ## Phase 5：Should 能力与安全清单
 
-**状态（2026-11-01）**：代码完成，schema 17。本阶段按要求只提交到本机 `develop`，未 push、未部署 dev122（dev122 仍是 schema 16，待协调者发布）。
+**状态（2026-11-01）**：完成，schema 17，已部署 dev122（`taboo:dev-d1c0cc0`）。
 
 | 子项 | 实现 | 验证 |
 |---|---|---|
-| 5.1 MySQL 动态引擎 | `Engine` 按 `type` 分发。MySQL：`CREATE USER … IDENTIFIED BY … PASSWORD EXPIRE INTERVAL n DAY`、`GRANT SELECT`，续期走 `ALTER USER`，回收 `KILL` 后 `DROP USER`。`PASSWORD EXPIRE` 最少 1 天，精确到期仍由既有 lease worker 删除账号。连接串接受 `mysql://user:pass@host:3306/db` | `TestMySQLDSN`、`TestMySQLGrantAndRevoke`（本机 Docker `mysql:8.4`）、`TestPhase5ImportRotationAndScanBoundaries` |
+| 5.1 MySQL 动态引擎 | `Engine` 按 `type` 分发。MySQL：`CREATE USER … IDENTIFIED BY … PASSWORD EXPIRE INTERVAL n DAY`、`GRANT SELECT`，续期走 `ALTER USER`，回收先 `ACCOUNT LOCK`，再 `KILL` 会话，最后 `DROP USER`。`PASSWORD EXPIRE` 最少 1 天，精确到期仍由既有 lease worker 删除账号。连接串接受 `mysql://user:pass@host:3306/db` 或 `user:pass@tcp(host:port)/db`，只保留用户、密码、TCP 地址、库名、TLS 名称，强制关闭 `allowAllFiles`、明文/旧密码认证、`multiStatements` | `TestMySQLDSN`、`TestMySQLDSNDropsDangerousFlags`、`TestMySQLGrantAndRevoke`（本机 Docker `mysql:8.4`）、`TestPhase5ImportRotationAndScanBoundaries` |
 | 5.2 轮换策略 | `rotation_policies`。`PUT/GET/DELETE …/secrets/{key}/rotation`，间隔（最少 300 秒）或五段 UTC cron（两次触发至少间隔 5 分钟）。到期写入 outbox `rotation_due`，webhook 事件名 `secret.rotation_due`，不含明文。同步器忽略该事件。审计 `secrets.rotation.update/delete/due` | `TestCronNextAndMinimumGap`、Phase 5 集成测试、冒烟 |
 | 5.3 导入 | `format=dotenv\|doppler\|1password`。Doppler 扁平 JSON 或 `secrets.*.computed`，跳过 `DOPPLER_*`。1Password `op` JSON 的 `fields[].value`，标签转成环境变量名。文件夹在导入事务内创建，冲突或审计失败会一起回滚 | `TestDopplerAndOnePasswordImport`、`TestImportFolderRollsBackWithAudit`、控制台格式选择 |
-| 5.4 安全清单 | 访问日志脱敏中间件；机器身份 `allowed_cidrs`（签发和后续请求都检查，工作负载同样）；`Cache-Control: no-store` 放进安全响应头。SAML 留在 Phase 6：现有登录是 OIDC 与 GitHub OAuth，没有 dev122 身份源要求 SAML | `TestJSONRedactsSecretFields`、`TestMachineTokenAllowlistAndScanVisibility`、冒烟检查 no-store |
+| 5.4 安全清单 | 访问日志脱敏中间件；机器身份 `allowed_cidrs`（签发和后续请求都检查，工作负载同样）；`Cache-Control: no-store` 放进安全响应头。SAML 留在 Phase 6：现有登录是 OIDC 与 GitHub OAuth，没有 dev122 身份源要求 SAML | `TestJSONRedactsSecretFields`、`TestAccessLogKeepsLargeBodyIntact`、`TestRealIPTrust`、`TestMachineTokenAllowlistAndScanVisibility`、冒烟检查 no-store |
 
 **Phase 4 评审修正（并入本阶段）**：
 
@@ -286,7 +287,16 @@ OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。
 
 OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 17 新增 `rotation_policies`（PostgreSQL 上 ENABLE + FORCE RLS），`machine_identities.allowed_cidrs` / `list_scan_reports`，并把 `dynamic_engines.type` 放宽到 `postgres` 或 `mysql`。
 
-**部署**：未执行。协调者发布后 dev122 会从 schema 16 迁到 17；旧镜像不能打开 schema 17 的库。
+**Phase 5 评审修正（2026-11-01，`d1c0cc0`）**：
+
+- 客户端地址：去掉 chi `middleware.RealIP`（它无条件采信 `True-Client-IP`，NPM 会透传，HTTPS 上可伪造绕过 IP 白名单）。改为 `httpx.RealIP`：只有直连对端在 `TABOO_TRUSTED_PROXIES` 内才取 `X-Real-IP`（其次 `X-Forwarded-For` 最右一跳），忽略 `True-Client-IP`。dev122 compose 默认只信任 NPM `172.18.0.4`。
+- MySQL DSN 分支原样保留 `allowAllFiles` 等开关，项目管理员可指向恶意 MySQL 经 `LOAD DATA LOCAL` 读取容器内本地文件（如 `/data` 下的数据）。现两种写法都按白名单重建配置，拒绝 unix socket。
+- 访问日志：字符串值默认脱敏，只保留 name/env/role 等元数据字段；修正 `connection_string`、`new_password`、批量 `{KEY: value}`、webhook/sync 配置未脱敏的问题。正文只窥视 64KB，处理器收到的正文不再被 1MB 截断。
+- 500 INTERNAL：`apperr` 序列化时统一为 `internal error`，原文只写日志（覆盖其余 60+ 处 `err.Error()`）。
+
+**部署记录（2026-11-01 11:51–11:55 CST）**：`deploy/dev122/deploy.sh` 自动备份 `backups/20261101-115152-pre-upgrade`（40 表），`taboo:dev-967bdbd → taboo:dev-d1c0cc0`，schema 16→17。核对：`schema_version`=17，41 张表 40 张 FORCE RLS，`rotation_policies` 有 `tenant_scope`，`--check` 通过；冒烟 21 项、HTTPS 浏览器检查全部通过。实测（假值）：IP 白名单签发/已有 token 均即时生效，`True-Client-IP`/`X-Forwarded-For` 伪造被拒，非法 CIDR 400；1Password 预览；unix socket DSN 被拒；`docker logs` 中无假值、`client_secret`/`content` 为 `[REDACTED]`。测试数据已清理（含 Phase 4 遗留的 2 份 `live-check` 扫描报告）。升级前备份恢复演练 PASS（4158 行一致，迁移后 schema 17）。dev122 无 MySQL 实例，MySQL 动态凭据只在本机 `mysql:8.4` 测试。
+
+**遗留风险**：NPM 全局 `nginx.conf` 对 10/8、172.16/12、192.168/16 及 CDN 段 `set_real_ip_from` + `real_ip_header X-Real-IP` + `real_ip_recursive on`，局域网客户端自带 `X-Real-IP` 会被 NPM 当成真实地址再转给 taboo（实测从 10.0.30.117 伪造成功）。需 NPM 负责人收窄该配置；在此之前 IP 白名单对局域网客户端不可靠。
 
 ---
 
@@ -314,15 +324,16 @@ TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
 TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 ```
 
-线上：`ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh smoke`（专用账号，15 项）+ `scripts/browser-check.mjs`（1280/390）。
+线上：`ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh smoke`（专用账号，21 项）+ `scripts/browser-check.mjs`（1280/390）。
 
 ## 需用户决定 / 风险
 
 1. ~~名称解析~~：已决定，主机名 `taboo-dev122.swetcc.com`，与其他 `*-dev122` 一样只用 `/etc/hosts`（不加 DNS 记录）；Mac 需用户用 sudo 添加 `10.0.30.122 taboo-dev122.swetcc.com`。
 2. ~~dev122 旧部署~~：已决定，全新初始化，旧目录保留不动。
-3. ~~Phase 3 提供方~~：已决定，使用 GitHub OAuth App；待用户在 GitHub 创建 OAuth App 并在 dev122 `.env` 写入凭据。
+3. ~~Phase 3 提供方~~：已决定，使用 GitHub OAuth App；凭据已写入 dev122 `.env`，2026-11-01 验证通过。
 4. Git：已决定每阶段 push 到 `origin/develop`；是否合并 `main`、是否启用 Woodpecker CI 待定。
 5. ~~架构差异~~：Phase 1 采用 dev122 原生构建（`deploy/dev122/deploy.sh`）。
+6. NPM 全局 real_ip 信任局域网 `X-Real-IP`（见 Phase 5 遗留风险），需 NPM/基础设施负责人决定是否收窄。
 
 ## 状态
 
@@ -331,7 +342,7 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 | Phase 0 评估与计划 | 完成 | 2026-10-31 |
 | Phase 1 dev122 部署与 HTTPS | 完成（主机名已改为 taboo-dev122.swetcc.com） | 2026-10-31 |
 | Phase 2 可重复部署、备份恢复与工程基线 | 完成（Woodpecker 跳过） | 2026-10-31 |
-| Phase 3 GitHub OAuth 登录 | 代码完成并部署（待 OAuth App 凭据） | 2026-10-31 |
+| Phase 3 GitHub OAuth 登录 | 完成（真实账号端到端验证） | 2026-11-01 |
 | Phase 4 设计文档 Must 缺口 | 完成并部署（schema 16） | 2026-11-01 |
-| Phase 5 Should 能力与安全清单 | 代码完成（schema 17，未部署） | 2026-11-01 |
+| Phase 5 Should 能力与安全清单 | 完成并部署（schema 17，`taboo:dev-d1c0cc0`） | 2026-11-01 |
 | Phase 6 | 未开始 | |
