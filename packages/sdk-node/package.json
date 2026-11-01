@@ -1,0 +1,9 @@
+{
+  "name": "@taboo/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "taboo Node SDK — hand-written twin of packages/sdk-go",
+  "exports": "./index.js",
+  "engines": { "node": ">=22.5.0" }
+}

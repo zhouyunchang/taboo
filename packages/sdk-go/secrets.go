@@ -137,10 +137,30 @@ func (c *Client) UpsertSecret(ctx context.Context, projectID, env, folderPath, k
 	return out.Version, err
 }
 
-// GetSecret 读取明文（reveal 权限，记审计）
-func (c *Client) GetSecret(ctx context.Context, projectID, env, folderPath, key string) (*SecretValue, error) {
+// GetOptions 控制读取时是否展开 ${env:KEY} / ${project:env:KEY}。
+type GetOptions struct {
+	Resolve bool
+}
+
+func resolvePair(options []GetOptions) string {
+	if len(options) > 0 && options[0].Resolve {
+		return "true"
+	}
+	return ""
+}
+
+// GetSecret 读取明文（reveal 权限，记审计）。Resolve 为 true 时展开引用。
+func (c *Client) GetSecret(ctx context.Context, projectID, env, folderPath, key string, options ...GetOptions) (*SecretValue, error) {
 	var out SecretValue
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + q(vset("env", env, "path", folderPath))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + q(vset("env", env, "path", folderPath, "resolve", resolvePair(options)))
+	err := c.do(ctx, "GET", p, nil, &out)
+	return &out, err
+}
+
+// RevealSecretVersion 读取指定历史版本的明文。
+func (c *Client) RevealSecretVersion(ctx context.Context, projectID, env, folderPath, key string, version int, options ...GetOptions) (*SecretValue, error) {
+	var out SecretValue
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + "/versions/" + strconv.Itoa(version) + q(vset("env", env, "path", folderPath, "resolve", resolvePair(options)))
 	err := c.do(ctx, "GET", p, nil, &out)
 	return &out, err
 }
@@ -170,12 +190,82 @@ func (c *Client) RollbackSecret(ctx context.Context, projectID, env, folderPath,
 	return out.Version, err
 }
 
-// ExportSecrets 导出 .env 格式文本
-func (c *Client) ExportSecrets(ctx context.Context, projectID, env string) (string, error) {
+// ExportSecrets 导出 .env 格式文本。Resolve 为 true 时展开引用。
+func (c *Client) ExportSecrets(ctx context.Context, projectID, env string, options ...GetOptions) (string, error) {
 	var out string
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/export" + q(vset("env", env))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/export" + q(vset("env", env, "resolve", resolvePair(options)))
 	err := c.do(ctx, "GET", p, nil, &out)
 	return out, err
+}
+
+type ImportEntry struct {
+	Key     string `json:"key"`
+	Action  string `json:"action"`
+	Version int    `json:"version"`
+}
+
+type ImportResult struct {
+	Preview   bool          `json:"preview"`
+	Strategy  string        `json:"strategy"`
+	Created   int           `json:"created"`
+	Updated   int           `json:"updated"`
+	Skipped   int           `json:"skipped"`
+	Conflicts []string      `json:"conflicts"`
+	Entries   []ImportEntry `json:"entries"`
+}
+
+// ImportEnv 导入 .env。preview 不写入；已有 key 需要 strategy 为 skip 或 overwrite。
+func (c *Client) ImportEnv(ctx context.Context, projectID, env, folderPath, content, strategy string, preview bool, options ...MutationOptions) (*ImportResult, error) {
+	var out ImportResult
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/import" + q(vset("env", env, "path", folderPath))
+	body := map[string]any{"content": content, "preview": preview}
+	if strategy != "" {
+		body["strategy"] = strategy
+	}
+	err := c.doMutation(ctx, "POST", p, body, &out, firstMutationOption(options))
+	return &out, err
+}
+
+type ScanFinding struct {
+	RuleID      string `json:"rule_id"`
+	Level       string `json:"level"`
+	File        string `json:"file"`
+	Line        int    `json:"line"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+type ScanReport struct {
+	ID            string        `json:"id"`
+	Source        string        `json:"source"`
+	ActorName     string        `json:"actor_name"`
+	FindingCount  int           `json:"finding_count"`
+	CriticalCount int           `json:"critical_count"`
+	WarningCount  int           `json:"warning_count"`
+	CreatedAt     string        `json:"created_at"`
+	Findings      []ScanFinding `json:"findings"`
+}
+
+func (c *Client) CreateScanReport(ctx context.Context, orgSlug, source string, findings []ScanFinding) (*ScanReport, error) {
+	var out ScanReport
+	if findings == nil {
+		findings = []ScanFinding{}
+	}
+	err := c.do(ctx, "POST", "/api/v1/orgs/"+url.PathEscape(orgSlug)+"/scan-reports", map[string]any{"source": source, "findings": findings}, &out)
+	return &out, err
+}
+
+func (c *Client) ListScanReports(ctx context.Context, orgSlug string) ([]ScanReport, error) {
+	var out struct {
+		Reports []ScanReport `json:"reports"`
+	}
+	err := c.do(ctx, "GET", "/api/v1/orgs/"+url.PathEscape(orgSlug)+"/scan-reports", nil, &out)
+	return out.Reports, err
+}
+
+func (c *Client) GetScanReport(ctx context.Context, orgSlug, id string) (*ScanReport, error) {
+	var out ScanReport
+	err := c.do(ctx, "GET", "/api/v1/orgs/"+url.PathEscape(orgSlug)+"/scan-reports/"+url.PathEscape(id), nil, &out)
+	return &out, err
 }
 
 // DefaultProject 取组织内 default 项目（无则第一个），免手工传 projectID
