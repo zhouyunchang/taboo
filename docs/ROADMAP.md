@@ -71,7 +71,7 @@
 | Phase 3 | 「使用 GitHub 登录」（GitHub OAuth App，OAuth2 授权码）：准入策略、账号绑定/JIT、审计与撤权；dev122 默认关闭，凭据由用户在 dev122 自行写入后启用 |
 | Phase 4 | 补齐设计文档 Must 缺口：密钥引用、.env 导入/导出增强、版本 diff、扫描报告页、Node/Python SDK |
 | Phase 5 | Should 能力：MySQL 动态引擎、轮换策略、Doppler/1Password 导入、安全清单补齐（日志脱敏、IP 白名单） |
-| Phase 6 | Could / 联邦 P1：审批流、访问请求、SCIM、Back-Channel Logout、CLI 浏览器登录、PostgreSQL 多副本。SAML 与 AuthZEN 继续延期。代码在 schema 18，dev122 仍是 schema 17 |
+| Phase 6 | Could / 联邦 P1：审批流、访问请求、SCIM、Back-Channel Logout、CLI 浏览器登录、PostgreSQL 多副本。SAML 与 AuthZEN 继续延期。已部署 dev122（schema 18，`taboo:dev-6beaa0c`） |
 
 每个阶段的统一流程：从 `develop` 切分支 `phase-N-*` → 本机开发 → 本机全量验证（见 §通用验证）→ 构建 linux/amd64 镜像 → 部署 dev122 → 线上验证 → 更新本文件“状态”与验收记录 → 提交并 push 到 `origin/develop`（合并 `main` 需用户确认）。
 
@@ -302,7 +302,7 @@ OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 17 新
 
 ## Phase 6：Could / 联邦 P1
 
-**状态（2026-11-01）**：代码完成，schema 18。尚未部署 dev122（仍是 schema 17）。设计见 [docs/design/phase6.zh-CN.md](design/phase6.zh-CN.md)。
+**状态（2026-11-01）**：完成并部署 dev122（schema 18，`taboo:dev-6beaa0c`）。设计见 [docs/design/phase6.zh-CN.md](design/phase6.zh-CN.md)。
 
 | 子项 | 实现 | 验证 |
 |---|---|---|
@@ -320,6 +320,40 @@ OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 17 新
 - dev122 上的真实 OIDC 联调：本地测试提供方已覆盖协议。真实 Keycloak 需要运维凭据和变更窗口，不在这次代码里。
 
 OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 18 增加审批、限时访问、SCIM、设备码、PKCE、logout replay、限流计数和副本租约。组织范围的新表在 PostgreSQL 上 ENABLE + FORCE RLS；设备码、回放、计数和租约只允许控制角色访问。
+
+
+**安全复核（2026-11-01，提交 6beaa0c）**，已修：
+
+- 审批竞态：未带 `expectedVersion` 的写入/删除/回滚在排队时钉住当时的 `latest_version`，期间有人改过则批准返回 409 `VERSION_CONFLICT`，不覆盖并发值；删除/回滚不存在的密钥直接 404。
+- 密封载荷留存：批准落库、拒绝、撤销、过期后都把 `payload_enc` 清空。
+- SCIM：`userName`/邮箱不再写进全局 `users.email`，一律合成 `scim-<sha256>@external.invalid`，防止抢注别人的邮箱；按 IP 加失败计数（20 次/分钟后 429，正确令牌也拒）和请求上限（600 次/分钟），库故障 503。
+- 设备码：`/auth/device/token` 限流从 5/分钟放到 30/分钟（原值会让 5 秒轮询的 CLI 被 429 打断），`slow_down` 判定改成原子 UPDATE；开始响应不再给 `verification_uri_complete`，确认页不再从链接预填代码，需手动输入并勾选“代码来自我自己的终端”，附防钓鱼提示。
+- 回环登录：只允许 `127.0.0.1` / `::1` 和纯数字端口（去掉 `localhost`）；CLI 回调服务对非 `GET /callback` 请求回 404 而不中止登录；CLI 把 429 当 `slow_down`。
+- 新测试：`TestPhase6ApprovalPinsVersionAndDropsPayload`、`TestPhase6SCIMSyntheticEmailAndThrottle`、`TestPhase6DeviceStartHasNoCompleteURI`、`device/loopback_test.go` 新增拒绝项、`apps/cli/phase6.test.js` 回调用例。
+
+复核确认无问题：back-channel logout 按 `provider_id` 限定、会话保存 sid/sub（≤256）、新表 RLS、租约与限流计数、PKCE S256、5xx 不回显内部错误、审批界面不显示载荷。
+
+**部署记录（2026-11-01 12:54 CST）**：`verify-all.sh --container` 14 步全过。`deploy.sh` 自动备份 `backups/20261101-125433-pre-upgrade`，`taboo:dev-d1c0cc0 → taboo:dev-6beaa0c`，schema 17→18；52 张表 51 张 FORCE RLS（`schema_version` 除外），`--check` 通过；已有环境（dev/staging/prod）`approval_required` 全为关。冒烟 21 项、HTTPS 浏览器检查通过。线上实测（临时用户与第二管理员，假值）：写入排队 202 且未落库、自批 403 `SELF_APPROVAL`、列表无明文、他人批准后落库、重复批准 409、并发改动后旧审批 409 `VERSION_CONFLICT`、撤销正常、终态载荷长度 0；JIT：viewer 403 → 申请人不能自批 → 管理员批准后 reveal 200（prod 与写入仍 403）→ 65 秒后回到 403；SCIM：令牌 201、列表不含原文、Users 200、错误/吊销令牌 401；设备码：无 complete URI、9 位代码、间隔 5 秒、pending→slow_down→拒绝后 access_denied，`/device` 页含警告，`localhost` 回调 400。测试用户、组织、审批、访问申请、SCIM 令牌已删除，smoke 账号已禁用；日志中无假值与 SCIM 原始令牌（审计链保留记录）。升级前备份恢复演练 PASS（41 表 4450 行一致，迁移后 schema 18）。
+
+浏览器检查期间日志会出现 4 条 `503 STORAGE_UNAVAILABLE`（审批页的并行 GET）：检查脚本在页面请求未完成时就跳到 `/device`，请求上下文被取消，`store.Scoped` 的 Ping 失败。直接并行调用复现不出，PostgreSQL 无连接错误，属客户端中断，不是服务故障；以后可把已取消请求记成 499 以免误报。
+
+**仍未解决（需决定或后续阶段）**
+
+- 单个 admin 可以 PATCH 关掉 `approval_required` 后直接写 prod，四眼原则可被一人绕过（有审计 `env.approval`）。可选：关闭审批本身也要第二人批准，或仅 owner 可关。
+- 新建的单人组织 prod 默认开审批，唯一的 owner 写 prod 前必须先关掉审批。
+- 审批是“盲批”：批准人看不到新值，只能看 key、动作、申请人。
+- JIT 授权按设计越过 restricted、受保护环境和联邦显式授权检查（因为已有管理员批准）。
+- SCIM 用户没有登录关联（合成邮箱，不能用来登录），目前只用于成员与角色同步。
+- Back-channel logout 只结束浏览器会话，不吊销 bearer/refresh token。
+- 导出文件仍在本地磁盘，多副本需要共享卷。
+- NPM 全局 real_ip 问题（见 Phase 5）。
+
+## 总体延期清单（截至 Phase 6）
+
+- SAML、AuthZEN（无调用方/身份源要求）。
+- dev122 上真实 OIDC 身份源（Keycloak / Identity V2）联调。
+- Woodpecker CI、合并 `main`（待用户决定）。
+- 上面 Phase 6 “仍未解决”各项与 NPM real_ip 收窄。
 
 ---
 
@@ -351,6 +385,7 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 4. Git：已决定每阶段 push 到 `origin/develop`；是否合并 `main`、是否启用 Woodpecker CI 待定。
 5. ~~架构差异~~：Phase 1 采用 dev122 原生构建（`deploy/dev122/deploy.sh`）。
 6. NPM 全局 real_ip 信任局域网 `X-Real-IP`（见 Phase 5 遗留风险），需 NPM/基础设施负责人决定是否收窄。
+7. 审批开关：是否禁止单个 admin 关闭 `approval_required`（四眼绕过），以及单人组织 prod 默认开审批是否保留（见 Phase 6）。
 
 ## 状态
 
@@ -362,4 +397,4 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 | Phase 3 GitHub OAuth 登录 | 完成（真实账号端到端验证） | 2026-11-01 |
 | Phase 4 设计文档 Must 缺口 | 完成并部署（schema 16） | 2026-11-01 |
 | Phase 5 Should 能力与安全清单 | 完成并部署（schema 17，`taboo:dev-d1c0cc0`） | 2026-11-01 |
-| Phase 6 Could / 联邦 P1 | 代码完成（schema 18，未部署 dev122） | 2026-11-01 |
+| Phase 6 Could / 联邦 P1 | 完成并部署（schema 18，`taboo:dev-6beaa0c`）；SAML/AuthZEN 延期 | 2026-11-01 |

@@ -25,6 +25,17 @@ ssh dev122-root $D/taboo-ctl.sh history       # 发布记录
 
 回滚**只切换镜像，不回退数据库**。如果新版本做了不兼容迁移，需要按 §4 用升级前备份恢复数据。
 
+**schema 18（Phase 6，`taboo:dev-6beaa0c` 起，2026-11-01 12:54 CST 部署）**：新增 `approval_requests`、`access_requests`、`scim_tokens`、`scim_users`、`scim_groups`、`scim_group_members`、`device_authorizations`、`cli_auth_codes`、`logout_replays`、`rate_counters`、`cluster_leases`，`environments` 增加 `approval_required`（已有环境保持关，新建项目的 prod 默认开）。旧镜像（schema ≤17）会拒绝 schema 18 的库，单独 `--rollback` 到 Phase 5 镜像会因不健康被自动回退。
+确需回到 schema 17（Phase 5）：
+1. `taboo-ctl.sh backup manual` 留底（升级后写入的数据，包括审批、访问申请、SCIM 令牌，会丢失）；
+2. 把 `$D/.env` 的 `TABOO_IMAGE=` 改为 `taboo:dev-d1c0cc0`（见 `backups/20261101-125433-pre-upgrade/meta.txt`）；
+3. `taboo-ctl.sh restore backups/20261101-125433-pre-upgrade --yes`；
+4. `taboo-ctl.sh smoke` 确认。
+schema 18 后的核对：`schema_version` = 18；52 张 taboo 表有 51 张 `relforcerowsecurity=true`（`schema_version` 除外）；`taboo-server --check` 通过；`SELECT count(*) FROM environments WHERE approval_required` 对已有组织应为 0。
+2026-11-01 约 13:00 CST 对该备份做恢复演练：PASS（41 表 4450 行一致，迁移后 schema 18）。
+
+**注册已关闭**：dev122 上 `/auth/register` 返回 403。临时测试用户用 `printf '%s\n' "$PW" | ssh dev122-root "docker exec -i taboo taboo-server user create <email> --name '...'"` 创建（会同时建个人组织与项目），用完按邮箱删除用户及其组织；审批、访问申请、SCIM 令牌按组织一起删。审计日志是哈希链，不删。
+
 **schema 17（Phase 5，`taboo:dev-d1c0cc0` 起，2026-11-01 部署）**：新增 `rotation_policies`（ENABLE + FORCE RLS，`tenant_scope` 策略），`machine_identities` 增加 `allowed_cidrs` 与 `list_scan_reports`，`dynamic_engines.type` 允许 `mysql`。旧镜像（schema ≤16）启动时会拒绝 schema 17 的库，单独 `--rollback` 到 Phase 4 镜像会因不健康被自动回退。
 确需回到 schema 16：
 1. `taboo-ctl.sh backup manual` 留底（升级后写入的数据会丢失）；
@@ -82,6 +93,8 @@ ssh dev122-root $D/taboo-ctl.sh restore backups/<dir> --yes     # 真正恢复�
 |---|---|---|
 | 2026-10-31 14:49 CST | `20261031-144859-pre-upgrade` | PASS：39 张表 154 行一致；`taboo-migrate verify` verified=true、legacy 0；临时实例 readyz OK（d7093f4）；临时库已删除 |
 | 2026-11-01 10:49 CST | `20261101-104636-pre-upgrade`（schema 15） | PASS：39 张表 3807 行一致；verify verified=true、legacy 0；临时实例（967bdbd）readyz OK，并把恢复出的库迁移到 schema 16；临时库已删除 |
+| 2026-11-01 11:55 CST | `20261101-115152-pre-upgrade`（schema 16） | PASS：40 表 4158 行一致，迁移后 schema 17 |
+| 2026-11-01 约 13:00 CST | `20261101-125433-pre-upgrade`（schema 17） | PASS：41 表 4450 行一致，信封校验 OK，迁移后 schema 18 |
 
 ## 5. 账号与冒烟
 
@@ -106,6 +119,14 @@ ssh dev122-root $D/taboo-ctl.sh user status|enable|disable <email>
 - 版本：`GET .../secrets/{key}/versions/{n}`（需 reveal 权限，界面版本对比默认遮罩）。
 - 扫描报告：`POST/GET /orgs/{slug}/scan-reports`，只收规则、相对路径、行号、sha256 指纹；带 `match` 字段 400。目前**没有删除接口**，测试报告会留在 smoke 组织里。
 - 审计事件：`secrets.reference` / `secrets.reference_denied` / `secrets.import` / `scan_report.create`，均不含明文。
+
+### Phase 6 线上核对
+
+- 审批：`PATCH /projects/{pid}/environments/{env}` 设 `approval_required`；写入返回 202 并排队，`GET /orgs/{slug}/approvals` 只给元数据，`POST .../approvals/{id}/approve|reject|cancel`。自批 403 `SELF_APPROVAL`，期间密钥被改过则 409 `VERSION_CONFLICT`。
+- 限时访问：`POST /orgs/{slug}/access-requests`（1 分钟–4 小时），管理员批准后生效，到期立即失效。
+- SCIM：`POST /orgs/{slug}/scim/tokens` 只显示一次原文；`/api/v1/scim/v2/Users`。同一 IP 每分钟 20 次错误令牌后 429。
+- 设备码：`POST /api/v1/auth/device` → 在 `/device` 手动输入代码并勾选确认。
+- 浏览器检查期间日志里审批页 4 条 503 `STORAGE_UNAVAILABLE` 是脚本跳页取消了请求，不是故障。
 
 ## 6. GitHub 登录（OAuth App）
 
