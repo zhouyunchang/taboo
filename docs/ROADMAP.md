@@ -238,15 +238,17 @@
 
 **目标**：补齐 v1.0 设计文档中仍缺的开发者体验能力。
 
-| 子项 | 关键改动 | 验证 |
-|---|---|---|
-| 4.1 密钥引用 `${project:env:KEY}` | `internal/secret` 增加解析器（同项目 `${env:KEY}`、跨项目 `${project:env:KEY}`），只在 reveal/export/CLI run 时解析；逐个引用重新授权并记审计；循环/深度限制；OpenAPI 增加 `resolve` 参数 | Go 单测（循环、越权、缺失）、冒烟扩展、CLI `run` 注入解析后值 |
-| 4.2 .env 导入 | `POST /projects/{pid}/import`（dotenv 解析、冲突策略 skip/overwrite、单事务 + 审计）；CLI `taboo import .env`；前端导入对话框（native Modal） | 单测 + 浏览器场景 + 冒烟 |
-| 4.3 版本 diff | 前端版本抽屉选两个版本对比（需 reveal 权限，值默认掩码），不新增明文存储 | Playwright：权限不足不可见、Escape/焦点恢复 |
-| 4.4 扫描报告页 | `POST /orgs/{slug}/scan-reports`（只上传规则 ID/文件/行号/指纹，不上传命中原文）；CLI `scan --upload`；前端报告列表 | 单测确认不存原文；浏览器场景 |
-| 4.5 Node/Python SDK | `packages/sdk-node`（openapi-typescript + 手写薄封装）、`packages/sdk-python`（openapi-python-client 或手写）；与 Go SDK 同样的 consumers 测试 | `scripts/test-consumers.sh` 扩展到三种 SDK |
+**状态（2026-11-01）**：代码完成，尚未部署。引用只在 `resolve=true` 的 reveal/export（CLI `get` / `export` / `run` 默认开启，`--raw` 关闭）时展开；目标固定为该环境根目录的 key。
 
-每个子项都同步 `api/openapi.yaml` → `npm run types` → 契约漂移测试。阶段结束部署 dev122，并在线上运行扩展后的冒烟。
+| 子项 | 实现 | 验证 |
+|---|---|---|
+| 4.1 密钥引用 | `internal/secret/ref.go`：`${env:KEY}`、`${project:env:KEY}`。每个目标重新做 reveal 鉴权并写 `secrets.reference` 审计，不把目标明文写入审计。无权限返回 `REFERENCE_FORBIDDEN`（不区分目标是否存在）。有权限但缺失返回 `REFERENCE_NOT_FOUND` 并带上引用原文。循环 `REFERENCE_CYCLE`，深度 8，单值最多 64 次加载 | `ref_test.go`、`phase4_test.go`、三种 SDK consumer、CLI `get`/`run` |
+| 4.2 .env 导入 | `POST /projects/{pid}/import`：注释、`export`、引号；`preview` 不写库；已有 key 未给策略时 `409 IMPORT_CONFLICT`；`skip` / `overwrite` 单事务 + 一条 `secrets.import` 审计。CLI `taboo import`，界面「导入 .env」 | dotenv 单测、`phase4_test.go`、浏览器导入对话框 |
+| 4.3 版本 diff | `GET .../versions/{version}` 按 reveal 取该版本明文，不新增明文列。版本抽屉默认只显示增删行和长度，点「显示明文」才放入 DOM。无 reveal 权限不渲染对比控件 | `apps/web/tests/phase4.spec.ts`、`scripts/browser-check.mjs`（1280/390） |
+| 4.4 扫描报告 | `scan_reports`（schema 16，PostgreSQL RLS）。`POST/GET /orgs/{slug}/scan-reports` 只接受规则、相对路径、行号、sha256 指纹；未知字段（含命中原文）直接 400。CLI `scan --upload`。控制台「扫描报告」 | `TestScanReportStoresNoSecretText`、CLI consumer 上传后回读 |
+| 4.5 Node/Python SDK | `packages/sdk-node`（`@taboo/sdk`）、`packages/sdk-python`（`taboo.py`）手写对齐 Go SDK 的方法、幂等、机器身份和 OAuth client credentials，而不是生成另一套客户端 | `scripts/test-consumers.sh` 依次跑 Go、Node、Python |
+
+OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。部署 dev122 由协调者执行，本阶段不推送。
 
 ---
 
@@ -279,7 +281,7 @@ npm exec --workspace=@taboo/web -- tsc --noEmit
 npm run build
 go -C apps/server-go vet ./... && go -C apps/server-go test -race ./...
 go -C packages/sdk-go test -race ./... && go -C apps/mcp test -race ./...
-node --test apps/cli/oauth.test.js
+node --test apps/cli/oauth.test.js apps/cli/phase4.test.js
 make -C apps/server-go build && (TABOO_PORT=7199 TABOO_DATA_DIR=$(mktemp -d) ./apps/server-go/bin/taboo-server &) && TABOO_BASE=http://localhost:7199 npm run smoke
 ./scripts/test-consumers.sh
 TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
@@ -304,6 +306,6 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 | Phase 1 dev122 部署与 HTTPS | 完成（主机名已改为 taboo-dev122.swetcc.com） | 2026-10-31 |
 | Phase 2 可重复部署、备份恢复与工程基线 | 完成（Woodpecker 跳过） | 2026-10-31 |
 | Phase 3 GitHub OAuth 登录 | 代码完成并部署（待 OAuth App 凭据） | 2026-10-31 |
-| Phase 4 | 未开始 | |
+| Phase 4 | 代码完成（未部署） | 2026-11-01 |
 | Phase 5 | 未开始 | |
 | Phase 6 | 未开始 | |
