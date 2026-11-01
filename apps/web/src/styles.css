@@ -239,3 +239,12 @@ select { color-scheme: dark; background: var(--bg); color: var(--fg); border: 1p
   .secrets-table td.actions { min-width: 0; padding-top: 6px; }
   .sidebar-version { margin-top: 8px; }
 }
+.panel-head { flex-wrap: wrap; }
+.version-diff { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 12px 0; }
+.version-diff label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--muted); font-size: 12px; }
+.version-diff select { max-width: 100%; }
+.diff-list { list-style: none; padding: 0; margin: 8px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.diff-list li { padding: 2px 0; overflow-wrap: anywhere; }
+.diff-add { color: #3fb950; }
+.diff-del { color: var(--danger); }
+.import-preview { max-height: 240px; overflow: auto; }

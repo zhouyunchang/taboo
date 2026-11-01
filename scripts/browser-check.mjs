@@ -37,6 +37,8 @@ const projectId = (await call('GET', `/api/v1/orgs/${slug}/projects`, { token })
 const KEY = `BROWSER_CHECK_${Date.now()}`;
 const created = await call('POST', `/api/v1/projects/${projectId}/secrets`, { token, body: { key: KEY, value: 'browser-check', tags: ['check'] } });
 check('seed secret', created.data?.version === 1, JSON.stringify(created.data));
+const revised = await call('POST', `/api/v1/projects/${projectId}/secrets`, { token, body: { key: KEY, value: 'browser-check-v2', expectedVersion: 1 } });
+check('seed second version', revised.data?.version === 2, JSON.stringify(revised.data));
 const meta = (await call('GET', `/api/v1/projects/${projectId}/secrets?env=dev`, { token })).data?.secrets?.find((s) => s.key === KEY);
 const fmt = (d) => new Intl.DateTimeFormat('sv-SE', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(d);
 const expectTime = meta ? fmt(new Date(meta.updated_at.replace(' ', 'T') + 'Z')) : '';
@@ -71,11 +73,35 @@ try {
     check('no page-level horizontal overflow', layout.sw <= layout.vw, JSON.stringify(layout));
     check('action buttons fully visible', layout.n > 0 && layout.maxRight <= layout.right + 0.5 && layout.minLeft >= layout.left - 0.5, JSON.stringify(layout));
     check('secrets list has no horizontal scroll', layout.containerOverflow <= 1, JSON.stringify(layout));
+    const importButton = page.getByRole('button', { name: '导入 .env', exact: true });
+    await importButton.click();
+    const importDialog = page.getByRole('dialog', { name: '导入 .env' });
+    await importDialog.waitFor();
+    const importFit = await importDialog.evaluate((el) => ({ dialog: el.scrollWidth <= el.clientWidth + 1, page: document.documentElement.scrollWidth <= document.documentElement.clientWidth }));
+    check('import dialog fits', importFit.dialog && importFit.page, JSON.stringify(importFit));
+    await page.keyboard.press('Escape');
+    await importDialog.waitFor({ state: 'hidden' });
+    check('import escape restores focus', (await page.evaluate(() => document.activeElement?.textContent))?.includes('导入'));
+    await row.getByRole('button', { name: KEY, exact: true }).click();
+    const history = page.getByRole('dialog', { name: '版本历史' });
+    await history.waitFor();
+    await history.getByRole('button', { name: '对比', exact: true }).click();
+    await history.getByText('值已掩码').waitFor();
+    const masked = await history.innerText();
+    check('version diff stays masked', masked.includes('值已掩码') && !masked.includes('browser-check-v2'));
+    await history.getByRole('button', { name: '显示明文', exact: true }).click();
+    check('version diff can reveal', (await history.innerText()).includes('browser-check-v2'));
+    await page.keyboard.press('Escape');
+    await history.waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: '扫描报告', exact: true }).click();
+    await page.getByText('还没有扫描报告').waitFor();
+    const scanFit = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+    check('scan report page fits', scanFit);
     if (OUT) await page.screenshot({ path: `${OUT}/${label}-workspace.png`, fullPage: true });
     await ctx.close();
   }
 } finally {
-  const del = await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}?env=dev&expectedVersion=1`, { token });
+  const del = await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}?env=dev&expectedVersion=2`, { token });
   check('cleanup seeded secret', del.status === 200 || del.status === 204, `status=${del.status}`);
   await browser.close();
 }

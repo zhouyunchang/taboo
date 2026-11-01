@@ -35,10 +35,12 @@ export const clearTokens = () => {
 export class ApiError extends Error {
   code: string;
   status: number;
-  constructor(status: number, code: string, message: string) {
+  details?: unknown;
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -132,7 +134,7 @@ async function request<T>(method: string, path: string, body?: unknown, options:
   if (res.ok && options.blob) { const value = await res.blob(); if (started !== generation) throw new ApiError(409, 'CONTEXT_CHANGED', '访问上下文已变化'); return value as T; }
   const data = await res.json().catch(() => ({}));
   if (started !== generation && res.ok) throw new ApiError(409, 'CONTEXT_CHANGED', '访问上下文已变化');
-  if (!res.ok) throw new ApiError(res.status, data.code ?? 'ERROR', data.message ?? res.statusText);
+  if (!res.ok) throw new ApiError(res.status, data.code ?? 'ERROR', data.message ?? res.statusText, data.details);
   return data as T;
 }
 
@@ -176,3 +178,6 @@ export type Webhook = Schemas['Webhook'];
 export type OIDCProvider = Schemas['OIDCProvider'];
 export type OIDCProviderInput = Schemas['OIDCProviderInput'];
 export type AuditExport = Schemas['AuditExport'];
+export type ImportResult = Schemas['ImportResult'];
+export type ScanReport = Schemas['ScanReport'];
+export type SecretVersionValue = Schemas['SecretVersionValue'];

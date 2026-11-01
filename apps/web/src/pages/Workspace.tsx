@@ -10,6 +10,9 @@ import ValidatedForm from '../components/ValidatedForm';
 import { fmtTime, timeTitle } from '../time';
 import VersionTag from '../components/VersionTag';
 import { GitHubPanel, githubErrorMessage } from '../components/GitHub';
+import ImportEnv from '../components/ImportEnv';
+import VersionDiff from '../components/VersionDiff';
+import ScanReports from '../components/ScanReports';
 
 interface Props {
   user: User;
@@ -27,7 +30,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
   const [project, setProject] = useState<Project | null>(null);
   const [envs, setEnvs] = useState<Env[]>([]);
   const [env, setEnv] = useState('dev');
-  const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings'>('secrets');
+  const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings' | 'scans'>('secrets');
   const [switchOrg,setSwitchOrg] = useState(false);
   const [showGitHub, setShowGitHub] = useState(false);
   const [githubNotice, setGithubNotice] = useState('');
@@ -129,6 +132,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
             {canDelegate && <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>}
             {canDelegate && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
             {canAudit && <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>}
+            <button className={`tab ${tab === 'scans' ? 'active' : ''}`} onClick={() => setTab('scans')}>扫描报告</button>
             {<button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>组织设置</button>}
           </div>
           {tab === 'secrets'
@@ -139,7 +143,9 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
                 ? project && <DynamicPanel key={project.id} projectId={project.id} projectSlug={project.slug} />
                 : tab === 'settings'
                   ? <SettingsPanel orgSlug={org.slug} role={org.role} />
-                  : canAudit ? <AuditPanel orgSlug={org.slug} /> : <p className="muted">没有审计权限</p>}
+                  : tab === 'scans'
+                    ? <ScanReports orgSlug={org.slug} />
+                    : canAudit ? <AuditPanel orgSlug={org.slug} /> : <p className="muted">没有审计权限</p>}
         </main>
       </div>
       {switchOrg && <OrganizationSwitcher onClose={() => setSwitchOrg(false)} />}
@@ -253,7 +259,8 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite: legacyCanWrite }:
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
   const [cur, setCur] = useState('/'); // 当前文件夹路径（物化路径 /a/b/）
   const [error, setError] = useState('');
-  const [editing, setEditing] = useState<string | null>(null); // key 或 '__new__'
+  const [editing, setEditing] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false); // key 或 '__new__'
   const [detail, setDetail] = useState<SecretMeta | null>(null);
   const [permissions, setPermissions] = useState<{write:boolean;delete:boolean;rollback:boolean;export:boolean} | null>(null);
   const canWrite = permissions?.write ?? (!hasBrowserSession() && legacyCanWrite);
@@ -307,6 +314,7 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite: legacyCanWrite }:
         <h2>{projectSlug} / {env}</h2>
         {canWrite && <button className="ghost" onClick={createFolder}>＋ 新建文件夹</button>}
         {(permissions?.delete ?? (!hasBrowserSession() && canWrite)) && cur !== '/' && <button className="ghost" onClick={deleteFolder}>删除此空文件夹</button>}
+        {canWrite && <button className="ghost" onClick={() => setImporting(true)}>导入 .env</button>}
         {canWrite && <button onClick={() => setEditing('__new__')}>＋ 新建密钥</button>}
       </div>
       <div className="crumbs mono">
@@ -340,6 +348,9 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite: legacyCanWrite }:
       {editing && (
         <SecretEditor projectId={projectId} env={env} path={cur} secretKey={editing === '__new__' ? '' : editing} expectedVersion={editing === '__new__' ? 0 : secrets.find(s=>s.key===editing)?.version}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
+      )}
+      {importing && (
+        <ImportEnv projectId={projectId} env={env} path={cur} onClose={() => setImporting(false)} onImported={load} />
       )}
       {detail && (
         <DetailDrawer projectId={projectId} env={env} meta={detail} onChanged={load}
@@ -415,6 +426,14 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
 
+  async function resolveRef() {
+    const started = ++revealGeneration.current;
+    try {
+      const d = await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}&resolve=true`);
+      if (started === revealGeneration.current && document.hasFocus()) { setErr(''); setValue(d.value); }
+    } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
+  }
+
   async function copy() {
     const started=revealGeneration.current;
     try {
@@ -445,6 +464,7 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
       <td className="muted nowrap" data-label="更新时间" title={timeTitle(s.updated_at)}>{fmtTime(s.updated_at)}</td>
       <td className="actions">
         {s.canReveal && <button className="ghost" onClick={reveal}>{value === null ? '显示' : '隐藏'}</button>}
+        {s.canReveal && value !== null && value.includes('${') && <button className="ghost" onClick={() => void resolveRef()}>解析引用</button>}
         {s.canReveal && <button className="ghost" onClick={copy}>复制</button>}
         {canWrite && <button className="ghost" onClick={onEdit}>编辑</button>}
         {(s.canDelete ?? (!hasBrowserSession() && canWrite)) && <button className="ghost" onClick={remove}>删除</button>}
@@ -545,6 +565,9 @@ function DetailDrawer({ projectId, env, meta, onClose, onChanged }: {
             ))}
           </tbody>
         </table>
+        {meta.canReveal
+          ? <VersionDiff projectId={projectId} env={env} folder={folder} secretKey={secretKey} versions={versions} />
+          : <p className="muted">需要 reveal 权限才能对比版本内容。</p>}
         <div className="drawer-actions"><button className="ghost" onClick={onClose}>关闭</button></div>
       </div>
     </Modal>
