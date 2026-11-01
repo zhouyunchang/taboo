@@ -125,8 +125,8 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
         <main className="main">
           <div className="tabs">
             {envs.map((e) => (
-              <button key={e.id} className={`tab ${env === e.slug ? 'active' : ''}`} onClick={() => { setEnv(e.slug); setTab('secrets'); }}>
-                {e.name}
+              <button key={e.id} className={`tab ${env === e.slug ? 'active' : ''}`} aria-label={e.name} title={e.approval_required ? '写入、删除和回滚需要审批' : undefined} onClick={() => { setEnv(e.slug); setTab('secrets'); }}>
+                {e.name}{e.approval_required ? ' · 审批' : ''}
               </button>
             ))}
             <div className="spacer" />
@@ -483,6 +483,7 @@ function SecretEditor({ projectId, env, path, secretKey, expectedVersion, onClos
   const [comment, setComment] = useState('');
   const [tags, setTags] = useState('');
   const [err, setErr] = useState('');
+  const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function save(e: React.FormEvent) {
@@ -494,10 +495,14 @@ function SecretEditor({ projectId, env, path, secretKey, expectedVersion, onClos
     setBusy(true);
     setErr('');
     try {
-      await mutate('post', `/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(path)}`, {
+      const saved = await mutate('post', `/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(path)}`, {
         key, value, comment, expectedVersion,
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
-      });
+      }) as { approval_id?: string };
+      if (saved?.approval_id) {
+        setStatus('已提交审批，另一名管理员批准后才会写入。');
+        return;
+      }
       onSaved();
     } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : String(e2)); }
     finally { setBusy(false); }
@@ -511,6 +516,7 @@ function SecretEditor({ projectId, env, path, secretKey, expectedVersion, onClos
         <label>值<textarea className="resize-none" value={value} onChange={(e) => setValue(e.target.value)} required rows={4} /></label>
         <label>备注<input value={comment} onChange={(e) => setComment(e.target.value)} /></label>
         <label>标签（逗号分隔）<input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="db, prod" /></label>
+        {status && <p role="status">{status}</p>}
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">
           <button type="button" className="ghost" disabled={busy} onClick={onClose}>取消</button>

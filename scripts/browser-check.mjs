@@ -107,6 +107,13 @@ try {
     await page.getByRole('button', { name: '机器身份', exact: true }).click();
     await page.getByRole('heading', { name: '机器身份', exact: true }).waitFor();
     check('machine identities page fits', await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+    await page.getByRole('button', { name: '组织设置', exact: true }).click();
+    await page.getByRole('button', { name: '审批与访问', exact: true }).click();
+    await page.getByRole('heading', { name: '审批与访问', exact: true }).waitFor();
+    check('approval page fits', await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+    await page.goto(BASE + '/device');
+    await page.getByRole('heading', { name: '命令行登录', exact: true }).waitFor();
+    check('cli login page fits', await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
     if (OUT) await page.screenshot({ path: `${OUT}/${label}-workspace.png`, fullPage: true });
     await ctx.close();
   }

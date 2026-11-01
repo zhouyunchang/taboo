@@ -15,6 +15,7 @@ import { spawn } from 'node:child_process';
 import { collectScan, printScan, runScan, uploadFindings } from './scan.js';
 import { randomUUID } from 'node:crypto';
 import { externalOAuth } from './oauth.js';
+import { listenLoopback, openURL, pkce, waitForCode } from './browser-login.js';
 
 const BASE = process.env.TABOO_SERVER || 'http://localhost:7100';
 const SESSION = process.env.TABOO_SESSION_FILE || path.join(os.homedir(), '.taboo', 'session.json');
@@ -74,6 +75,41 @@ async function ensureToken(s) {
   }
   return s;
 }
+async function publicJSON(p, body) {
+  const res = await fetch(BASE + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const reason = data.error || [data.code, data.message].filter(Boolean).join(' ');
+    throw new Error(reason || `HTTP ${res.status}`);
+  }
+  return data;
+}
+async function deviceLogin() {
+  const start = await publicJSON('/api/v1/auth/device', { client_id: 'taboo-cli' });
+  const link = start.verification_uri_complete || start.verification_uri;
+  console.error(`打开 ${link}`);
+  console.error(`代码 ${start.user_code}`);
+  openURL(link);
+  let wait = Number(start.interval) || 5;
+  for (;;) {
+    const res = await fetch(BASE + '/api/v1/auth/device/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id: 'taboo-cli', device_code: start.device_code, grant_type: 'urn:ietf:params:oauth:grant-type:device_code' }) });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) return data;
+    if (data.error === 'slow_down') wait += 5;
+    else if (data.error !== 'authorization_pending') throw new Error(data.error || 'device login failed');
+    await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+  }
+}
+async function browserLogin() {
+  const { verifier, challenge } = pkce();
+  const state = randomUUID();
+  const { server, redirect } = await listenLoopback();
+  const link = `${BASE}/cli/login?${new URLSearchParams({ code_challenge: challenge, redirect_uri: redirect, state })}`;
+  console.error(`打开 ${link}`);
+  openURL(link);
+  const code = await waitForCode(server, state);
+  return publicJSON('/api/v1/auth/cli/token', { client_id: 'taboo-cli', code, code_verifier: verifier, redirect_uri: redirect });
+}
 async function call(method, p, body, raw = false, idempotencyKey) {
   const s = oauth ? await oauth.session() : await ensureToken(loadSession());
   const res = await fetch(BASE + p, {
@@ -129,8 +165,14 @@ switch (cmd) {
       console.log(`logged in as machine identity (token ttl ${Math.round((d.expires_at - Date.now()) / 1000)}s, auto-refresh)`);
       break;
     }
-    const [email, password] = args;
-    if (!email || !password) { console.error('usage: taboo login <email> <password> | --client-id <id> --client-secret <secret>'); process.exit(1); }
+    if (args.includes('--browser') || args.includes('--device')) {
+      const d = args.includes('--device') ? await deviceLogin() : await browserLogin();
+      saveSession(d.tokens);
+      console.log('logged in');
+      break;
+    }
+    const [email, password] = positional();
+    if (!email || !password) { console.error('usage: taboo login <email> <password> | --browser | --device | --client-id <id> --client-secret <secret>'); process.exit(1); }
     const d = await call('POST', '/api/v1/auth/login', { email, password });
     saveSession(d.tokens);
     console.log(`logged in as ${d.user.email}`);
@@ -216,6 +258,8 @@ switch (cmd) {
     console.log(`taboo CLI (MVP) — server: ${BASE}
 
   taboo login <email> <password>                用户登录
+  taboo login --browser                         浏览器 PKCE 登录（回环）
+  taboo login --device                          设备码登录
   taboo login --client-id X --client-secret Y   机器身份登录（token 临期自动重换）
   taboo set <KEY> <VALUE> [--env] [--project]   写入/更新密钥（--idempotency-key KEY --expected-version N）
   taboo get <KEY> [--env] [--project] [--raw]   读取明文（默认解析引用，审计）

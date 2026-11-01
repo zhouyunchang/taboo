@@ -58,7 +58,7 @@ step "web tsc --noEmit" npm exec --workspace=@taboo/web -- tsc --noEmit
 step "web build" npm run build
 step "server-go vet + test -race" go_server
 step "sdk-go + mcp test -race" go_libs
-step "cli oauth test" node --test apps/cli/oauth.test.js apps/cli/phase4.test.js
+step "cli oauth test" node --test apps/cli/oauth.test.js apps/cli/phase4.test.js apps/cli/phase6.test.js
 step "server build (version ldflags)" make -C apps/server-go build
 step "local e2e: smoke x2 + user CLI + browser 1280/390" e2e_local
 if [ "$QUICK" = 0 ]; then

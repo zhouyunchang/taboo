@@ -3,6 +3,7 @@ import { api, getToken, setTokens, initializeBrowserSession, logout, checkSessio
 import type { User, Org } from './api';
 import Login from './pages/Login';
 import Workspace from './pages/Workspace';
+import CliConsent from './components/CliConsent';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -71,6 +72,8 @@ export default function App() {
     <p role="alert">{error}</p><button onClick={() => setAttempt((v) => v + 1)}>重试</button>
   </section></div>;
 
+  const cliLogin = location.pathname === '/device' || location.pathname === '/cli/login';
+
   if (!user) {
     return (
       <Login
@@ -90,6 +93,8 @@ export default function App() {
       />
     );
   }
+
+  if (cliLogin) return <CliConsent orgs={orgs} />;
 
   return (
     <Workspace

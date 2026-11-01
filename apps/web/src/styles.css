@@ -170,6 +170,8 @@ label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--f
 .identity-form code, .modal p { overflow-wrap: anywhere; }
 .identity-form input, .identity-form select, .identity-form textarea { min-width: 0; max-width: 100%; }
 .table-scroll { overflow: auto; max-width: 100%; }
+.phase6 { max-width: 100%; }
+.phase6 input, .phase6 select, .auth-card input, .auth-card select { width: 100%; max-width: 100%; }
 .session-notice { margin: 0; padding: 8px 20px; color: var(--muted); border-bottom: 1px solid var(--border); }
 button.nav-item { background: transparent; color: var(--fg); text-align: left; font-weight: 400; }
 button.nav-item.active { background: var(--accent2); color: #fff; }
@@ -251,3 +253,5 @@ label.check { display: flex; gap: 8px; align-items: center; }
 .diff-add { color: #3fb950; }
 .diff-del { color: var(--danger); }
 .import-preview { max-height: 240px; overflow: auto; }
+.phase6 { max-width: 100%; }
+.phase6 input, .phase6 select, .auth-card input, .auth-card select { width: 100%; max-width: 100%; }

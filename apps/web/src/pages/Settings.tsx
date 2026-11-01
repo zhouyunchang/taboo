@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, hasBrowserSession } from '../api';
 import { GrantEditor, ConnectionSecurity, OrganizationSecurity, WorkloadGovernance } from '../components/Governance';
+import Phase6 from '../components/Phase6';
 import Modal from '../components/Modal';
 import ValidatedForm from '../components/ValidatedForm';
 import type { SyncTarget, SyncRun, Webhook, OIDCProvider } from '../api';
@@ -8,7 +9,7 @@ import { fmtTime, timeTitle } from '../time';
 
 // 组织设置（M5 #11/#12/#13）：Secret Sync / Webhooks / OIDC SSO
 export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role: string }) {
-  const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso' | 'members' | 'security' | 'workloads'>('sync');
+  const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso' | 'members' | 'security' | 'workloads' | 'approvals'>('sync');
   const canManage = role === 'owner' || (!hasBrowserSession() && role === 'admin');
   const canMembers = role === 'owner';
 
@@ -20,6 +21,7 @@ export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role
         <button className={`tab ${sub === 'sync' ? 'active' : ''}`} onClick={() => setSub('sync')}>Secret Sync</button>
         <button className={`tab ${sub === 'webhooks' ? 'active' : ''}`} onClick={() => setSub('webhooks')}>Webhooks</button>
         <button className={`tab ${sub === 'sso' ? 'active' : ''}`} onClick={() => setSub('sso')}>用户源 / SSO</button>
+        <button className={`tab ${sub === 'approvals' ? 'active' : ''}`} onClick={() => setSub('approvals')}>审批与访问</button>
         {canMembers && <><button className={`tab ${sub === 'security' ? 'active' : ''}`} onClick={() => setSub('security')}>登录策略</button><button className={`tab ${sub === 'workloads' ? 'active' : ''}`} onClick={() => setSub('workloads')}>OAuth 工作负载</button></>}
         {canMembers && <button className={`tab ${sub === 'members' ? 'active' : ''}`} onClick={() => setSub('members')}>成员与角色</button>}
       </div>
@@ -27,6 +29,7 @@ export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role
       {sub === 'sync' && <SyncTab orgSlug={orgSlug} canManage={canManage} />}
       {sub === 'webhooks' && <WebhooksTab orgSlug={orgSlug} canManage={canManage} />}
       {sub === 'sso' && <SsoTab orgSlug={orgSlug} canManage={canManage} />}
+      {sub === 'approvals' && <Phase6 orgSlug={orgSlug} canApprove={role === 'owner' || role === 'admin'} />}
       {sub === 'security' && canMembers && <OrganizationSecurity orgSlug={orgSlug} />}
       {sub === 'workloads' && canMembers && <WorkloadGovernance orgSlug={orgSlug} />}
       {sub === 'members' && canMembers && <MembersTab orgSlug={orgSlug} />}

@@ -6,7 +6,7 @@ image:
   tag: ""              # 缺省 = appVersion
   pullPolicy: IfNotPresent
 
-replicaCount: 1        # SQLite 单副本；PG 多副本要求共享根材料及 ReadWriteMany 导出卷
+replicaCount: 1        # SQLite 必须为 1。PostgreSQL 可大于 1：各副本共用 Master Key、JWT secret 和导出卷（ReadWriteMany）
 
 service:
   type: ClusterIP

@@ -38,7 +38,7 @@ helm install taboo ./deploy/helm/taboo -n taboo \
 ```
 
 - Master Key / JWT Secret 经 K8s Secret 注入（`existingSecret` 必填，values 明文会被 `fail` 拦截）
-- 默认单副本：SQLite WAL 单写多读，事件 worker（Sync/Webhook/动态密钥/审计导出）为进程内轮询
+- 默认单副本。SQLite 不能水平扩展。PostgreSQL 可以把 `replicaCount` 调到 1 以上，前提是每个副本使用同一个 `TABOO_MASTER_KEY`、`TABOO_JWT_SECRET` 和 `TABOO_DATABASE_URL`，并且导出目录是共享卷。outbox、轮换、动态凭据和 webhook 用行租约；审计检查点和过期清扫用 `cluster_leases`。登录限流记在数据库里，数据库不可用时登录返回 503。发现文档和 DEK 缓存可以各进程一份
 - 数据卷 PVC 存 SQLite 与导出文件；liveness = `/api/v1/healthz`，readiness = `/api/v1/readyz`
 - 滚动更新：`terminationGracePeriodSeconds: 30`，`preStop` sleep 3s，进程 graceful drain 15s
 - 详细说明见 [deploy/helm/taboo/README.md](../deploy/helm/taboo/README.md)

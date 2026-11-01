@@ -26,6 +26,10 @@
 - [x] 版本对比（默认掩码）和扫描报告。上传时的命中原文只用于计算组织 HMAC，不落库；升级前的报告仍以 `sha256` 标出。owner/admin 可删除报告
 - [x] 动态密钥：PostgreSQL（`VALID UNTIL`）和 MySQL（`PASSWORD EXPIRE`，到期 `DROP USER`）短期只读账号
 - [x] 轮换策略：按间隔或五段 cron 发出 `secret.rotation_due`，由 webhook 通知外部轮换器回写新版本
+- [x] 审批：环境可要求写入、删除、回滚先经另一名管理员批准；新建项目的 prod 默认开启
+- [x] 限时访问：申请 reveal/export/write/delete/rollback，到期立刻失效
+- [x] SCIM 2.0 用户和组、OIDC Back-Channel Logout、CLI `login --browser` / `login --device`
+- [x] PostgreSQL 多副本：outbox 认领、行租约和 `cluster_leases`；登录限流在库里，失败时拒绝
 - [x] 请求日志脱敏（`password`/`secret`/`token`/`value`/`match` 等为 `[REDACTED]`）、机器身份可选 IP/CIDR 白名单、响应 `Cache-Control: no-store`
 - [x] M5：Secret Sync（GitHub/Vercel/Cloudflare）、Webhooks（HMAC 签名）、OIDC SSO（JIT 入组）、审计导出 CSV/JSONL、Docker/Helm/GoReleaser 发布
 - [x] 注册即建个人组织 + 默认项目 + dev/staging/prod 三环境；组织/项目/环境模型

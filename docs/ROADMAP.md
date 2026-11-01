@@ -71,7 +71,7 @@
 | Phase 3 | 「使用 GitHub 登录」（GitHub OAuth App，OAuth2 授权码）：准入策略、账号绑定/JIT、审计与撤权；dev122 默认关闭，凭据由用户在 dev122 自行写入后启用 |
 | Phase 4 | 补齐设计文档 Must 缺口：密钥引用、.env 导入/导出增强、版本 diff、扫描报告页、Node/Python SDK |
 | Phase 5 | Should 能力：MySQL 动态引擎、轮换策略、Doppler/1Password 导入、安全清单补齐（日志脱敏、IP 白名单） |
-| Phase 6 | Could / 联邦 P1：审批流、访问请求、SCIM、Back-Channel Logout、CLI 浏览器登录、HA 验证 |
+| Phase 6 | Could / 联邦 P1：审批流、访问请求、SCIM、Back-Channel Logout、CLI 浏览器登录、PostgreSQL 多副本。SAML 与 AuthZEN 继续延期。代码在 schema 18，dev122 仍是 schema 17 |
 
 每个阶段的统一流程：从 `develop` 切分支 `phase-N-*` → 本机开发 → 本机全量验证（见 §通用验证）→ 构建 linux/amd64 镜像 → 部署 dev122 → 线上验证 → 更新本文件“状态”与验收记录 → 提交并 push 到 `origin/develop`（合并 `main` 需用户确认）。
 
@@ -302,7 +302,24 @@ OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 17 新
 
 ## Phase 6：Could / 联邦 P1
 
-（备选）真实 OIDC 提供方（Identity V2 / Keycloak）在 dev122 联调；审批流（修改 prod 需二次批准）、访问请求（限时提权、到期自动回收）、SCIM 用户同步、Back-Channel Logout、AuthZEN、CLI 浏览器登录（device/PKCE loopback）、PG 多副本 + 共享导出卷 HA 验证。开始前单独写设计文档并与用户确认范围。
+**状态（2026-11-01）**：代码完成，schema 18。尚未部署 dev122（仍是 schema 17）。设计见 [docs/design/phase6.zh-CN.md](design/phase6.zh-CN.md)。
+
+| 子项 | 实现 | 验证 |
+|---|---|---|
+| 审批 | `environments.approval_required`。新建项目的 prod 默认为开，已有环境保持关。写入、删除、回滚变成 `approval_requests`，明文以 `approval` 用途密封。另一名 owner/admin 批准后才在同一事务里落库。导入直接拒绝。默认 24 小时过期 | `TestPhase6ApprovalAccessAndSCIM` |
+| 限时访问 | `access_requests`。动作限于 reveal/export/write/delete/rollback，1 分钟到 4 小时。授权检查读 `expires_at`，到期立即失效；清扫只改状态 | 同上 |
+| SCIM | `/api/v1/scim/v2` 的 Users/Groups 和发现端点。令牌 `taboo_scim_` 只存哈希、只显示一次。不按邮箱并入账号，组角色最高到 admin，owner 和手工改过的角色不被覆盖 | 同上 |
+| Back-Channel Logout | `POST /api/v1/auth/oidc/{org}/backchannel-logout?pid=`。校验 RS256 logout token，拒绝 nonce，有 sid 只结束该会话，否则按 sub。`logout_replays` 防重放 | `TestPhase6DevicePKCEAndBackChannel` |
+| CLI 浏览器登录 | `taboo login --device`（RFC 8628）和 `taboo login --browser`（127.0.0.1 PKCE，路径必须是 `/callback`）。确认页是 `/device` 和 `/cli/login` | 同上，`apps/cli/phase6.test.js` |
+| 多副本 | outbox 在认领事务里扇出。`cluster_leases` 让审计检查点和过期清扫同时只有一个副本在跑。登录限流写入 `rate_counters`，库失败返回 503。SQLite 仍是单副本。导出文件要共享卷 | `TestPostgresTwoReplicas`（本机 Docker PostgreSQL，两个连接池） |
+
+**继续延期**
+
+- SAML：登录仍是 OIDC 和 GitHub OAuth，没有身份源要求 SAML。半套 SP 会变成新的认证入口。
+- AuthZEN：没有调用方，单独的决策接口会多一条探测途径。
+- dev122 上的真实 OIDC 联调：本地测试提供方已覆盖协议。真实 Keycloak 需要运维凭据和变更窗口，不在这次代码里。
+
+OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 18 增加审批、限时访问、SCIM、设备码、PKCE、logout replay、限流计数和副本租约。组织范围的新表在 PostgreSQL 上 ENABLE + FORCE RLS；设备码、回放、计数和租约只允许控制角色访问。
 
 ---
 
@@ -317,7 +334,7 @@ npm exec --workspace=@taboo/web -- tsc --noEmit
 npm run build
 go -C apps/server-go vet ./... && go -C apps/server-go test -race ./...
 go -C packages/sdk-go test -race ./... && go -C apps/mcp test -race ./...
-node --test apps/cli/oauth.test.js apps/cli/phase4.test.js
+node --test apps/cli/oauth.test.js apps/cli/phase4.test.js apps/cli/phase6.test.js
 make -C apps/server-go build && (TABOO_PORT=7199 TABOO_DATA_DIR=$(mktemp -d) ./apps/server-go/bin/taboo-server &) && TABOO_BASE=http://localhost:7199 npm run smoke
 ./scripts/test-consumers.sh
 TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
@@ -345,4 +362,4 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 | Phase 3 GitHub OAuth 登录 | 完成（真实账号端到端验证） | 2026-11-01 |
 | Phase 4 设计文档 Must 缺口 | 完成并部署（schema 16） | 2026-11-01 |
 | Phase 5 Should 能力与安全清单 | 完成并部署（schema 17，`taboo:dev-d1c0cc0`） | 2026-11-01 |
-| Phase 6 | 未开始 | |
+| Phase 6 Could / 联邦 P1 | 代码完成（schema 18，未部署 dev122） | 2026-11-01 |
