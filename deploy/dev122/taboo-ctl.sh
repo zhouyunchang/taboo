@@ -124,7 +124,8 @@ cmd_restore_drill() { # [BACKUP]
       -e TABOO_DATABASE_RUNTIME_ROLE=taboo_runtime -e TABOO_PORT=7100 -e TABOO_DATA_DIR=/tmp \
       -v "$PG_CA:/etc/taboo/pg-ca.crt:ro" -p 127.0.0.1:7198:7100 "$tag" >/dev/null
     ok=""; for _ in $(seq 1 30); do curl -fsS --max-time 3 http://127.0.0.1:7198/api/v1/readyz >/dev/null 2>&1 && { ok=1; break; }; sleep 1; done
-    if [ -n "$ok" ]; then echo "restored server readyz: OK ($(curl -fsS http://127.0.0.1:7198/api/v1/healthz))"; else echo "restored server readyz: FAILED"; docker logs --tail 20 taboo-restore-drill 2>&1 | sed 's/^/  /'; rc=1; fi
+    if [ -n "$ok" ]; then echo "restored server readyz: OK ($(curl -fsS http://127.0.0.1:7198/api/v1/healthz))"
+      echo "restored schema after migration: $(psql_admin -d "$DRILL_DB" -Atc 'SELECT version FROM schema_version')"; else echo "restored server readyz: FAILED"; docker logs --tail 20 taboo-restore-drill 2>&1 | sed 's/^/  /'; rc=1; fi
     [ "$rc" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
   } 2>&1 | tee "$out"
   grep -q '^RESULT: PASS' "$out" || die "restore drill failed (see $DIR/$out)"

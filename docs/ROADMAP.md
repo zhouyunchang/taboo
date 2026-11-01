@@ -238,7 +238,7 @@
 
 **目标**：补齐 v1.0 设计文档中仍缺的开发者体验能力。
 
-**状态（2026-11-01）**：代码完成，尚未部署。引用只在 `resolve=true` 的 reveal/export（CLI `get` / `export` / `run` 默认开启，`--raw` 关闭）时展开；目标固定为该环境根目录的 key。
+**状态（2026-11-01）**：完成，已部署 dev122（`taboo:dev-967bdbd`，schema 16）。引用只在 `resolve=true` 的 reveal/export（CLI `get` / `export` / `run` 默认开启，`--raw` 关闭）时展开；目标固定为该环境根目录的 key。
 
 | 子项 | 实现 | 验证 |
 |---|---|---|
@@ -248,7 +248,21 @@
 | 4.4 扫描报告 | `scan_reports`（schema 16，PostgreSQL RLS）。`POST/GET /orgs/{slug}/scan-reports` 只接受规则、相对路径、行号、sha256 指纹；未知字段（含命中原文）直接 400。CLI `scan --upload`。控制台「扫描报告」 | `TestScanReportStoresNoSecretText`、CLI consumer 上传后回读 |
 | 4.5 Node/Python SDK | `packages/sdk-node`（`@taboo/sdk`）、`packages/sdk-python`（`taboo.py`）手写对齐 Go SDK 的方法、幂等、机器身份和 OAuth client credentials，而不是生成另一套客户端 | `scripts/test-consumers.sh` 依次跑 Go、Node、Python |
 
-OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。部署 dev122 由协调者执行，本阶段不推送。
+OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。
+
+**评审修正**：导入与扫描报告接口的 500 不再把内部错误原文返回给客户端（改为日志记录 + `internal error`）；PostgreSQL 测试的 FORCE RLS 断言加入 `scan_reports`；restore-drill 记录迁移后的 schema 版本；浏览器检查的扫描报告页不再假设为空。
+
+**遗留（不阻塞）**：
+- CLI 指纹为 `sha256(rule|file|line|match)`，未加盐；低熵命中可被能读报告的组织成员暴力还原。后续改为按组织密钥的 HMAC 指纹（Phase 5 安全清单）。
+- 导入的文件夹在事务外创建，冲突时可能留下空文件夹；版本 reveal 审计不记录是否 resolve；扫描报告无删除接口；机器身份/工作负载可列出组织全部扫描报告。
+- `secret.go` 中原有的 `err.Error()` 500 尚未统一处理。
+
+**部署记录（2026-11-01，不含秘密）**：
+- 本机 `./scripts/verify-all.sh --container` 14/14 通过。
+- `deploy/dev122/deploy.sh` → `taboo:dev-967bdbd` healthy；升级前备份 `backups/20261101-104636-pre-upgrade`；`schema_version`=16，`scan_reports` RLS enable+force，39/40 张表 FORCE RLS，`taboo-server --check` 通过。
+- `taboo-ctl.sh smoke` 15/15；`scripts/browser-check.mjs` 1280/390 全部通过（含导入对话框、版本对比遮罩、扫描报告页）。
+- 线上接口核对 20 项通过：引用原文/展开/缺失 404、导出 resolve（坏引用 fail-closed、修复后展开）、导入 preview/409 不写库/skip、版本 v1/v2、扫描报告 201、含 `match` 与非 sha256 指纹 400、审计有事件且无明文。
+- restore-drill（schema 15 的升级前备份）PASS：39 张表 3807 行一致，verify OK，临时实例迁移到 schema 16 后 readyz OK。
 
 ---
 
@@ -306,6 +320,6 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 | Phase 1 dev122 部署与 HTTPS | 完成（主机名已改为 taboo-dev122.swetcc.com） | 2026-10-31 |
 | Phase 2 可重复部署、备份恢复与工程基线 | 完成（Woodpecker 跳过） | 2026-10-31 |
 | Phase 3 GitHub OAuth 登录 | 代码完成并部署（待 OAuth App 凭据） | 2026-10-31 |
-| Phase 4 | 代码完成（未部署） | 2026-11-01 |
+| Phase 4 设计文档 Must 缺口 | 完成并部署（schema 16） | 2026-11-01 |
 | Phase 5 | 未开始 | |
 | Phase 6 | 未开始 | |

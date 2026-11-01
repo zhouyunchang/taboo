@@ -94,7 +94,7 @@ try {
     await page.keyboard.press('Escape');
     await history.waitFor({ state: 'hidden' });
     await page.getByRole('button', { name: '扫描报告', exact: true }).click();
-    await page.getByText('还没有扫描报告').waitFor();
+    await page.getByRole('heading', { name: '扫描报告', exact: true }).waitFor(); // dev122 may already hold reports
     const scanFit = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
     check('scan report page fits', scanFit);
     if (OUT) await page.screenshot({ path: `${OUT}/${label}-workspace.png`, fullPage: true });

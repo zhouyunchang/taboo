@@ -25,6 +25,15 @@ ssh dev122-root $D/taboo-ctl.sh history       # 发布记录
 
 回滚**只切换镜像，不回退数据库**。如果新版本做了不兼容迁移，需要按 §4 用升级前备份恢复数据。
 
+**schema 16（Phase 4，`taboo:dev-967bdbd` 起）**：新增 `scan_reports` 表（ENABLE + FORCE RLS，`tenant_scope` 策略），
+迁移只加表不改旧表。旧镜像（schema ≤15）启动时会拒绝 schema 16 的库，所以单独 `--rollback` 到 Phase 3 镜像会因不健康被自动回退。
+确需回到 schema 15：
+1. `taboo-ctl.sh backup manual` 留底（升级后写入的数据会丢失）；
+2. 把 `$D/.env` 的 `TABOO_IMAGE=` 改为 `backups/20261101-104636-pre-upgrade/meta.txt` 中的旧镜像
+   （`restore` 用 `.env` 里的镜像启动；若仍是新镜像，恢复后会被再次迁移到 16）；
+3. `taboo-ctl.sh restore backups/20261101-104636-pre-upgrade --yes`。
+schema 16 后的核对：`schema_version` = 16；`pg_class` 中 40 张 taboo 表有 39 张 `relforcerowsecurity=true`（`schema_version` 本身不设 RLS）；`taboo-server --check` 通过。
+
 ## 3. 备份
 
 | 项 | 内容 |
@@ -53,7 +62,7 @@ ssh dev122-root $D/taboo-ctl.sh restore backups/<dir> --yes     # 真正恢复�
 
 - **restore-drill**：校验 SHA256 → 新建临时库 `taboo_restore_test`（owner `taboo_control`）→ pg_restore → 对比各表行数 →
   用备份自带的根密钥运行 `taboo-migrate verify`（解密全部信封）→ 以临时容器 `taboo-restore-drill`（127.0.0.1:7198）启动并检查 readyz →
-  日志写到备份目录 `restore-drill-*.log`，退出时删除临时库和容器。
+  记录迁移后的 schema 版本 → 日志写到备份目录 `restore-drill-*.log`，退出时删除临时库和容器。
 - **restore**：确认当前根密钥与备份一致 → 先做 `pre-restore` 备份 → 停止 taboo → `pg_restore --clean --if-exists --single-transaction` →
   启动并对比行数。只操作 `taboo` 库，不动共享 postgres 的其他库。
 
@@ -62,6 +71,7 @@ ssh dev122-root $D/taboo-ctl.sh restore backups/<dir> --yes     # 真正恢复�
 | 日期 | 备份 | 结果 |
 |---|---|---|
 | 2026-10-31 14:49 CST | `20261031-144859-pre-upgrade` | PASS：39 张表 154 行一致；`taboo-migrate verify` verified=true、legacy 0；临时实例 readyz OK（d7093f4）；临时库已删除 |
+| 2026-11-01 10:49 CST | `20261101-104636-pre-upgrade`（schema 15） | PASS：39 张表 3807 行一致；verify verified=true、legacy 0；临时实例（967bdbd）readyz OK，并把恢复出的库迁移到 schema 16；临时库已删除 |
 
 ## 5. 账号与冒烟
 
@@ -76,6 +86,16 @@ ssh dev122-root $D/taboo-ctl.sh user status|enable|disable <email>
 - 初始 owner 凭据：`$D/bootstrap-owner.json`（0600）。
 - 浏览器检查（本机，经 HTTPS）：先 `user enable smoke@taboo.swetcc.com`，然后
   `ssh dev122-root cat $D/smoke-account.json | TABOO_BASE=https://taboo-dev122.swetcc.com TABOO_HOST_MAP='taboo-dev122.swetcc.com 10.0.30.122' node scripts/browser-check.mjs`，最后再 `user disable`。
+
+### Phase 4 接口线上核对
+
+线上手工核对（smoke 账号临时启用，用假值，结束后删除）：
+- 引用：`GET .../secrets/{key}?env=dev` 返回原文与 `references`；加 `resolve=true` 才展开；缺失目标 `404 REFERENCE_NOT_FOUND`。
+- 导出：`GET /projects/{pid}/export?env=dev&resolve=true`。**任一引用坏掉则整次导出失败**（404 REFERENCE_NOT_FOUND，fail-closed），修好或删掉坏引用后再导出。
+- 导入：`POST /projects/{pid}/import`，先 `preview:true`；已有 key 未给 `strategy` 时 409 IMPORT_CONFLICT 且不写库；`skip` / `overwrite`。
+- 版本：`GET .../secrets/{key}/versions/{n}`（需 reveal 权限，界面版本对比默认遮罩）。
+- 扫描报告：`POST/GET /orgs/{slug}/scan-reports`，只收规则、相对路径、行号、sha256 指纹；带 `match` 字段 400。目前**没有删除接口**，测试报告会留在 smoke 组织里。
+- 审计事件：`secrets.reference` / `secrets.reference_denied` / `secrets.import` / `scan_report.create`，均不含明文。
 
 ## 6. GitHub 登录（OAuth App）
 
