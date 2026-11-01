@@ -20,7 +20,11 @@ step() { # NAME CMD...
   else results+=("FAIL  $(printf '%4ss' $((SECONDS-t0)))  $name  → $f"); fails=$((fails+1)); echo "FAIL ($((SECONDS-t0))s) → $f"; tail -15 "$f" | sed 's/^/    /'; fi
 }
 
-npm_ci() { npm ci && { git checkout -- apps/cli/taboo.js 2>/dev/null || true; }; }
+# npm ci 会改 apps/cli/taboo.js 的可执行位。只恢复索引里的权限，不覆盖工作区内容。
+npm_ci() {
+  npm ci
+  if git ls-files -s apps/cli/taboo.js | grep -q '^100755'; then chmod +x apps/cli/taboo.js; else chmod -x apps/cli/taboo.js; fi
+}
 # 与工作区当前文件比较（未提交的改动也要和 openapi.yaml 一致）
 types_drift() { local t; t="$(mktemp)"; cp apps/web/src/api-types.ts "$t"; npm run types && diff -u "$t" apps/web/src/api-types.ts; }
 go_server() { go -C apps/server-go vet ./... && go -C apps/server-go test -race ./...; }
@@ -54,7 +58,7 @@ step "web tsc --noEmit" npm exec --workspace=@taboo/web -- tsc --noEmit
 step "web build" npm run build
 step "server-go vet + test -race" go_server
 step "sdk-go + mcp test -race" go_libs
-step "cli oauth test" node --test apps/cli/oauth.test.js
+step "cli oauth test" node --test apps/cli/oauth.test.js apps/cli/phase4.test.js
 step "server build (version ldflags)" make -C apps/server-go build
 step "local e2e: smoke x2 + user CLI + browser 1280/390" e2e_local
 if [ "$QUICK" = 0 ]; then

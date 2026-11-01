@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { runScan } from './scan.js';
+import { collectScan, printScan, runScan, uploadFindings } from './scan.js';
 import { randomUUID } from 'node:crypto';
 import { externalOAuth } from './oauth.js';
 
@@ -25,6 +25,19 @@ const flag = (name, def) => {
   return i >= 0 ? args[i + 1] : def;
 };
 const env = flag('env', 'dev');
+const resolveQuery = args.includes('--raw') ? '' : '&resolve=true';
+function positional(valueFlags = ['env', 'project', 'org', 'strategy', 'path', 'idempotency-key', 'expected-version', 'client-id', 'client-secret']) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--') break;
+    if (args[i].startsWith('--')) {
+      if (valueFlags.includes(args[i].slice(2))) i++;
+      continue;
+    }
+    out.push(args[i]);
+  }
+  return out;
+}
 let oauth;
 try { oauth = externalOAuth(process.env, cmd === 'login' && args.includes('--oauth')); } catch (error) { console.error(error.message); process.exit(2); }
 process.on('unhandledRejection', (error) => { console.error(error?.message || 'request failed'); process.exit(1); });
@@ -80,6 +93,14 @@ async function call(method, p, body, raw = false, idempotencyKey) {
   return data;
 }
 
+async function orgSlug() {
+  const explicit = flag('org', process.env.TABOO_ORG || null);
+  if (explicit) return explicit;
+  const me = await call('GET', '/api/v1/me');
+  if (!me.orgs?.[0]?.slug) { console.error('无法确定组织，请传入 --org <slug>'); process.exit(1); }
+  return me.orgs[0].slug;
+}
+
 async function projectId() {
   const explicit = flag('project', process.env.TABOO_PROJECT_ID || null);
   if (explicit) return explicit;
@@ -129,7 +150,7 @@ switch (cmd) {
   }
   case 'get': {
     const key = args.find((a) => !a.startsWith('--'));
-    const d = await call('GET', `/api/v1/projects/${await projectId()}/secrets/${encodeURIComponent(key)}?env=${env}`);
+    const d = await call('GET', `/api/v1/projects/${await projectId()}/secrets/${encodeURIComponent(key)}?env=${encodeURIComponent(env)}${resolveQuery}`);
     console.log(d.value);
     break;
   }
@@ -139,14 +160,32 @@ switch (cmd) {
     break;
   }
   case 'export': {
-    const res = await call('GET', `/api/v1/projects/${await projectId()}/export?env=${env}`, null, true);
+    const res = await call('GET', `/api/v1/projects/${await projectId()}/export?env=${encodeURIComponent(env)}${resolveQuery}`, null, true);
     process.stdout.write(await res.text());
     break;
   }
-  case 'run': {    // 密钥注入子进程；父进程退出前清理（设计文档 §7.1）
+  case 'import': {
+    const file = positional()[0];
+    if (!file) { console.error('usage: taboo import <file.env> [--env] [--project] [--path /] [--preview] [--strategy skip|overwrite]'); process.exit(1); }
+    const content = fs.readFileSync(file, 'utf8');
+    const strategy = flag('strategy', '');
+    const preview = args.includes('--preview');
+    const folder = flag('path', '/');
+    if (strategy && strategy !== 'skip' && strategy !== 'overwrite') { console.error('--strategy must be skip or overwrite'); process.exit(2); }
+    const idempotencyKey = preview ? undefined : flag('idempotency-key', randomUUID());
+    if (!preview) console.error(`mutation receipt: ${idempotencyKey}; if the outcome is unknown, repeat the identical command with --idempotency-key ${idempotencyKey}`);
+    const d = await call('POST', `/api/v1/projects/${await projectId()}/import?env=${encodeURIComponent(env)}&path=${encodeURIComponent(folder)}`,
+      { content, preview, ...(strategy ? { strategy } : {}) }, false, idempotencyKey);
+    const conflicts = d.conflicts?.length ? ` conflicts=${d.conflicts.join(',')}` : '';
+    console.log(`${preview ? 'preview' : 'imported'}: created=${d.created} updated=${d.updated} skipped=${d.skipped}${conflicts}`);
+    for (const entry of d.entries ?? []) console.log(`${entry.action}\t${entry.key}\tv${entry.version}`);
+    if ((d.conflicts?.length ?? 0) > 0 && !strategy) process.exit(1);
+    break;
+  }
+  case 'run': {    // 密钥注入子进程；默认展开引用
     const idx = args.indexOf('--');
-    if (idx < 0 || idx === args.length - 1) { console.error('usage: taboo run -- <cmd...>'); process.exit(1); }
-    const res = await call('GET', `/api/v1/projects/${await projectId()}/export?env=${env}`, null, true);
+    if (idx < 0 || idx === args.length - 1) { console.error('usage: taboo run [--raw] -- <cmd...>'); process.exit(1); }
+    const res = await call('GET', `/api/v1/projects/${await projectId()}/export?env=${encodeURIComponent(env)}${resolveQuery}`, null, true);
     const text = await res.text();
     const childEnv = { ...process.env };
     for (const line of text.split('\n')) {
@@ -158,6 +197,17 @@ switch (cmd) {
     break;
   }
   case 'scan': {
+    if (args.includes('--upload')) {
+      const result = collectScan(args.filter((a) => a !== '--upload'));
+      printScan(result);
+      if (!result.special) {
+        const slug = await orgSlug();
+        const findings = uploadFindings(result.findings);
+        const report = await call('POST', `/api/v1/orgs/${encodeURIComponent(slug)}/scan-reports`, { source: 'cli', findings });
+        console.error(`scan report ${report.id}: ${report.finding_count} finding(s), no matched text uploaded`);
+      }
+      process.exit(result.code);
+    }
     process.exit(runScan(args));
   }
   default:
@@ -166,11 +216,13 @@ switch (cmd) {
   taboo login <email> <password>                用户登录
   taboo login --client-id X --client-secret Y   机器身份登录（token 临期自动重换）
   taboo set <KEY> <VALUE> [--env] [--project]   写入/更新密钥（--idempotency-key KEY --expected-version N）
-  taboo get <KEY> [--env] [--project]           读取明文（审计）
+  taboo get <KEY> [--env] [--project] [--raw]   读取明文（默认解析引用，审计）
   taboo list [--env] [--project]                列出密钥（无值）
-  taboo export [--env] [--project]              导出 .env 格式到 stdout
-  taboo run -- <cmd...>                         注入环境变量执行命令
+  taboo export [--env] [--project] [--raw]      导出 .env（默认解析引用）
+  taboo import <file> [--preview] [--strategy skip|overwrite]
+  taboo run [--raw] -- <cmd...>                 注入解析后的环境变量执行命令
   taboo scan [--staged|--json|--list-rules]     密钥泄漏扫描（150+ 规则，命中即非零退出）
+  taboo scan --upload [--org slug]              上传报告（不含命中原文）
   taboo scan --update-baseline                  将现存命中写入 baseline 抑制
   taboo scan --install-hook                     安装 git pre-commit 钩子
 `);

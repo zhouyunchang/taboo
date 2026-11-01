@@ -280,16 +280,26 @@ export function stagedContent(file) {
   catch { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } }
 }
 
-// ---------- CLI 入口 ----------
-export function runScan(cliArgs) {
+// 上传体只保留规则、相对路径、行号和 sha256 指纹，不包含命中原文。
+export function uploadFindings(findings) {
+  return findings.map((f) => ({
+    rule_id: f.rule,
+    level: f.level,
+    file: f.file,
+    line: f.line,
+    fingerprint: crypto.createHash('sha256').update(`${f.rule}|${f.file}|${f.line}|${f.match}`).digest('hex'),
+  }));
+}
+
+export function collectScan(cliArgs) {
   const json = cliArgs.includes('--json');
   const staged = cliArgs.includes('--staged') || cliArgs.includes('--pre-commit');
   const updateBaseline = cliArgs.includes('--update-baseline');
-  if (cliArgs.includes('--install-hook')) return installHook();
+  if (cliArgs.includes('--install-hook')) return { code: installHook(), findings: [], scanned: 0, suppressed: 0, json, updateBaseline, special: true };
   if (cliArgs.includes('--list-rules')) {
     for (const r of RULES) console.log(`${r.level.padEnd(8)} ${r.id}`);
     console.log(`\ntotal: ${RULES.length} rules`);
-    return 0;
+    return { code: 0, findings: [], scanned: 0, suppressed: 0, json, updateBaseline, special: true };
   }
 
   const root = process.cwd();
@@ -323,15 +333,21 @@ export function runScan(cliArgs) {
     const entries = findings.map((f) => ({ hash: f.hash, rule: f.rule, file: f.file, line: f.line }));
     fs.writeFileSync(path.join(root, '.taboo-baseline.json'), JSON.stringify(entries, null, 2) + '\n');
     console.log(`baseline updated: ${entries.length} finding(s) suppressed → .taboo-baseline.json`);
-    return 0;
+    return { code: 0, findings, scanned: scanned.length, suppressed, json, updateBaseline, special: true };
   }
+  return { code: findings.length > 0 ? 1 : 0, findings, scanned: scanned.length, suppressed, json, updateBaseline, special: false };
+}
+
+export function printScan(result) {
+  if (result.special) return;
+  const { json, findings, scanned, suppressed } = result;
 
   if (json) {
-    console.log(JSON.stringify({ tool: 'taboo-scan', version: 1, rules: RULES.length, scanned: scanned.length, suppressed, findings }, null, 2));
+    console.log(JSON.stringify({ tool: 'taboo-scan', version: 1, rules: RULES.length, scanned, suppressed, findings }, null, 2));
   } else if (findings.length === 0) {
-    console.log(`taboo scan ✓ clean — ${scanned.length} file(s) scanned, ${RULES.length} rules, ${suppressed} baseline-suppressed`);
+    console.log(`taboo scan ✓ clean — ${scanned} file(s) scanned, ${RULES.length} rules, ${suppressed} baseline-suppressed`);
   } else {
-    console.log(`taboo scan ✗ ${findings.length} potential secret(s) in ${scanned.length} scanned file(s)${suppressed ? ` (${suppressed} baseline-suppressed)` : ''}\n`);
+    console.log(`taboo scan ✗ ${findings.length} potential secret(s) in ${scanned} scanned file(s)${suppressed ? ` (${suppressed} baseline-suppressed)` : ''}\n`);
     let last = null;
     for (const f of findings) {
       if (f.file !== last) { console.log(`  ${f.file}`); last = f.file; }
@@ -341,7 +357,12 @@ export function runScan(cliArgs) {
     }
     console.log('\n抑制误报：行尾加注释 `# taboo:ignore`，或写入 .tabooignore / .taboo-baseline.json');
   }
-  return findings.length > 0 ? 1 : 0;
+}
+
+export function runScan(cliArgs) {
+  const result = collectScan(cliArgs);
+  printScan(result);
+  return result.code;
 }
 
 function installHook() {
