@@ -30,6 +30,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rotation"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/server"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
@@ -105,7 +106,7 @@ func main() {
 
 	if os.Getenv("TABOO_DYNAMIC_ENGINE") == "mock" {
 		mock := dynamic.NewMockEngine()
-		dynamic.Factory = func(string) (dynamic.Engine, error) { return mock, nil }
+		dynamic.Factory = func(string, string) (dynamic.Engine, error) { return mock, nil }
 		log.Println("[taboo] dynamic engine: MOCK (no real database touched)")
 	}
 
@@ -156,6 +157,7 @@ func main() {
 	})
 
 	dynSvc.StartWorker(ctx, 20*time.Second)
+	(&rotation.Service{DB: db}).StartWorker(ctx, 20*time.Second)
 	syncs.StartWorker(ctx, 10*time.Second)
 	webhooks.StartWorker(ctx, 5*time.Second)
 	ob.StartWorker(ctx, 3*time.Second)
@@ -253,7 +255,7 @@ func runSelfCheck(db *sql.DB, masterKey []byte) {
 	}
 	for _, t := range []string{
 		"users", "orgs", "secrets", "secret_versions", "audit_logs", "webhooks", "sync_targets",
-		"oidc_providers", "org_invites", "project_grants", "outbox_events", "audit_checkpoints", "scan_reports",
+		"oidc_providers", "org_invites", "project_grants", "outbox_events", "audit_checkpoints", "scan_reports", "rotation_policies",
 	} {
 		exists, err := store.HasTable(db, t)
 		if err == nil && !exists {

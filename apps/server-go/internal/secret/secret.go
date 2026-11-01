@@ -4,6 +4,7 @@ package secret
 import (
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -137,7 +138,7 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 		JOIN secret_versions v ON v.secret_id = s.id AND v.version = s.latest_version
 		WHERE s.env_id = ? ORDER BY s.key`, envID)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer rows.Close()
@@ -218,7 +219,7 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	sql += ` ORDER BY f.path, s.key`
 	rows, err := s.DB.Query(sql, args...)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer rows.Close()
@@ -285,7 +286,7 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	// 事务：读旧版本 → 写新版本 → 推进 latest_version
 	tx, err := s.DB.Begin()
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer tx.Rollback()
@@ -299,7 +300,7 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		envID, folderID, b.Key).Scan(&secretID, &latest, &oldComment, &oldTags)
 	isCreate := err == sql.ErrNoRows
 	if err != nil && !isCreate {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	if b.ExpectedVersion != nil && *b.ExpectedVersion != latest {
@@ -314,13 +315,13 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret was created concurrently; reload before retrying"))
 				return
 			}
-			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			internalErr(w, err)
 			return
 		}
 	} else {
 		if _, err := tx.Exec(`UPDATE secrets SET comment = ?, tags = ?, updated_at = datetime('now') WHERE id = ?`,
 			strOr(b.Comment, oldComment), tagsOrDefault(b.Tags, oldTags), secretID); err != nil {
-			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			internalErr(w, err)
 			return
 		}
 	}
@@ -336,7 +337,7 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := tx.Exec(`INSERT INTO secret_versions (id, secret_id, version, ciphertext, created_by) VALUES (?, ?, ?, ?, ?)`,
 		tc.NewID(), secretID, next, ct, u.ID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 
@@ -353,7 +354,7 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = s.enqueue(tx, r, p, envSlug, normPath, b.Key, next, eventAction, secretID, envID)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	if err := saveMutation(tx, r, p.OrgID, map[string]any{"key": b.Key, "version": next}); err != nil {
@@ -361,7 +362,7 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"key": b.Key, "version": next})
@@ -484,6 +485,7 @@ func (s *Service) RevealVersion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "decrypt failed"))
 		return
 	}
+	resolved := false
 	if queryBool(r, "resolve") {
 		next, aerr := s.resolveStored(r, p.OrgID, p, val)
 		if aerr != nil {
@@ -491,13 +493,15 @@ func (s *Service) RevealVersion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		val = next
+		resolved = true
 	}
 	if err := auth.AuditReq(s.DB, r, p.OrgID, u, "secrets.reveal", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key,
-		map[string]any{"version": version}); err != nil {
+		map[string]any{"version": version, "resolved": resolved}); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}
-	writeJSON(w, 200, map[string]any{"key": key, "version": version, "value": val})
+	body := map[string]any{"key": key, "version": version, "value": val, "resolved": resolved}
+	writeJSON(w, 200, body)
 }
 
 // GET /secrets/{key}/versions
@@ -529,7 +533,7 @@ func (s *Service) Versions(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.DB.Query(`SELECT version, created_by, created_at FROM secret_versions
 		WHERE secret_id = ? ORDER BY version DESC`, secretID)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer rows.Close()
@@ -608,7 +612,7 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 	next := latest + 1
 	tx, err := s.DB.Begin()
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer tx.Rollback()
@@ -626,7 +630,7 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := tx.Exec(`INSERT INTO secret_versions (id, secret_id, version, ciphertext, created_by) VALUES (?, ?, ?, ?, ?)`,
 		tc.NewID(), secretID, next, ct, u.ID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 
@@ -637,7 +641,7 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = s.enqueue(tx, r, p, envSlug, norm, key, next, "rolled_back", secretID, envID)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	if err := saveMutation(tx, r, p.OrgID, map[string]any{"key": key, "version": next, "rolledBackFrom": b.Version}); err != nil {
@@ -645,7 +649,7 @@ func (s *Service) Rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"key": key, "version": next, "rolledBackFrom": b.Version})
@@ -693,7 +697,7 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	defer tx.Rollback()
@@ -711,7 +715,7 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = s.enqueue(tx, r, p, envSlug, normPath, key, latest, "deleted", secretID, envID)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	if err := saveMutation(tx, r, p.OrgID, map[string]any{"key": key, "deleted": true}); err != nil {
@@ -719,7 +723,7 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		internalErr(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"key": key, "deleted": true})
@@ -759,6 +763,11 @@ func tagsOrDefault(tags []string, old string) string {
 		return old
 	}
 	return tagsOr(tags)
+}
+
+func internalErr(w http.ResponseWriter, err error) {
+	slog.Error("secret internal error", "err", err)
+	writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 }
 
 func updatedOne(result sql.Result, err error) bool {

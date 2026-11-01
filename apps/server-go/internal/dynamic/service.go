@@ -16,7 +16,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,12 +91,12 @@ func (s *Service) Close() {
 		delete(s.cache.engines, k)
 	}
 }
-func (s *Service) engineOf(engineID, connEnc string) (Engine, error) {
+func (s *Service) engineOf(engineID, engineType, connEnc string) (Engine, error) {
 	var org, project string
 	if err := s.DB.QueryRow(`SELECT org_id,project_id FROM dynamic_engines WHERE id=?`, engineID).Scan(&org, &project); err != nil {
 		return nil, err
 	}
-	cacheKey := tc.SHA256(org + "\x00" + project + "\x00" + engineID + "\x00" + connEnc)
+	cacheKey := tc.SHA256(org + "\x00" + project + "\x00" + engineID + "\x00" + engineType + "\x00" + connEnc)
 	s.cache.mu.Lock()
 	defer s.cache.mu.Unlock()
 	if e, ok := s.cache.engines[cacheKey]; ok {
@@ -104,7 +106,7 @@ func (s *Service) engineOf(engineID, connEnc string) (Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	e, err := Factory(conn)
+	e, err := Factory(engineType, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -170,14 +172,19 @@ func (s *Service) CreateEngine(w http.ResponseWriter, r *http.Request) {
 	if typ == "" {
 		typ = "postgres"
 	}
-	if typ != "postgres" {
-		writeErr(w, apperr.New(400, "UNSUPPORTED", "only postgres engine is supported"))
+	if typ != "postgres" && typ != "mysql" {
+		writeErr(w, apperr.New(400, "UNSUPPORTED", "engine type must be postgres or mysql"))
+		return
+	}
+	if _, _, err := connectionTarget(typ, b.Connection); err != nil {
+		writeErr(w, apperr.New(400, "INVALID", "connection string does not match the engine type"))
 		return
 	}
 	id := tc.NewID()
 	enc, err := tc.Seal(s.MasterKey, b.Connection, tc.Context{Purpose: "dynamic-engine", Org: p.OrgID, Project: p.ID, Object: id, Version: 1})
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		slog.Error("dynamic engine seal failed", "err", err)
+		writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 		return
 	}
 	tx, ok := auth.BeginMutation(s.DB, w, r)
@@ -187,15 +194,37 @@ func (s *Service) CreateEngine(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	if _, err := tx.Exec(`INSERT INTO dynamic_engines (id, org_id, project_id, name, type, conn_encrypted, database, default_ttl, max_ttl)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, p.OrgID, p.ID, b.Name, typ, enc, orDefault(b.Database, "postgres"),
+		id, p.OrgID, p.ID, b.Name, typ, enc, orDefault(b.Database, defaultDatabase(typ)),
 		orDefaultInt(b.DefaultTTLSecs, int(DefaultTTL.Seconds())), orDefaultInt(b.MaxTTLSecs, int(MaxTTL.Seconds()))); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		slog.Error("dynamic engine insert failed", "err", err)
+		writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 		return
 	}
 	if !auth.CommitMutation(tx, w, r, p.OrgID, u, "dynamic.engine.create", "project/"+p.Slug+"/engine/"+id, map[string]any{"name": b.Name, "type": typ}) {
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "type": typ})
+}
+
+func defaultDatabase(typ string) string {
+	if typ == "mysql" {
+		return "mysql"
+	}
+	return "postgres"
+}
+
+func connectionTarget(typ, conn string) (string, string, error) {
+	switch typ {
+	case "mysql":
+		return mysqlDSN(conn)
+	case "postgres":
+		if strings.HasPrefix(conn, "mysql://") {
+			return "", "", errors.New("mysql url for postgres engine")
+		}
+		return conn, databaseName(conn), nil
+	default:
+		return "", "", errors.New("unsupported engine")
+	}
 }
 
 func orDefault(s, d string) string {
@@ -222,7 +251,8 @@ func (s *Service) ListEngines(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.DB.Query(`SELECT id, name, type, database, default_ttl, max_ttl, created_at
 		FROM dynamic_engines WHERE project_id = ? ORDER BY created_at`, p.ID)
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		slog.Error("dynamic engine list failed", "err", err)
+		writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 		return
 	}
 	type engineRow struct {
@@ -280,11 +310,11 @@ func (s *Service) RequestLease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.Forbidden)
 		return
 	}
-	var connEnc, database string
+	var connEnc, database, engineType string
 	var defTTL, maxTTL int
-	err := s.DB.QueryRow(`SELECT conn_encrypted, database, default_ttl, max_ttl FROM dynamic_engines
+	err := s.DB.QueryRow(`SELECT conn_encrypted, database, default_ttl, max_ttl, type FROM dynamic_engines
 		WHERE id = ? AND project_id = ?`, chi.URLParam(r, "eid"), p.ID).
-		Scan(&connEnc, &database, &defTTL, &maxTTL)
+		Scan(&connEnc, &database, &defTTL, &maxTTL, &engineType)
 	if err != nil {
 		writeErr(w, apperr.NotFound)
 		return
@@ -299,7 +329,7 @@ func (s *Service) RequestLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	engine, err := s.engineOf(chi.URLParam(r, "eid"), connEnc)
+	engine, err := s.engineOf(chi.URLParam(r, "eid"), engineType, connEnc)
 	if err != nil {
 		writeErr(w, apperr.New(502, "ENGINE_UNREACHABLE", "database engine unavailable"))
 		return
@@ -392,10 +422,10 @@ func (s *Service) RenewLease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(409, "LEASE_INACTIVE", "lease is not active"))
 		return
 	}
-	var connEnc, database string
+	var connEnc, database, engineType string
 	var defTTL, maxTTL int
-	if err := s.DB.QueryRow(`SELECT conn_encrypted, database, default_ttl, max_ttl FROM dynamic_engines WHERE id = ?`,
-		lease["engine_id"]).Scan(&connEnc, &database, &defTTL, &maxTTL); err != nil {
+	if err := s.DB.QueryRow(`SELECT conn_encrypted, database, default_ttl, max_ttl, type FROM dynamic_engines WHERE id = ?`,
+		lease["engine_id"]).Scan(&connEnc, &database, &defTTL, &maxTTL, &engineType); err != nil {
 		writeErr(w, apperr.NotFound)
 		return
 	}
@@ -414,12 +444,13 @@ func (s *Service) RenewLease(w http.ResponseWriter, r *http.Request) {
 	_ = s.DB.QueryRow(`SELECT password_encrypted FROM dynamic_leases WHERE id = ?`, lease["id"]).Scan(&pwEnc)
 	password, err := tc.Open(s.MasterKey, pwEnc, tc.Context{Purpose: "dynamic-lease", Org: p.OrgID, Project: p.ID, Object: lease["id"].(string), Version: 1})
 	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		slog.Error("dynamic lease decrypt failed", "err", err)
+		writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 		return
 	}
-	engine, err := s.engineOf(lease["engine_id"].(string), connEnc)
+	engine, err := s.engineOf(lease["engine_id"].(string), engineType, connEnc)
 	if err != nil {
-		writeErr(w, apperr.New(502, "ENGINE_UNREACHABLE", err.Error()))
+		writeErr(w, apperr.New(502, "ENGINE_UNREACHABLE", "database engine unavailable"))
 		return
 	}
 	claim := tc.NewID()
@@ -527,11 +558,11 @@ func (s *Service) revokeNow(ctx context.Context, engineID, leaseID, username str
 	if n != 1 {
 		return errors.New("lease busy")
 	}
-	var connEnc, orgID string
-	err = s.DB.QueryRow(`SELECT conn_encrypted,org_id FROM dynamic_engines WHERE id=?`, engineID).Scan(&connEnc, &orgID)
+	var connEnc, orgID, engineType string
+	err = s.DB.QueryRow(`SELECT conn_encrypted,org_id,type FROM dynamic_engines WHERE id=?`, engineID).Scan(&connEnc, &orgID, &engineType)
 	if err == nil {
 		var engine Engine
-		engine, err = s.engineOf(engineID, connEnc)
+		engine, err = s.engineOf(engineID, engineType, connEnc)
 		if err == nil {
 			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err = engine.Revoke(cctx, username)

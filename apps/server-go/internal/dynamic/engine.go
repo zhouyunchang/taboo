@@ -23,11 +23,24 @@ type Engine interface {
 	Revoke(ctx context.Context, username string) error
 }
 
-// EngineFactory 由连接串构造引擎（postgres: postgres://user:pass@host:5432/db?sslmode=disable）
-type EngineFactory func(connString string) (Engine, error)
+// EngineFactory 按引擎类型和连接串构造引擎。
+// postgres: postgres://user:pass@host:5432/db?sslmode=disable
+// mysql:    mysql://user:pass@host:3306/db
+type EngineFactory func(engineType, connString string) (Engine, error)
 
-// Factory 可替换（mock 注入）；默认 PostgreSQL
-var Factory EngineFactory = PostgresFactory
+func defaultFactory(engineType, connString string) (Engine, error) {
+	switch engineType {
+	case "", "postgres":
+		return PostgresFactory(connString)
+	case "mysql":
+		return MySQLFactory(connString)
+	default:
+		return nil, errors.New("unsupported engine")
+	}
+}
+
+// Factory 可替换（mock 注入）；默认按 type 选择 PostgreSQL 或 MySQL。
+var Factory EngineFactory = defaultFactory
 
 func PostgresFactory(connString string) (Engine, error) {
 	db, err := sql.Open("postgres", connString)

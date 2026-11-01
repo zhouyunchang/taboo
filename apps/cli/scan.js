@@ -280,14 +280,14 @@ export function stagedContent(file) {
   catch { try { return fs.readFileSync(file, 'utf8'); } catch { return ''; } }
 }
 
-// 上传体只保留规则、相对路径、行号和 sha256 指纹，不包含命中原文。
+// 上传体带上命中原文，服务端用组织密钥计算 HMAC 后丢弃，不把原文写入报告。
 export function uploadFindings(findings) {
   return findings.map((f) => ({
     rule_id: f.rule,
     level: f.level,
     file: f.file,
     line: f.line,
-    fingerprint: crypto.createHash('sha256').update(`${f.rule}|${f.file}|${f.line}|${f.match}`).digest('hex'),
+    match: f.match,
   }));
 }
 

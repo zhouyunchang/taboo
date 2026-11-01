@@ -88,7 +88,7 @@ func TestPostgresTenantIsolation(t *testing.T) {
 		t.Fatal("cross organization grant accepted")
 	}
 	// Reopening/migrating the same database does not weaken FORCE RLS.
-	if err = db.QueryRow(`SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND relname IN ('secrets','secret_versions','projects','scan_reports') AND relrowsecurity AND relforcerowsecurity`).Scan(&n); err != nil || n != 4 {
+	if err = db.QueryRow(`SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND relname IN ('secrets','secret_versions','projects','scan_reports','rotation_policies') AND relrowsecurity AND relforcerowsecurity`).Scan(&n); err != nil || n != 5 {
 		t.Fatalf("FORCE RLS missing: %d %v", n, err)
 	}
 }

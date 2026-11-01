@@ -231,7 +231,9 @@ type ScanFinding struct {
 	Level       string `json:"level"`
 	File        string `json:"file"`
 	Line        int    `json:"line"`
-	Fingerprint string `json:"fingerprint"`
+	Match       string `json:"match,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Alg         string `json:"alg,omitempty"`
 }
 
 type ScanReport struct {

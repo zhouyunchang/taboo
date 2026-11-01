@@ -195,6 +195,8 @@ func failClosed(action string) bool {
 		return true
 	case strings.HasPrefix(action, "identity.") && action != "identity.list":
 		return true
+	case strings.HasPrefix(action, "scan_report."):
+		return true
 	case strings.HasPrefix(action, "admin."):
 		return true
 	case strings.HasPrefix(action, "auth.totp."), strings.HasPrefix(action, "members."), strings.HasPrefix(action, "oidc."), strings.HasPrefix(action, "workload."):
@@ -314,6 +316,10 @@ func MiddlewareWithExternal(db *sql.DB, jwtSecret string, external ExternalAuthe
 			var actor *Actor
 			if typ == KindIdentity {
 				actor, err = loadIdentity(db, sub)
+				if err == nil && !IdentityIPAllowed(db, actor.ID, httpx.ClientIP(r)) {
+					writeErr(w, apperr.New(403, "IP_NOT_ALLOWED", "client address is not allowed for this machine identity"))
+					return
+				}
 			} else if typ == KindUser {
 				actor, err = loadUser(db, sub)
 				var source string

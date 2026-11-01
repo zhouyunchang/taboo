@@ -288,7 +288,7 @@ function WebhookCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onCl
         <h3>添加 Webhook 订阅</h3>
         <label>接收 URL<input value={url} onChange={(e) => setUrl(e.target.value)} required placeholder="https://hooks.example.com/taboo" /></label>
         <label>签名密钥（留空自动生成）<input value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
-        <label>事件过滤（逗号分隔；留空 = 全部）<input value={events} placeholder="secret.created, secret.deleted" /></label>
+        <label>事件过滤（逗号分隔；留空 = 全部）<input value={events} placeholder="secret.created, secret.rotation_due" /></label>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">
           <button type="button" className="ghost" disabled={busy} onClick={onClose}>取消</button>

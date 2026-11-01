@@ -42,8 +42,10 @@ def main():
     assert preview["created"] == 1 and len(preview["conflicts"]) == 1
     imported = client.import_env("project-a", "dev", "/", "PY_FROM_ENV=imported\n", "skip", False, {"idempotency_key": "py-import"})
     assert imported["created"] == 1
-    report = client.create_scan_report("a", "sdk-python", [{"rule_id": "generic-api-key", "level": "warning", "file": "src/app.env", "line": 2, "fingerprint": "ab" * 32}])
+    report = client.create_scan_report("a", "sdk-python", [{"rule_id": "generic-api-key", "level": "warning", "file": "src/app.env", "line": 2, "match": "plaintext-secret"}])
     assert report["finding_count"] == 1 and "plaintext-secret" not in str(report)
+    detail = client.get_scan_report("a", report["id"])
+    assert detail["findings"][0]["alg"] == "hmac-sha256" and "plaintext-secret" not in str(detail)
     assert len(client.list_scan_reports("a")["reports"]) >= 1
     if os.environ.get("TABOO_AUTH_MODE") == "oauth":
         limited = Client(client.base_url).with_oauth_client_credentials({

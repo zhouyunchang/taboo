@@ -79,6 +79,7 @@ try {
     await importDialog.waitFor();
     const importFit = await importDialog.evaluate((el) => ({ dialog: el.scrollWidth <= el.clientWidth + 1, page: document.documentElement.scrollWidth <= document.documentElement.clientWidth }));
     check('import dialog fits', importFit.dialog && importFit.page, JSON.stringify(importFit));
+    check('import offers Doppler and 1Password', await importDialog.getByLabel('导入格式').locator('option').count() === 3);
     await page.keyboard.press('Escape');
     await importDialog.waitFor({ state: 'hidden' });
     check('import escape restores focus', (await page.evaluate(() => document.activeElement?.textContent))?.includes('导入'));
@@ -86,6 +87,9 @@ try {
     const history = page.getByRole('dialog', { name: '版本历史' });
     await history.waitFor();
     await history.getByRole('button', { name: '对比', exact: true }).click();
+    await history.getByRole('heading', { name: '轮换策略', exact: true }).waitFor();
+    const historyFit = await history.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+    check('rotation policy fits in version dialog', historyFit);
     await history.getByText('值已掩码').waitFor();
     const masked = await history.innerText();
     check('version diff stays masked', masked.includes('值已掩码') && !masked.includes('browser-check-v2'));
@@ -97,6 +101,12 @@ try {
     await page.getByRole('heading', { name: '扫描报告', exact: true }).waitFor(); // dev122 may already hold reports
     const scanFit = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
     check('scan report page fits', scanFit);
+    await page.getByRole('button', { name: '动态密钥', exact: true }).click();
+    await page.getByRole('button', { name: '接入数据库引擎' }).waitFor();
+    check('dynamic engines page fits', await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+    await page.getByRole('button', { name: '机器身份', exact: true }).click();
+    await page.getByRole('heading', { name: '机器身份', exact: true }).waitFor();
+    check('machine identities page fits', await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
     if (OUT) await page.screenshot({ path: `${OUT}/${label}-workspace.png`, fullPage: true });
     await ctx.close();
   }

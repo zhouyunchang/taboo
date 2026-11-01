@@ -86,6 +86,20 @@ const exp = await call('GET', `/api/v1/projects/${projectId}/export?env=dev`, { 
 const expText = await exp.text();
 check('export .env format', expText.includes(`${KEY}=s3cret-v1`), expText);
 
+const imported = await call('POST', `/api/v1/projects/${projectId}/import?env=dev`, { token, body: { format: 'doppler', preview: true, content: '{"SMOKE_DOPPLER":"preview-only","DOPPLER_PROJECT":"demo"}' } });
+check('doppler preview does not require strategy', imported.status === 200 && imported.data?.created === 1 && !(imported.data?.entries || []).some((e) => e.key?.startsWith('DOPPLER_')), JSON.stringify(imported.data));
+const rotation = await call('PUT', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation?env=dev`, { token, body: { interval_seconds: 86400 } });
+check('rotation policy saved', rotation.status === 200 && rotation.data?.enabled === true && !JSON.stringify(rotation.data).includes('s3cret'), JSON.stringify(rotation.data));
+const scan = await call('POST', `/api/v1/orgs/${orgSlug}/scan-reports`, { token, body: { source: 'smoke', findings: [{ rule_id: 'generic-api-key', level: 'warning', file: 'smoke.env', line: 1, match: 'smoke-secret-value' }] } });
+check('scan report hmac', scan.status === 201 && !JSON.stringify(scan.data).includes('smoke-secret-value'), JSON.stringify(scan.data));
+const scanDetail = await call('GET', `/api/v1/orgs/${orgSlug}/scan-reports/${scan.data?.id}`, { token });
+check('scan detail drops match', scanDetail.status === 200 && scanDetail.data?.findings?.[0]?.alg === 'hmac-sha256' && !JSON.stringify(scanDetail.data).includes('smoke-secret-value'), JSON.stringify(scanDetail.data));
+const scanDel = await call('DELETE', `/api/v1/orgs/${orgSlug}/scan-reports/${scan.data?.id}`, { token });
+check('scan report deleted', scanDel.status === 200, JSON.stringify(scanDel.data));
+const cache = await fetch(BASE + `/api/v1/projects/${projectId}/secrets?env=dev`, { headers: { Authorization: `Bearer ${token}` } });
+check('cache-control no-store', cache.headers.get('cache-control') === 'no-store');
+await cache.json().catch(() => {});
+
 const audit = await call('GET', `/api/v1/orgs/${orgSlug}/audit`, { token });
 const actions = new Set(audit.data?.logs?.map((l) => l.action));
 check('audit has create/reveal/rollback/export', ['secrets.create', 'secrets.reveal', 'secrets.rollback', 'secrets.export'].every((a) => actions.has(a)), [...actions].join(','));
@@ -96,6 +110,7 @@ check('unauth rejected 401', noauth.status === 401);
 
 // 清理：删除本次创建的密钥；注册模式提示停用一次性账号
 if (projectId && token && process.env.TABOO_SMOKE_KEEP !== '1') {
+  await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation?env=dev`, { token });
   const del = await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}?env=dev&expectedVersion=3`, { token });
   check('cleanup: smoke secret deleted', del.status === 200 || del.status === 204, `status=${del.status} ${JSON.stringify(del.data)}`);
 }

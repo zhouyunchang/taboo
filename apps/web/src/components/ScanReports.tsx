@@ -5,15 +5,27 @@ import Modal from './Modal';
 
 export default function ScanReports({ orgSlug }: { orgSlug: string }) {
   const [reports, setReports] = useState<ScanReport[]>([]);
+  const [canDelete, setCanDelete] = useState(false);
   const [err, setErr] = useState('');
   const [open, setOpen] = useState<ScanReport | null>(null);
 
   const load = useCallback(() => {
-    api.get<{ reports: ScanReport[] }>(`/api/v1/orgs/${orgSlug}/scan-reports`)
-      .then((d) => { setReports(d.reports ?? []); setErr(''); })
+    api.get<{ reports: ScanReport[]; can_delete?: boolean }>(`/api/v1/orgs/${orgSlug}/scan-reports`)
+      .then((d) => { setReports(d.reports ?? []); setCanDelete(d.can_delete === true); setErr(''); })
       .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
   }, [orgSlug]);
   useEffect(load, [load]);
+
+  async function remove(id: string) {
+    if (!window.confirm('删除这份扫描报告？')) return;
+    try {
+      await api.del(`/api/v1/orgs/${orgSlug}/scan-reports/${id}`);
+      if (open?.id === id) setOpen(null);
+      load();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    }
+  }
 
   async function openReport(id: string) {
     try {
@@ -29,7 +41,7 @@ export default function ScanReports({ orgSlug }: { orgSlug: string }) {
         <h2>扫描报告</h2>
         <button className="ghost" onClick={load}>刷新</button>
       </div>
-      <p className="muted">报告只包含规则、相对路径、行号和指纹。命中原文不会上传，也不会显示在这里。命令：<code>taboo scan --upload</code></p>
+      <p className="muted">报告只包含规则、相对路径、行号和指纹。命中原文只在上传时用于计算组织 HMAC，不会保存，也不会显示在这里。升级前的报告会标成 sha256。命令：<code>taboo scan --upload</code></p>
       {err && <div className="error" role="alert">{err}</div>}
       <div className="table-scroll">
         <table className="table secrets-table">
@@ -42,7 +54,10 @@ export default function ScanReports({ orgSlug }: { orgSlug: string }) {
                 <td data-label="操作者">{report.actor_name || '—'}</td>
                 <td data-label="严重">{report.critical_count}</td>
                 <td data-label="警告">{report.warning_count}</td>
-                <td className="actions"><button className="ghost" onClick={() => void openReport(report.id)}>查看</button></td>
+                <td className="actions">
+                  <button className="ghost" onClick={() => void openReport(report.id)}>查看</button>
+                  {canDelete && <button className="ghost" onClick={() => void remove(report.id)}>删除</button>}
+                </td>
               </tr>
             ))}
             {reports.length === 0 && <tr><td colSpan={6} className="muted center">还没有扫描报告</td></tr>}
@@ -63,7 +78,7 @@ export default function ScanReports({ orgSlug }: { orgSlug: string }) {
                       <td className="mono" data-label="规则">{finding.rule_id}</td>
                       <td className="mono" data-label="文件">{finding.file}</td>
                       <td data-label="行">{finding.line}</td>
-                      <td className="mono" data-label="指纹">{(finding.fingerprint ?? '').slice(0, 12)}</td>
+                      <td className="mono" data-label="指纹">{(finding.fingerprint ?? '').slice(0, 12)}{finding.alg === 'sha256' ? ' · 旧' : ''}</td>
                     </tr>
                   ))}
                   {(open.findings ?? []).length === 0 && <tr><td colSpan={5} className="muted center">这次扫描没有命中</td></tr>}

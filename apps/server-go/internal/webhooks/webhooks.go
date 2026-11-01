@@ -41,10 +41,11 @@ const maxAttempts = 6
 
 // 事件名映射：SecretEvent.Action → webhook 事件类型
 var eventNames = map[string]string{
-	"created":     "secret.created",
-	"updated":     "secret.updated",
-	"rolled_back": "secret.rolled_back",
-	"deleted":     "secret.deleted",
+	"created":      "secret.created",
+	"updated":      "secret.updated",
+	"rolled_back":  "secret.rolled_back",
+	"deleted":      "secret.deleted",
+	"rotation_due": "secret.rotation_due",
 }
 
 type Service struct {

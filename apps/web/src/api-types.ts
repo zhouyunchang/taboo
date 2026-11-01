@@ -626,6 +626,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orgs/{slug}/identities/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** 更新机器身份的 IP 白名单或扫描报告可见范围（owner/admin） */
+        patch: operations["updateIdentity"];
+        trace?: never;
+    };
     "/api/v1/projects/{pid}/environments": {
         parameters: {
             query?: never;
@@ -793,9 +810,28 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 导入 .env（preview 只返回计划；已有 key 必须选择 skip 或 overwrite；单事务审计，响应不含值） */
+        /** 导入 .env、Doppler JSON 或 1Password CLI JSON（preview 只返回计划；已有 key 必须选择 skip 或 overwrite；文件夹与密钥同一事务，响应不含值） */
         post: operations["importSecrets"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取密钥轮换策略（到期只发事件，不生成新明文） */
+        get: operations["getRotationPolicy"];
+        /** 设置密钥轮换策略（间隔或五段 cron，至少 5 分钟一次） */
+        put: operations["putRotationPolicy"];
+        post?: never;
+        /** 删除密钥轮换策略 */
+        delete: operations["deleteRotationPolicy"];
         options?: never;
         head?: never;
         patch?: never;
@@ -811,7 +847,7 @@ export interface paths {
         /** 动态密钥引擎列表 + 活跃 lease（不含连接串/密码） */
         get: operations["listDynamicEngines"];
         put?: never;
-        /** 创建 PostgreSQL 动态密钥引擎（owner/admin；连接串 Master Key 加密落库） */
+        /** 创建 PostgreSQL 或 MySQL 动态密钥引擎（owner/admin；连接串 Master Key 加密落库） */
         post: operations["createDynamicEngine"];
         delete?: never;
         options?: never;
@@ -828,7 +864,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 申请动态密钥 lease（仅限机器身份 token，绑定 identity；服务端 CREATE USER ... VALID UNTIL） */
+        /** 申请动态密钥 lease（仅限机器身份 token；PostgreSQL 用 VALID UNTIL，MySQL 用 PASSWORD EXPIRE 加到期 DROP） */
         post: operations["requestLease"];
         delete?: never;
         options?: never;
@@ -1119,10 +1155,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 扫描报告列表（不含命中原文） */
+        /** 扫描报告列表（不含命中原文；机器身份默认只看自己上传的） */
         get: operations["listScanReports"];
         put?: never;
-        /** 上传扫描报告（只接受规则、相对路径、行号和 sha256 指纹） */
+        /** 上传扫描报告（match 只用于计算组织 HMAC，不落库、不回显） */
         post: operations["createScanReport"];
         delete?: never;
         options?: never;
@@ -1137,11 +1173,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 扫描报告详情（规则、文件、行号、指纹；没有命中原文） */
+        /** 扫描报告详情（规则、文件、行号、指纹；没有命中原文；旧报告 alg=sha256） */
         get: operations["getScanReport"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** 删除扫描报告（owner/admin，写审计） */
+        delete: operations["deleteScanReport"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1407,7 +1444,7 @@ export interface components {
             resolved?: boolean;
         };
         ImportRequest: {
-            /** @description .env 文本，最大 1MB */
+            /** @description .env 文本、Doppler JSON 或 1Password op JSON，最大 1MB */
             content: string;
             /**
              * @description 已有 key 的处理；预览可省略
@@ -1416,6 +1453,11 @@ export interface components {
             strategy?: "skip" | "overwrite";
             /** @default false */
             preview: boolean;
+            /**
+             * @default dotenv
+             * @enum {string}
+             */
+            format: "dotenv" | "doppler" | "1password";
         };
         ImportEntry: {
             key: string;
@@ -1432,6 +1474,16 @@ export interface components {
             conflicts: string[];
             entries: components["schemas"]["ImportEntry"][];
         };
+        ScanFindingInput: {
+            rule_id: string;
+            /** @enum {string} */
+            level: "critical" | "warning";
+            /** @description 相对路径 */
+            file: string;
+            line: number;
+            /** @description 命中原文，只用于计算组织 HMAC，不落库、不回显 */
+            match: string;
+        };
         ScanFinding: {
             rule_id: string;
             /** @enum {string} */
@@ -1439,12 +1491,17 @@ export interface components {
             /** @description 相对路径 */
             file: string;
             line: number;
-            /** @description sha256 十六进制，64 字符；不是命中原文 */
+            /** @description hmac-sha256 或旧报告的 sha256，64 位十六进制；不是命中原文 */
             fingerprint: string;
+            /**
+             * @description sha256 表示升级前的未加盐指纹
+             * @enum {string}
+             */
+            alg: "hmac-sha256" | "sha256";
         };
         ScanReportInput: {
             source?: string;
-            findings: components["schemas"]["ScanFinding"][];
+            findings: components["schemas"]["ScanFindingInput"][];
         };
         ScanReport: {
             id: string;
@@ -1709,6 +1766,10 @@ export interface components {
             status: "active" | "revoked";
             token_ttl: number;
             created_at: string;
+            /** @description 空数组表示不限制来源 IP */
+            allowed_cidrs: string[];
+            /** @description 为 true 时可列出组织全部扫描报告，否则只能看自己上传的 */
+            list_scan_reports: boolean;
             scopes: components["schemas"]["IdentityScope"][];
         };
         IdentityWithSecret: components["schemas"]["Identity"] & {
@@ -1725,6 +1786,32 @@ export interface components {
                 /** @enum {string} */
                 permission: "read" | "reveal" | "write";
             }[];
+            /** @description 可选来源 IP 或 CIDR；省略或空数组表示不限制 */
+            allowed_cidrs?: string[];
+            /** @default false */
+            list_scan_reports: boolean;
+        };
+        IdentityUpdateRequest: {
+            allowed_cidrs?: string[];
+            list_scan_reports?: boolean;
+        };
+        RotationPolicy: {
+            id: string;
+            key: string;
+            interval_seconds: number;
+            /** @description 五段 UTC cron；与 interval_seconds 二选一 */
+            cron: string;
+            enabled: boolean;
+            next_run_at: number;
+            last_run_at: number;
+            last_event_id: string;
+        };
+        RotationPolicyInput: {
+            /** @description 与 cron 二选一，最少 300 秒 */
+            interval_seconds?: number;
+            cron?: string;
+            /** @default true */
+            enabled: boolean;
         };
         RegisterRequest: {
             /** Format: email */
@@ -1754,8 +1841,8 @@ export interface components {
         DynamicEngine: {
             id?: string;
             name?: string;
-            /** @example postgres */
-            type?: string;
+            /** @enum {string} */
+            type?: "postgres" | "mysql";
             database?: string;
             default_ttl?: number;
             max_ttl?: number;
@@ -1764,9 +1851,12 @@ export interface components {
         };
         DynamicEngineCreateRequest: {
             name: string;
-            /** @enum {string} */
-            type?: "postgres";
-            /** @description 高权限连接串（postgres://…），加密落库 */
+            /**
+             * @default postgres
+             * @enum {string}
+             */
+            type: "postgres" | "mysql";
+            /** @description postgres://… 或 mysql://user:pass@host:3306/db，加密落库 */
             connection_string: string;
             /** @default postgres */
             database: string;
@@ -2886,7 +2976,49 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            /** @description 凭据有效但客户端 IP 不在白名单 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             429: components["responses"]["RateLimited"];
+        };
+    };
+    updateIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IdentityUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description 已更新 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        updated?: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listEnvs: {
@@ -3362,6 +3494,90 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getRotationPolicy: {
+        parameters: {
+            query?: {
+                env?: components["parameters"]["Env"];
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 策略 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotationPolicy"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putRotationPolicy: {
+        parameters: {
+            query?: {
+                env?: components["parameters"]["Env"];
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotationPolicyInput"];
+            };
+        };
+        responses: {
+            /** @description 已保存 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotationPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteRotationPolicy: {
+        parameters: {
+            query?: {
+                env?: components["parameters"]["Env"];
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     listDynamicEngines: {
@@ -4098,6 +4314,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         reports: components["schemas"]["ScanReport"][];
+                        /** @description 当前用户是否可删除报告（owner/admin） */
+                        can_delete: boolean;
                     };
                 };
             };
@@ -4151,6 +4369,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScanReport"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteScanReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id?: string;
+                        deleted?: boolean;
+                    };
                 };
             };
             403: components["responses"]["Forbidden"];

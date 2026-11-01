@@ -1,12 +1,16 @@
-// 扫描报告只保存规则、路径、行号和指纹。命中原文不得进入请求或数据库。
+// 扫描报告只保存规则、路径、行号和指纹。命中原文只在上传时用来计算组织 HMAC，不落库、不回显。
 package scanreport
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -14,16 +18,18 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
 var (
 	ruleIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
-	fingerprint   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	fingerprintRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	sourcePattern = regexp.MustCompile(`^[A-Za-z0-9_.:/@+-]{1,128}$`)
 )
 
 type Service struct {
-	DB *sql.DB
+	DB        *sql.DB
+	MasterKey []byte
 }
 
 type Finding struct {
@@ -32,6 +38,15 @@ type Finding struct {
 	File        string `json:"file"`
 	Line        int    `json:"line"`
 	Fingerprint string `json:"fingerprint"`
+	Alg         string `json:"alg"`
+}
+
+type findingIn struct {
+	RuleID string `json:"rule_id"`
+	Level  string `json:"level"`
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Match  string `json:"match"`
 }
 
 type Report struct {
@@ -58,33 +73,65 @@ func (s *Service) Routes(r chi.Router) {
 	r.Get("/", s.List)
 	r.Post("/", s.Create)
 	r.Get("/{id}", s.Get)
+	r.Delete("/{id}", s.Delete)
 }
 
-func (s *Service) authorize(w http.ResponseWriter, r *http.Request) (orgID, slug string, ok bool) {
+// Fingerprint 是 HMAC-SHA256(组织密钥, rule|file|line|match)。密钥不离开服务端。
+func Fingerprint(master []byte, orgID, rule, file string, line int, match string) string {
+	mac := hmac.New(sha256.New, scanKey(master, orgID))
+	mac.Write([]byte(rule))
+	mac.Write([]byte{0})
+	mac.Write([]byte(file))
+	mac.Write([]byte{0})
+	mac.Write([]byte(strconv.Itoa(line)))
+	mac.Write([]byte{0})
+	mac.Write([]byte(match))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func scanKey(master []byte, orgID string) []byte {
+	mac := hmac.New(sha256.New, master)
+	mac.Write([]byte("taboo/scan-fingerprint/v1"))
+	mac.Write([]byte{0})
+	mac.Write([]byte(orgID))
+	return mac.Sum(nil)
+}
+
+func (s *Service) authorize(w http.ResponseWriter, r *http.Request) (orgID, slug string, orgWide bool, ok bool) {
 	slug = chi.URLParam(r, "slug")
 	if err := s.DB.QueryRow(`SELECT id FROM orgs WHERE slug = ?`, slug).Scan(&orgID); err != nil {
 		writeErr(w, apperr.NotFound)
-		return "", slug, false
+		return "", slug, false, false
 	}
 	u := auth.From(r)
 	if u == nil {
 		writeErr(w, apperr.Forbidden)
-		return "", slug, false
+		return "", slug, false, false
 	}
 	if u.Kind == auth.KindIdentity {
 		var got string
-		err := s.DB.QueryRow(`SELECT org_id FROM machine_identities WHERE id = ? AND status = 'active'`, u.ID).Scan(&got)
-		if err == nil && got == orgID {
-			return orgID, slug, true
+		var listAll int
+		err := s.DB.QueryRow(`SELECT org_id, list_scan_reports FROM machine_identities WHERE id = ? AND status = 'active'`, u.ID).Scan(&got, &listAll)
+		if err != nil || got != orgID {
+			writeErr(w, apperr.Forbidden)
+			return "", slug, false, false
 		}
-		writeErr(w, apperr.Forbidden)
-		return "", slug, false
+		return orgID, slug, listAll == 1, true
 	}
 	if _, member := auth.Membership(s.DB, orgID, u.ID); !member {
 		writeErr(w, apperr.Forbidden)
-		return "", slug, false
+		return "", slug, false, false
 	}
-	return orgID, slug, true
+	return orgID, slug, true, true
+}
+
+func canDelete(db *sql.DB, r *http.Request, orgID string) bool {
+	u := auth.From(r)
+	if u == nil || u.Kind != auth.KindUser {
+		return false
+	}
+	role, ok := auth.Membership(db, orgID, u.ID)
+	return ok && rbac.Privileged(role)
 }
 
 func validFile(path string) bool {
@@ -102,14 +149,22 @@ func validFile(path string) bool {
 	return utf8.ValidString(path) && !strings.ContainsAny(path, "\r\n\t")
 }
 
+func validMatch(match string) bool {
+	return match != "" && len(match) <= 2048 && utf8.ValidString(match) && !strings.Contains(match, "\x00")
+}
+
 func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
-	orgID, slug, ok := s.authorize(w, r)
+	orgID, slug, _, ok := s.authorize(w, r)
 	if !ok {
 		return
 	}
+	if len(s.MasterKey) == 0 {
+		writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
+		return
+	}
 	var b struct {
-		Source   string    `json:"source"`
-		Findings []Finding `json:"findings"`
+		Source   string      `json:"source"`
+		Findings []findingIn `json:"findings"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	dec.DisallowUnknownFields()
@@ -128,11 +183,16 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "too many findings"))
 		return
 	}
+	stored := make([]Finding, len(b.Findings))
 	critical, warning := 0, 0
-	for _, f := range b.Findings {
-		if !ruleIDPattern.MatchString(f.RuleID) || (f.Level != "critical" && f.Level != "warning") || !validFile(f.File) || f.Line < 1 || f.Line > 10_000_000 || !fingerprint.MatchString(f.Fingerprint) {
-			writeErr(w, apperr.New(400, "INVALID", "finding must be rule id, level, relative file, line and sha256 fingerprint"))
+	for i, f := range b.Findings {
+		if !ruleIDPattern.MatchString(f.RuleID) || (f.Level != "critical" && f.Level != "warning") || !validFile(f.File) || f.Line < 1 || f.Line > 10_000_000 || !validMatch(f.Match) {
+			writeErr(w, apperr.New(400, "INVALID", "finding must be rule id, level, relative file, line and match"))
 			return
+		}
+		stored[i] = Finding{
+			RuleID: f.RuleID, Level: f.Level, File: f.File, Line: f.Line, Alg: "hmac-sha256",
+			Fingerprint: Fingerprint(s.MasterKey, orgID, f.RuleID, f.File, f.Line, f.Match),
 		}
 		if f.Level == "critical" {
 			critical++
@@ -140,22 +200,25 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 			warning++
 		}
 	}
-	raw, err := json.Marshal(b.Findings)
+	raw, err := json.Marshal(stored)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "encode failed"))
 		return
 	}
-	// 二次确认：落库 JSON 只有允许的字段。
 	var round []map[string]any
 	if err = json.Unmarshal(raw, &round); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "encode failed"))
 		return
 	}
 	for _, item := range round {
-		if len(item) != 5 {
+		if len(item) != 6 || item["alg"] != "hmac-sha256" {
 			writeErr(w, apperr.New(400, "INVALID", "scan report rejected"))
 			return
 		}
+	}
+	if strings.Contains(string(raw), `"match"`) {
+		writeErr(w, apperr.New(500, "INTERNAL", "encode failed"))
+		return
 	}
 	u := auth.From(r)
 	id := tc.NewID()
@@ -166,12 +229,12 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if _, err = tx.Exec(`INSERT INTO scan_reports (id, org_id, created_by, actor_name, source, finding_count, critical_count, warning_count, findings_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, orgID, u.ID, u.Name, b.Source, len(b.Findings), critical, warning, string(raw)); err != nil {
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, orgID, u.ID, u.Name, b.Source, len(stored), critical, warning, string(raw)); err != nil {
 		internalErr(w, err)
 		return
 	}
 	if err = auth.AuditReq(tx, r, orgID, u, "scan_report.create", "org/"+slug+"/scan-report/"+id,
-		map[string]any{"findings": len(b.Findings), "critical": critical, "warning": warning, "source": b.Source}); err != nil {
+		map[string]any{"findings": len(stored), "critical": critical, "warning": warning, "source": b.Source, "alg": "hmac-sha256"}); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}
@@ -179,16 +242,23 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	writeJSON(w, 201, Report{ID: id, Source: b.Source, ActorName: u.Name, FindingCount: len(b.Findings), CriticalCount: critical, WarningCount: warning})
+	writeJSON(w, 201, Report{ID: id, Source: b.Source, ActorName: u.Name, FindingCount: len(stored), CriticalCount: critical, WarningCount: warning})
 }
 
 func (s *Service) List(w http.ResponseWriter, r *http.Request) {
-	orgID, _, ok := s.authorize(w, r)
+	orgID, _, orgWide, ok := s.authorize(w, r)
 	if !ok {
 		return
 	}
-	rows, err := s.DB.Query(`SELECT id, source, actor_name, finding_count, critical_count, warning_count, created_at
-		FROM scan_reports WHERE org_id = ? ORDER BY created_at DESC LIMIT 100`, orgID)
+	query := `SELECT id, source, actor_name, finding_count, critical_count, warning_count, created_at
+		FROM scan_reports WHERE org_id = ?`
+	args := []any{orgID}
+	if !orgWide {
+		query += ` AND created_by = ?`
+		args = append(args, auth.From(r).ID)
+	}
+	query += ` ORDER BY created_at DESC LIMIT 100`
+	rows, err := s.DB.Query(query, args...)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -203,19 +273,20 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, item)
 	}
-	writeJSON(w, 200, map[string]any{"reports": out})
+	writeJSON(w, 200, map[string]any{"reports": out, "can_delete": canDelete(s.DB, r, orgID)})
 }
 
 func (s *Service) Get(w http.ResponseWriter, r *http.Request) {
-	orgID, _, ok := s.authorize(w, r)
+	orgID, _, orgWide, ok := s.authorize(w, r)
 	if !ok {
 		return
 	}
+	query := `SELECT id, source, actor_name, finding_count, critical_count, warning_count, created_at, findings_json, created_by
+		FROM scan_reports WHERE org_id = ? AND id = ?`
+	args := []any{orgID, chi.URLParam(r, "id")}
 	var item Report
-	var raw string
-	err := s.DB.QueryRow(`SELECT id, source, actor_name, finding_count, critical_count, warning_count, created_at, findings_json
-		FROM scan_reports WHERE org_id = ? AND id = ?`, orgID, chi.URLParam(r, "id")).
-		Scan(&item.ID, &item.Source, &item.ActorName, &item.FindingCount, &item.CriticalCount, &item.WarningCount, &item.CreatedAt, &raw)
+	var raw, createdBy string
+	err := s.DB.QueryRow(query, args...).Scan(&item.ID, &item.Source, &item.ActorName, &item.FindingCount, &item.CriticalCount, &item.WarningCount, &item.CreatedAt, &raw, &createdBy)
 	if err == sql.ErrNoRows {
 		writeErr(w, apperr.NotFound)
 		return
@@ -224,15 +295,65 @@ func (s *Service) Get(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
+	if !orgWide && createdBy != auth.From(r).ID {
+		writeErr(w, apperr.NotFound)
+		return
+	}
 	item.Findings = []Finding{}
 	if err = json.Unmarshal([]byte(raw), &item.Findings); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "stored report is unreadable"))
 		return
 	}
+	for i := range item.Findings {
+		if item.Findings[i].Alg == "" {
+			item.Findings[i].Alg = "sha256"
+		}
+		if !fingerprintRe.MatchString(item.Findings[i].Fingerprint) {
+			writeErr(w, apperr.New(500, "INTERNAL", "stored report is unreadable"))
+			return
+		}
+	}
 	writeJSON(w, 200, item)
 }
 
-// internalErr logs the cause server-side and returns a generic 500 (no DB details to clients).
+func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
+	orgID, slug, _, ok := s.authorize(w, r)
+	if !ok {
+		return
+	}
+	if !canDelete(s.DB, r, orgID) {
+		writeErr(w, apperr.Forbidden)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	u := auth.From(r)
+	tx, err := s.DB.Begin()
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM scan_reports WHERE org_id = ? AND id = ?`, orgID, id)
+	if err != nil {
+		internalErr(w, err)
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		writeErr(w, apperr.NotFound)
+		return
+	}
+	if err = auth.AuditReq(tx, r, orgID, u, "scan_report.delete", "org/"+slug+"/scan-report/"+id, nil); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		internalErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "deleted": true})
+}
+
 func internalErr(w http.ResponseWriter, err error) {
 	slog.Error("scan report internal error", "err", err)
 	writeErr(w, apperr.New(500, "INTERNAL", "internal error"))

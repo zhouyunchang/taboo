@@ -23,6 +23,8 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/project"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/redact"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/rotation"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/scanreport"
 	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
@@ -79,6 +81,7 @@ func New(d *Deps) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(redact.AccessLog)
 	r.Use(middleware.Recoverer)
 	r.Use(cors(d.CORS))
 	r.Use(securityHeaders)
@@ -186,6 +189,7 @@ func New(d *Deps) *chi.Mux {
 
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(404)
 		_ = json.NewEncoder(w).Encode(apperr.New(404, "NOT_FOUND", "no route: "+req.Method+" "+req.URL.Path))
 	})
@@ -212,6 +216,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -262,6 +267,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	r.Route("/orgs/{slug}/identities", func(r chi.Router) {
 		r.Get("/", identities.List)
 		r.Post("/", identities.Create)
+		r.Patch("/{id}", identities.Update)
 		r.Post("/{id}/revoke", identities.Revoke)
 	})
 	// Secret Sync 目标与同步记录（M5 #11）
@@ -270,7 +276,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	webhooks.Routes(r)
 	// OIDC SSO 配置（M5 #13）
 	oidcSvc.Routes(r)
-	r.Route("/orgs/{slug}/scan-reports", (&scanreport.Service{DB: d.DB}).Routes)
+	r.Route("/orgs/{slug}/scan-reports", (&scanreport.Service{DB: d.DB, MasterKey: d.MasterKey}).Routes)
 	// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥 + 文件夹路由
 	r.Route("/projects/{pid}", func(r chi.Router) {
 		r.Use(projectCtx(d.DB))
@@ -278,6 +284,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 		r.Post("/environments", orgs.CreateEnv)
 		folders.Routes(r)
 		secrets.Routes(r)
+		(&rotation.Service{DB: d.DB}).Routes(r)
 		dyn.Routes(r)
 	})
 	return r

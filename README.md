@@ -22,9 +22,11 @@
 - [x] 机器身份（client_credentials + 显式 scope）、TOTP 2FA、多级文件夹
 - [x] CLI / Go、Node、Python SDK / MCP Server / OpenAPI 3.1 契约（含路由漂移检查）
 - [x] 密钥引用 `${env:KEY}`、`${project:env:KEY}`：只在 reveal/export 且 `resolve=true` 时展开，逐跳鉴权，循环和缺失有明确错误
-- [x] `.env` 导入：API 预览、`skip`/`overwrite`、CLI `import`、控制台对话框
-- [x] 版本对比（默认掩码）和扫描报告（只存规则、路径、行号、指纹）
-- [x] 动态密钥：PostgreSQL 短期账号 lease（到期自动回收）
+- [x] 导入：`.env`、Doppler JSON、1Password `op` JSON。预览、`skip`/`overwrite`、CLI `import --format`、控制台对话框；文件夹和密钥在同一个事务里写入
+- [x] 版本对比（默认掩码）和扫描报告。上传时的命中原文只用于计算组织 HMAC，不落库；升级前的报告仍以 `sha256` 标出。owner/admin 可删除报告
+- [x] 动态密钥：PostgreSQL（`VALID UNTIL`）和 MySQL（`PASSWORD EXPIRE`，到期 `DROP USER`）短期只读账号
+- [x] 轮换策略：按间隔或五段 cron 发出 `secret.rotation_due`，由 webhook 通知外部轮换器回写新版本
+- [x] 请求日志脱敏（`password`/`secret`/`token`/`value`/`match` 等为 `[REDACTED]`）、机器身份可选 IP/CIDR 白名单、响应 `Cache-Control: no-store`
 - [x] M5：Secret Sync（GitHub/Vercel/Cloudflare）、Webhooks（HMAC 签名）、OIDC SSO（JIT 入组）、审计导出 CSV/JSONL、Docker/Helm/GoReleaser 发布
 - [x] 注册即建个人组织 + 默认项目 + dev/staging/prod 三环境；组织/项目/环境模型
 - [x] 密钥 CRUD + 版本历史 + 回滚（`secret_versions` 只追加）
@@ -43,7 +45,7 @@
 - [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export / import、引用展开、扫描报告、folders；`examples/basic` 集成示例已对真实服务跑通
 - [x] **Node SDK（`packages/sdk-node`，`@taboo/sdk`）与 Python SDK（`packages/sdk-python`）**：与 Go SDK 相同的方法、幂等键、机器身份和 OAuth client credentials；消费者测试三种语言一起跑
 - [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份 scope 限定（dev 身份访问 prod 即拒）、吊销立即断连；11 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档
-- [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 动态引擎 —— 机器身份申请短期账号 lease（`taboo_` 前缀随机用户名，CREATE USER … VALID UNTIL + 最小只读授权），到期/吊销自动 DROP（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请；17 项 mock 冒烟 + **10 项真实 PostgreSQL 联调全过**（podman 容器 `taboo-pg-test`，pg_roles 侧验证创建/登录/续期/DROP；修复 lib/pq 无占位语句误传参导致回收失败的问题）
+- [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 与 MySQL 动态引擎 —— 机器身份申请短期只读账号 lease（`taboo_` 前缀随机用户名）。PostgreSQL 使用 `CREATE USER … VALID UNTIL`；MySQL 使用 `CREATE USER … PASSWORD EXPIRE`（粒度是天），精确到期仍由 worker DROP。到期/吊销自动回收（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请
 - [x] 标准身份联邦 P0：OIDC BFF、独立 OAuth 工作负载、显式秘密动作授权、PostgreSQL 18/RLS、事务审计及持久任务、控制台治理和公开迁移恢复。Secret Sync、Webhooks 与审计导出支持外部 owner 治理。
 
 当前范围和验证入口见 [P0 验收记录](docs/design/standard-federation-acceptance.zh-CN.md) 与 [升级恢复手册](docs/runbooks/standard-federation-release.zh-CN.md)。本地公开夹具验证不代表生产发布；SCIM、AuthZEN、Back-Channel Logout 保持独立 P1。

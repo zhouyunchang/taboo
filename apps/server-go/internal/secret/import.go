@@ -3,12 +3,12 @@ package secret
 import (
 	"database/sql"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/folder"
 )
 
 type importEntry struct {
@@ -90,6 +90,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		Content  string `json:"content"`
 		Strategy string `json:"strategy"`
 		Preview  bool   `json:"preview"`
+		Format   string `json:"format"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20+4096)).Decode(&b); err != nil {
 		writeErr(w, apperr.InvalidInput)
@@ -99,25 +100,31 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "strategy must be skip or overwrite"))
 		return
 	}
-	entries, aerr := parseDotenv(b.Content)
+	entries, aerr := parseImport(b.Format, b.Content)
 	if aerr != nil {
 		writeErr(w, aerr)
 		return
 	}
-	folderID, normPath, err := s.folderRef(envID, q(r, "path", "/"), !b.Preview)
+	normPath, err := folder.NormalizePath(q(r, "path", "/"))
 	if err != nil {
-		if b.Preview && isNotFound(err) {
-			planned := make([]importEntry, len(entries))
-			for i, e := range entries {
-				planned[i] = importEntry{Key: e.Key, Action: "create", Version: 1}
-			}
-			writeJSON(w, 200, summarize(true, b.Strategy, planned))
-			return
-		}
 		writeErr(w, apperr.New(400, "INVALID", "invalid folder path"))
 		return
 	}
+	var folderID string
 	if b.Preview {
+		folderID, err = folder.ResolveID(s.DB, envID, normPath, false)
+		if err != nil {
+			if isNotFound(err) {
+				planned := make([]importEntry, len(entries))
+				for i, e := range entries {
+					planned[i] = importEntry{Key: e.Key, Action: "create", Version: 1}
+				}
+				writeJSON(w, 200, summarize(true, b.Strategy, planned))
+				return
+			}
+			internalErr(w, err)
+			return
+		}
 		planned := make([]importEntry, len(entries))
 		for i, e := range entries {
 			_, version, exists, err := existingSecret(s.DB, envID, folderID, e.Key)
@@ -145,6 +152,11 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if s.replayMutation(tx, w, r, p.OrgID, b) {
+		return
+	}
+	folderID, err = folder.ResolveID(tx, envID, normPath, true)
+	if err != nil {
+		internalErr(w, err)
 		return
 	}
 	type current struct {
@@ -236,10 +248,4 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 func isNotFound(err error) bool {
 	ae, ok := err.(*apperr.Error)
 	return ok && ae != nil && ae.Status == 404
-}
-
-// internalErr logs the cause server-side and returns a generic 500 (no DB details to clients).
-func internalErr(w http.ResponseWriter, err error) {
-	slog.Error("secret import internal error", "err", err)
-	writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 }

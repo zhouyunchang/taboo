@@ -251,7 +251,7 @@ CREATE TABLE IF NOT EXISTS dynamic_engines (
   org_id         TEXT NOT NULL,
   project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   name           TEXT NOT NULL,
-  type           TEXT NOT NULL DEFAULT 'postgres' CHECK (type IN ('postgres')),
+  type           TEXT NOT NULL DEFAULT 'postgres' CHECK (type IN ('postgres','mysql')),
   conn_encrypted TEXT NOT NULL,
   database       TEXT NOT NULL DEFAULT 'postgres',
   default_ttl    BIGINT NOT NULL DEFAULT 3600,

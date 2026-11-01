@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -306,6 +306,45 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 		}
 		predicate := `org_id=nullif(current_setting('taboo.org_id',true),'')`
 		if _, err = tx.Exec(`ALTER TABLE scan_reports ENABLE ROW LEVEL SECURITY; ALTER TABLE scan_reports FORCE ROW LEVEL SECURITY; DROP POLICY IF EXISTS tenant_scope ON scan_reports; CREATE POLICY tenant_scope ON scan_reports USING (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)); GRANT SELECT,INSERT,UPDATE,DELETE ON scan_reports TO ` + pq.QuoteIdentifier(role)); err != nil {
+			return err
+		}
+	}
+	if v < 17 {
+		if _, err = tx.Exec(`ALTER TABLE machine_identities ADD COLUMN IF NOT EXISTS allowed_cidrs TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`ALTER TABLE machine_identities ADD COLUMN IF NOT EXISTS list_scan_reports INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`ALTER TABLE dynamic_engines DROP CONSTRAINT IF EXISTS dynamic_engines_type_check`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`ALTER TABLE dynamic_engines ADD CONSTRAINT dynamic_engines_type_check CHECK (type IN ('postgres','mysql'))`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS rotation_policies (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  secret_id TEXT NOT NULL UNIQUE REFERENCES secrets(id) ON DELETE CASCADE,
+  interval_seconds INTEGER NOT NULL DEFAULT 0,
+  cron TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run_at BIGINT NOT NULL,
+  last_run_at BIGINT NOT NULL DEFAULT 0,
+  last_event_id TEXT NOT NULL DEFAULT '',
+  lease_token TEXT NOT NULL DEFAULT '',
+  lease_until BIGINT NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS idx_rotation_due ON rotation_policies(enabled, next_run_at)`); err != nil {
+			return err
+		}
+		predicate := `org_id=nullif(current_setting('taboo.org_id',true),'')`
+		if _, err = tx.Exec(`ALTER TABLE rotation_policies ENABLE ROW LEVEL SECURITY; ALTER TABLE rotation_policies FORCE ROW LEVEL SECURITY; DROP POLICY IF EXISTS tenant_scope ON rotation_policies; CREATE POLICY tenant_scope ON rotation_policies USING (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)); GRANT SELECT,INSERT,UPDATE,DELETE ON rotation_policies TO ` + pq.QuoteIdentifier(role)); err != nil {
 			return err
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/scanreport"
 )
 
 func (f *federationFixture) bearer(method, path, body, token string) *httptest.ResponseRecorder {
@@ -169,22 +170,22 @@ func TestSecretReferencesImportAndVersions(t *testing.T) {
 func TestScanReportStoresNoSecretText(t *testing.T) {
 	f := phase4Ready(t)
 	const leaked = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-	rejected := f.localRequest("POST", "/api/v1/orgs/a/scan-reports", `{"source":"cli","findings":[{"rule_id":"aws-secret-access-key","level":"critical","file":"src/app.env","line":3,"fingerprint":"`+strings.Repeat("ab", 32)+`","match":"`+leaked+`"}]}`, "")
+	rejected := f.localRequest("POST", "/api/v1/orgs/a/scan-reports", `{"source":"cli","findings":[{"rule_id":"aws-secret-access-key","level":"critical","file":"src/app.env","line":3,"fingerprint":"`+strings.Repeat("ab", 32)+`"}]}`, "")
 	checkStatus(t, rejected, 400)
-	fp := strings.Repeat("cd", 32)
-	ok := f.localRequest("POST", "/api/v1/orgs/a/scan-reports", `{"source":"cli","findings":[{"rule_id":"aws-secret-access-key","level":"critical","file":"src/app.env","line":3,"fingerprint":"`+fp+`"}]}`, "")
+	fp := scanreport.Fingerprint(f.master, "a", "aws-secret-access-key", "src/app.env", 3, leaked)
+	ok := f.localRequest("POST", "/api/v1/orgs/a/scan-reports", `{"source":"cli","findings":[{"rule_id":"aws-secret-access-key","level":"critical","file":"src/app.env","line":3,"match":"`+leaked+`"}]}`, "")
 	checkStatus(t, ok, 201)
 	var stored string
 	if err := f.db.QueryRow(`SELECT findings_json FROM scan_reports`).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(stored, leaked) || strings.Contains(stored, "match") || !strings.Contains(stored, fp) {
+	if strings.Contains(stored, leaked) || strings.Contains(stored, "match") || !strings.Contains(stored, fp) || !strings.Contains(stored, `"alg":"hmac-sha256"`) {
 		t.Fatalf("stored report: %s", stored)
 	}
 	list := f.localRequest("GET", "/api/v1/orgs/a/scan-reports", "", "")
 	checkStatus(t, list, 200)
-	if strings.Contains(list.Body.String(), leaked) || strings.Contains(list.Body.String(), fp) {
-		t.Fatalf("list included finding body: %s", list.Body.String())
+	if strings.Contains(list.Body.String(), leaked) || strings.Contains(list.Body.String(), fp) || !strings.Contains(list.Body.String(), `"can_delete":true`) {
+		t.Fatalf("list: %s", list.Body.String())
 	}
 	var created struct {
 		ID string `json:"id"`
@@ -194,8 +195,15 @@ func TestScanReportStoresNoSecretText(t *testing.T) {
 	}
 	detail := f.localRequest("GET", "/api/v1/orgs/a/scan-reports/"+created.ID, "", "")
 	checkStatus(t, detail, 200)
-	if strings.Contains(detail.Body.String(), leaked) || !strings.Contains(detail.Body.String(), `"file":"src/app.env"`) {
+	if strings.Contains(detail.Body.String(), leaked) || !strings.Contains(detail.Body.String(), `"file":"src/app.env"`) || !strings.Contains(detail.Body.String(), `"alg":"hmac-sha256"`) {
 		t.Fatalf("detail: %s", detail.Body.String())
 	}
 	checkStatus(t, f.localRequest("GET", "/api/v1/orgs/b/scan-reports", "", ""), 403)
+	f.exec(`INSERT INTO scan_reports (id, org_id, created_by, actor_name, source, finding_count, critical_count, warning_count, findings_json) VALUES ('legacy','a','local','Local','cli',1,0,1,?)`,
+		`[{"rule_id":"generic-api-key","level":"warning","file":"old.env","line":1,"fingerprint":"`+strings.Repeat("ab", 32)+`"}]`)
+	legacy := f.localRequest("GET", "/api/v1/orgs/a/scan-reports/legacy", "", "")
+	checkStatus(t, legacy, 200)
+	if !strings.Contains(legacy.Body.String(), `"alg":"sha256"`) || strings.Contains(legacy.Body.String(), "hmac-sha256") {
+		t.Fatalf("legacy report: %s", legacy.Body.String())
+	}
 }

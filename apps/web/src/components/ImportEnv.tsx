@@ -11,6 +11,7 @@ export default function ImportEnv({ projectId, env, path, onClose, onImported }:
   const mutate = useSecretMutation();
   const fileRef = useRef<HTMLInputElement>(null);
   const [content, setContent] = useState('');
+  const [format, setFormat] = useState<'dotenv' | 'doppler' | '1password'>('dotenv');
   const [strategy, setStrategy] = useState<'' | 'skip' | 'overwrite'>('');
   const [plan, setPlan] = useState<ImportResult | null>(null);
   const [err, setErr] = useState('');
@@ -27,7 +28,7 @@ export default function ImportEnv({ projectId, env, path, onClose, onImported }:
     setBusy(true);
     setErr('');
     try {
-      const result = await api.post<ImportResult>(endpoint, { content, preview: true, ...(strategy ? { strategy } : {}) });
+      const result = await api.post<ImportResult>(endpoint, { content, format, preview: true, ...(strategy ? { strategy } : {}) });
       setPlan(result);
     } catch (e) {
       setPlan(null);
@@ -46,7 +47,7 @@ export default function ImportEnv({ projectId, env, path, onClose, onImported }:
     setBusy(true);
     setErr('');
     try {
-      const result = await mutate('post', endpoint, { content, ...(strategy ? { strategy } : {}) }) as ImportResult;
+      const result = await mutate('post', endpoint, { content, format, ...(strategy ? { strategy } : {}) }) as ImportResult;
       setPlan(result);
       onImported();
       onClose();
@@ -62,7 +63,14 @@ export default function ImportEnv({ projectId, env, path, onClose, onImported }:
   return (
     <Modal title="导入 .env" onClose={onClose} busy={busy}>
       <ValidatedForm className="drawer-inner" onSubmit={commit}>
-        <p className="muted">先预览再写入。已有 key 必须选择跳过或覆盖，整批在一个事务里完成。</p>
+        <p className="muted">先预览再写入。支持 .env、Doppler JSON 和 1Password <code>op</code> JSON。已有 key 必须选择跳过或覆盖，整批在一个事务里完成。</p>
+        <label>格式
+          <select aria-label="导入格式" value={format} onChange={(e) => { setFormat(e.target.value as 'dotenv' | 'doppler' | '1password'); setPlan(null); }}>
+            <option value="dotenv">.env</option>
+            <option value="doppler">Doppler JSON</option>
+            <option value="1password">1Password JSON</option>
+          </select>
+        </label>
         <label>文件
           <input ref={fileRef} type="file" accept=".env,text/plain,.txt" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readFile(file); }} />
         </label>

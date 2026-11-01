@@ -10,6 +10,6 @@ client.withIdentity(clientID, clientSecret);
 const value = await client.getSecret(projectID, 'dev', '/', 'DB_URL', { resolve: true });
 ```
 
-`resolve: true` 展开 `${env:KEY}` 与 `${project:env:KEY}`。`importEnv` 的 `preview` 为 true 时不写库；已有 key 需要 `skip` 或 `overwrite`。`createScanReport` 只接受规则、相对路径、行号和 sha256 指纹。
+`resolve: true` 展开 `${env:KEY}` 与 `${project:env:KEY}`。`importEnv` 的 `preview` 为 true 时不写库；已有 key 需要 `skip` 或 `overwrite`。`createScanReport` 提交规则、相对路径、行号和命中原文；服务端计算组织 HMAC 后不保存原文。
 
 `consumer.test.js` 在 `scripts/test-consumers.sh` 里和 Go、Python 一起跑。单独执行且未设置 `TABOO_TEST_CONSUMER=1` 时会跳过。

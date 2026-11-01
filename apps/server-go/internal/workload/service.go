@@ -13,6 +13,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/federation/oauth"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
@@ -139,8 +140,12 @@ func (s *Service) Authenticate(r *http.Request) (*auth.Actor, error) {
 		return nil, apperr.Unauthorized
 	}
 	var a auth.Actor
-	if err = s.DB.QueryRow(`SELECT b.id,m.name FROM workload_bindings b JOIN machine_identities m ON m.id=b.id AND m.org_id=b.org_id WHERE b.trust_id=? AND b.org_id=? AND b.subject=? AND b.client_id=? AND b.enabled=1 AND m.status='active' AND m.auth_type='external_oauth'`, t.ID, t.OrgID, token.Subject, token.ClientID).Scan(&a.ID, &a.Name); err != nil {
+	var cidrs string
+	if err = s.DB.QueryRow(`SELECT b.id,m.name,m.allowed_cidrs FROM workload_bindings b JOIN machine_identities m ON m.id=b.id AND m.org_id=b.org_id WHERE b.trust_id=? AND b.org_id=? AND b.subject=? AND b.client_id=? AND b.enabled=1 AND m.status='active' AND m.auth_type='external_oauth'`, t.ID, t.OrgID, token.Subject, token.ClientID).Scan(&a.ID, &a.Name, &cidrs); err != nil {
 		return nil, apperr.Unauthorized
+	}
+	if !auth.IPAllowed(cidrs, httpx.ClientIP(r)) {
+		return nil, apperr.New(403, "IP_NOT_ALLOWED", "client address is not allowed for this machine identity")
 	}
 	a.Kind = auth.KindIdentity
 	a.WorkloadBinding = a.ID

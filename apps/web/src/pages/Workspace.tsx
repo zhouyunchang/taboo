@@ -13,6 +13,7 @@ import { GitHubPanel, githubErrorMessage } from '../components/GitHub';
 import ImportEnv from '../components/ImportEnv';
 import VersionDiff from '../components/VersionDiff';
 import ScanReports from '../components/ScanReports';
+import RotationPolicy from '../components/RotationPolicy';
 
 interface Props {
   user: User;
@@ -568,6 +569,7 @@ function DetailDrawer({ projectId, env, meta, onClose, onChanged }: {
         {meta.canReveal
           ? <VersionDiff projectId={projectId} env={env} folder={folder} secretKey={secretKey} versions={versions} />
           : <p className="muted">需要 reveal 权限才能对比版本内容。</p>}
+        <RotationPolicy projectId={projectId} env={env} folder={folder} secretKey={secretKey} canWrite={meta.canWrite} />
         <div className="drawer-actions"><button className="ghost" onClick={onClose}>关闭</button></div>
       </div>
     </Modal>
@@ -686,24 +688,28 @@ function IdentitiesPanel({ orgSlug, project, envs }: { orgSlug: string; project:
           <button className="ghost" onClick={() => setOnce(null)}>我已保存，关闭</button>
         </div>
       )}
-      <table className="table">
-        <thead><tr><th>名称</th><th>Client ID</th><th>Scope（项目 / 环境 / 权限）</th><th>状态</th><th>TTL</th><th /></tr></thead>
+      <div className="table-scroll">
+      <table className="table secrets-table">
+        <thead><tr><th>名称</th><th>Client ID</th><th>Scope（项目 / 环境 / 权限）</th><th>IP 白名单</th><th>扫描报告</th><th>状态</th><th>TTL</th><th /></tr></thead>
         <tbody>
           {identities.map((i) => (
             <tr key={i.id}>
-              <td className="mono">{i.name}</td>
-              <td className="mono muted">{i.client_id}</td>
+              <td className="mono" data-label="名称">{i.name}</td>
+              <td className="mono muted" data-label="Client ID">{i.client_id}</td>
               <td>{i.scopes.map((s, idx) => (
                 <div key={idx}><span className="tag">{s.project_slug}</span><span className="tag">{s.env}</span><span className="tag">{s.permission}</span></div>
               ))}</td>
+              <td className="mono" data-label="IP 白名单">{i.allowed_cidrs?.length ? i.allowed_cidrs.join(', ') : '不限制'}</td>
+              <td data-label="扫描报告">{i.list_scan_reports ? '全部' : '仅自己'}</td>
               <td><span className={`tag ${i.status === 'active' ? 'ok' : 'bad'}`}>{i.status}</span></td>
               <td className="muted">{i.token_ttl}s</td>
-              <td>{i.status === 'active' && <button className="ghost" onClick={() => revoke(i.id, i.name)}>吊销</button>}</td>
+              <td className="actions">{i.status === 'active' && <button className="ghost" onClick={() => revoke(i.id, i.name)}>吊销</button>}</td>
             </tr>
           ))}
-          {identities.length === 0 && <tr><td colSpan={6} className="muted center">还没有机器身份</td></tr>}
+          {identities.length === 0 && <tr><td colSpan={8} className="muted center">还没有机器身份</td></tr>}
         </tbody>
       </table>
+      </div>
       {showNew && project && (
         <IdentityCreator
           orgSlug={orgSlug}
@@ -723,6 +729,8 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
 }) {
   const [name, setName] = useState('');
   const [ttl, setTtl] = useState(900);
+  const [cidrs, setCidrs] = useState('');
+  const [listScans, setListScans] = useState(false);
   const [scopes, setScopes] = useState<IdentityScope[]>([{ project_id: project.id, project_slug: project.slug, env: 'dev', permission: 'read' }]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -732,8 +740,9 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
     setBusy(true);
     setErr('');
     try {
+      const allowed = cidrs.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
       const d = await api.post<CreatedIdentity>(`/api/v1/orgs/${orgSlug}/identities`, {
-        name, token_ttl: ttl,
+        name, token_ttl: ttl, allowed_cidrs: allowed, list_scan_reports: listScans,
         scopes: scopes.map((s) => ({ project_id: s.project_id, env: s.env, permission: s.permission })),
       });
       onCreated(d);
@@ -747,6 +756,8 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
         <h3>创建机器身份</h3>
         <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="ci-runner" /></label>
         <label>Token TTL（秒，≤3600）<input type="number" value={ttl} onChange={(e) => setTtl(Number(e.target.value))} min={60} max={3600} /></label>
+        <label>IP 白名单（可选，逗号或换行分隔）<textarea className="resize-none" rows={2} value={cidrs} onChange={(e) => setCidrs(e.target.value)} placeholder="10.0.0.0/8, 192.0.2.10" /></label>
+        <label className="check"><input type="checkbox" checked={listScans} onChange={(e) => setListScans(e.target.checked)} /> 可查看组织全部扫描报告（默认只能看自己上传的）</label>
         <div className="scope-editor">
           <div className="sidebar-title">Scopes（至少一项，禁止通配）</div>
           {scopes.map((s, idx) => (
@@ -816,7 +827,7 @@ function DynamicPanel({ projectId, projectSlug }: { projectId: string; projectSl
         <button onClick={() => setShowNew(true)}>＋ 接入数据库引擎</button>
       </div>
       <p className="muted">
-        为数据库配置动态引擎后，机器身份可用 <code>POST /projects/{'{pid}'}/dynamic-engines/{'{eid}'}/lease</code> 申请短期账号（自动创建、到期回收）。
+        为 PostgreSQL 或 MySQL 配置动态引擎后，机器身份可用 <code>POST /projects/{'{pid}'}/dynamic-engines/{'{eid}'}/lease</code> 申请短期只读账号（自动创建、到期回收）。
         lease 仅本地机器身份可申请；外部登录由 owner 管理引擎与手动回收。失败的回收任务可在此重新发起。
       </p>
       {error && <div className="error">{error}</div>}
@@ -856,6 +867,7 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
   projectId: string; onClose: () => void; onCreated: () => void;
 }) {
   const [name, setName] = useState('');
+  const [engineType, setEngineType] = useState<'postgres' | 'mysql'>('postgres');
   const [conn, setConn] = useState('');
   const [database, setDatabase] = useState('postgres');
   const [defTTL, setDefTTL] = useState(3600);
@@ -869,7 +881,7 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
     setErr('');
     try {
       await api.post(`/api/v1/projects/${projectId}/dynamic-engines`, {
-        name, connection_string: conn, database, default_ttl: defTTL, max_ttl: maxTTL,
+        name, type: engineType, connection_string: conn, database, default_ttl: defTTL, max_ttl: maxTTL,
       });
       onCreated();
     } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : String(e2)); }
@@ -879,10 +891,20 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
   return (
     <Modal title="接入数据库引擎" onClose={onClose} busy={busy}>
       <ValidatedForm className="drawer-inner" onClick={(e) => e.stopPropagation()} onSubmit={save}>
-        <h3>接入数据库引擎（PostgreSQL）</h3>
-        <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder="pg-main" /></label>
+        <h3>接入数据库引擎</h3>
+        <label>类型
+          <select aria-label="数据库类型" value={engineType} onChange={(e) => {
+            const next = e.target.value as 'postgres' | 'mysql';
+            setEngineType(next);
+            setDatabase(next === 'mysql' ? 'mysql' : 'postgres');
+          }}>
+            <option value="postgres">PostgreSQL</option>
+            <option value="mysql">MySQL</option>
+          </select>
+        </label>
+        <label>名称<input value={name} onChange={(e) => setName(e.target.value)} required placeholder={engineType === 'mysql' ? 'mysql-main' : 'pg-main'} /></label>
         <label>高权限连接串<input className="mono" value={conn} onChange={(e) => setConn(e.target.value)} required
-          placeholder="postgres://admin:****@db.internal:5432/postgres" /></label>
+          placeholder={engineType === 'mysql' ? 'mysql://admin:****@db.internal:3306/app' : 'postgres://admin:****@db.internal:5432/postgres'} /></label>
         <label>目标库<input value={database} onChange={(e) => setDatabase(e.target.value)} required /></label>
         <label>默认 TTL（秒）<input type="number" value={defTTL} onChange={(e) => setDefTTL(Number(e.target.value))} min={60} /></label>
         <label>最大 TTL（秒）<input type="number" value={maxTTL} onChange={(e) => setMaxTTL(Number(e.target.value))} min={300} /></label>

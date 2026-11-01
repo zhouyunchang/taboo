@@ -61,7 +61,7 @@ func dynamicFixture(t *testing.T) (*Service, *recoveryEngine) {
 	if _, err := db.Exec(`INSERT INTO dynamic_leases(id,engine_id,identity_id,username,password_encrypted,status,expires_at,lease_token,lease_until) VALUES('l','e','m','fixture_user','fixture','revoking',?,'crashed',?)`, time.Now().Unix()+100, time.Now().Unix()+60); err != nil {
 		t.Fatal(err)
 	}
-	s.cache.engines[tc.SHA256("a\x00p\x00e\x00"+enc)] = engine
+	s.cache.engines[tc.SHA256("a\x00p\x00e\x00postgres\x00"+enc)] = engine
 	return s, engine
 }
 func TestDynamicCrashRecoveryAndSingleWorker(t *testing.T) {

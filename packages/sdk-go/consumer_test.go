@@ -71,9 +71,16 @@ func TestConsumerAPI(t *testing.T) {
 	if err != nil || imported.Created != 1 {
 		t.Fatalf("import: %+v %v", imported, err)
 	}
-	report, err := c.CreateScanReport(ctx, "a", "sdk", []ScanFinding{{RuleID: "generic-api-key", Level: "warning", File: "src/app.env", Line: 2, Fingerprint: strings.Repeat("ab", 32)}})
-	if err != nil || report.FindingCount != 1 || strings.Contains(report.ID, "plaintext-secret") {
+	report, err := c.CreateScanReport(ctx, "a", "sdk", []ScanFinding{{RuleID: "generic-api-key", Level: "warning", File: "src/app.env", Line: 2, Match: "plaintext-secret"}})
+	if err != nil || report.FindingCount != 1 {
 		t.Fatalf("scan report: %+v %v", report, err)
+	}
+	detail, err := c.GetScanReport(ctx, "a", report.ID)
+	if err != nil || len(detail.Findings) != 1 || detail.Findings[0].Alg != "hmac-sha256" || detail.Findings[0].Match != "" || len(detail.Findings[0].Fingerprint) != 64 {
+		t.Fatalf("scan detail: %+v %v", detail, err)
+	}
+	if strings.Contains(detail.Findings[0].Fingerprint, "plaintext") {
+		t.Fatalf("fingerprint leaked text: %+v", detail.Findings[0])
 	}
 	reports, err := c.ListScanReports(ctx, "a")
 	if err != nil || len(reports) < 1 {

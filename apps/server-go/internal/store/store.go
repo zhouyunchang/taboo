@@ -48,7 +48,12 @@ func migrate(db *sql.DB) error {
 	if err = migrateSchema(tx); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	// CHECK 不能在事务里改写，且 PRAGMA foreign_keys 在事务中不生效。
+	// 放在列补齐之后，旧库的 lease_token 已经存在。
+	return relaxDynamicEngineCheck(db)
 }
 func migrateSchema(db migrationDB) error {
 	_, err := db.Exec(`
@@ -170,6 +175,25 @@ CREATE TABLE IF NOT EXISTS scan_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_scan_reports_org ON scan_reports(org_id, created_at);
 
+-- 轮换策略：到期只发 outbox 事件，由外部轮换器回写新版本。不保存新明文。
+CREATE TABLE IF NOT EXISTS rotation_policies (
+  id                TEXT PRIMARY KEY,
+  org_id            TEXT NOT NULL,
+  project_id        TEXT NOT NULL,
+  secret_id         TEXT NOT NULL UNIQUE REFERENCES secrets(id) ON DELETE CASCADE,
+  interval_seconds  INTEGER NOT NULL DEFAULT 0,
+  cron              TEXT NOT NULL DEFAULT '',
+  enabled           INTEGER NOT NULL DEFAULT 1,
+  next_run_at       INTEGER NOT NULL,
+  last_run_at       INTEGER NOT NULL DEFAULT 0,
+  last_event_id     TEXT NOT NULL DEFAULT '',
+  lease_token       TEXT NOT NULL DEFAULT '',
+  lease_until       INTEGER NOT NULL DEFAULT 0,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rotation_due ON rotation_policies(enabled, next_run_at);
+
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -186,8 +210,10 @@ CREATE TABLE IF NOT EXISTS machine_identities (
   client_id   TEXT NOT NULL UNIQUE,
   secret_hash TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
-  token_ttl   INTEGER NOT NULL DEFAULT 900,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  token_ttl          INTEGER NOT NULL DEFAULT 900,
+  allowed_cidrs      TEXT NOT NULL DEFAULT '',
+  list_scan_reports  INTEGER NOT NULL DEFAULT 0,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- 作用域：显式 (项目, 环境, 权限) 三元组，禁止通配（设计文档 §6）
@@ -315,7 +341,7 @@ CREATE TABLE IF NOT EXISTS dynamic_engines (
   org_id         TEXT NOT NULL,
   project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   name           TEXT NOT NULL,
-  type           TEXT NOT NULL DEFAULT 'postgres' CHECK (type IN ('postgres')),
+  type           TEXT NOT NULL DEFAULT 'postgres' CHECK (type IN ('postgres','mysql')),
   conn_encrypted TEXT NOT NULL,
   database       TEXT NOT NULL DEFAULT 'postgres',
   default_ttl    INTEGER NOT NULL DEFAULT 3600,
@@ -477,6 +503,14 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 			return err
 		}
 	}
+	for _, column := range []string{
+		"allowed_cidrs TEXT NOT NULL DEFAULT ''",
+		"list_scan_reports INTEGER NOT NULL DEFAULT 0",
+	} {
+		if _, err := db.Exec("ALTER TABLE machine_identities ADD COLUMN " + column); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
 	// PRAGMA 不支持参数绑定，整数直接内插（值来自本文件常量，无注入面）
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 		return err
@@ -485,7 +519,84 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 16
+const SchemaVersion = 17
+
+// relaxDynamicEngineCheck 把旧的 postgres-only CHECK 放宽到 mysql。
+// 已有库的 CREATE TABLE 不会被 IF NOT EXISTS 改写，必须重建表。
+func relaxDynamicEngineCheck(db *sql.DB) error {
+	var ddl string
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dynamic_engines'`).Scan(&ddl)
+	if err == sql.ErrNoRows || ddl == "" {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "'mysql'") {
+		return nil
+	}
+	if _, err = db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer db.Exec(`PRAGMA foreign_keys=ON`)
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`CREATE TABLE dynamic_engines_new (
+  id             TEXT PRIMARY KEY,
+  org_id         TEXT NOT NULL,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  type           TEXT NOT NULL DEFAULT 'postgres' CHECK (type IN ('postgres','mysql')),
+  conn_encrypted TEXT NOT NULL,
+  database       TEXT NOT NULL DEFAULT 'postgres',
+  default_ttl    INTEGER NOT NULL DEFAULT 3600,
+  max_ttl        INTEGER NOT NULL DEFAULT 86400,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+)`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO dynamic_engines_new (id, org_id, project_id, name, type, conn_encrypted, database, default_ttl, max_ttl, created_at)
+		SELECT id, org_id, project_id, name, type, conn_encrypted, database, default_ttl, max_ttl, created_at FROM dynamic_engines`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`CREATE TABLE dynamic_leases_new (
+  id                 TEXT PRIMARY KEY,
+  engine_id          TEXT NOT NULL REFERENCES dynamic_engines_new(id) ON DELETE CASCADE,
+  identity_id        TEXT NOT NULL,
+  username           TEXT NOT NULL UNIQUE,
+  password_encrypted TEXT NOT NULL,
+  status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','expired','revoked','failed','revoking')),
+  reclaim_fails      INTEGER NOT NULL DEFAULT 0,
+  expires_at         INTEGER NOT NULL,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  revoked_at         TEXT,
+  lease_token        TEXT NOT NULL DEFAULT '',
+  lease_until        INTEGER NOT NULL DEFAULT 0
+)`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO dynamic_leases_new (id, engine_id, identity_id, username, password_encrypted, status, reclaim_fails, expires_at, created_at, revoked_at, lease_token, lease_until)
+		SELECT id, engine_id, identity_id, username, password_encrypted, status, reclaim_fails, expires_at, created_at, revoked_at,
+		       COALESCE(lease_token, ''), COALESCE(lease_until, 0) FROM dynamic_leases`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DROP TABLE dynamic_leases`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DROP TABLE dynamic_engines`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`ALTER TABLE dynamic_engines_new RENAME TO dynamic_engines`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`ALTER TABLE dynamic_leases_new RENAME TO dynamic_leases`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
 // migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
 // 并将 secrets.folder（物化路径字符串）映射到 folders 记录

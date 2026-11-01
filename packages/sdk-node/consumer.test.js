@@ -32,9 +32,12 @@ test('node sdk matches the Go consumer contract', async (t) => {
   assert.equal(preview.conflicts.length, 1);
   const imported = await client.importEnv('project-a', 'dev', '/', 'NODE_FROM_ENV=imported\n', 'skip', false, { idempotencyKey: 'node-import' });
   assert.equal(imported.created, 1);
-  const report = await client.createScanReport('a', 'sdk-node', [{ rule_id: 'generic-api-key', level: 'warning', file: 'src/app.env', line: 2, fingerprint: 'ab'.repeat(32) }]);
+  const report = await client.createScanReport('a', 'sdk-node', [{ rule_id: 'generic-api-key', level: 'warning', file: 'src/app.env', line: 2, match: 'plaintext-secret' }]);
   assert.equal(report.finding_count, 1);
   assert.equal(JSON.stringify(report).includes('plaintext-secret'), false);
+  const detail = await client.getScanReport('a', report.id);
+  assert.equal(detail.findings[0].alg, 'hmac-sha256');
+  assert.equal(JSON.stringify(detail).includes('plaintext-secret'), false);
   const reports = await client.listScanReports('a');
   assert.ok(reports.reports.length >= 1);
   if (process.env.TABOO_AUTH_MODE === 'oauth') {

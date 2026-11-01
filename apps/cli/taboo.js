@@ -166,16 +166,18 @@ switch (cmd) {
   }
   case 'import': {
     const file = positional()[0];
-    if (!file) { console.error('usage: taboo import <file.env> [--env] [--project] [--path /] [--preview] [--strategy skip|overwrite]'); process.exit(1); }
+    if (!file) { console.error('usage: taboo import <file> [--format dotenv|doppler|1password] [--env] [--project] [--path /] [--preview] [--strategy skip|overwrite]'); process.exit(1); }
     const content = fs.readFileSync(file, 'utf8');
     const strategy = flag('strategy', '');
+    const format = flag('format', 'dotenv');
     const preview = args.includes('--preview');
     const folder = flag('path', '/');
     if (strategy && strategy !== 'skip' && strategy !== 'overwrite') { console.error('--strategy must be skip or overwrite'); process.exit(2); }
+    if (!['dotenv', 'doppler', '1password'].includes(format)) { console.error('--format must be dotenv, doppler, or 1password'); process.exit(2); }
     const idempotencyKey = preview ? undefined : flag('idempotency-key', randomUUID());
     if (!preview) console.error(`mutation receipt: ${idempotencyKey}; if the outcome is unknown, repeat the identical command with --idempotency-key ${idempotencyKey}`);
     const d = await call('POST', `/api/v1/projects/${await projectId()}/import?env=${encodeURIComponent(env)}&path=${encodeURIComponent(folder)}`,
-      { content, preview, ...(strategy ? { strategy } : {}) }, false, idempotencyKey);
+      { content, format, preview, ...(strategy ? { strategy } : {}) }, false, idempotencyKey);
     const conflicts = d.conflicts?.length ? ` conflicts=${d.conflicts.join(',')}` : '';
     console.log(`${preview ? 'preview' : 'imported'}: created=${d.created} updated=${d.updated} skipped=${d.skipped}${conflicts}`);
     for (const entry of d.entries ?? []) console.log(`${entry.action}\t${entry.key}\tv${entry.version}`);
@@ -219,10 +221,10 @@ switch (cmd) {
   taboo get <KEY> [--env] [--project] [--raw]   读取明文（默认解析引用，审计）
   taboo list [--env] [--project]                列出密钥（无值）
   taboo export [--env] [--project] [--raw]      导出 .env（默认解析引用）
-  taboo import <file> [--preview] [--strategy skip|overwrite]
+  taboo import <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]
   taboo run [--raw] -- <cmd...>                 注入解析后的环境变量执行命令
   taboo scan [--staged|--json|--list-rules]     密钥泄漏扫描（150+ 规则，命中即非零退出）
-  taboo scan --upload [--org slug]              上传报告（不含命中原文）
+  taboo scan --upload [--org slug]              上传报告（服务端 HMAC，原文不落库）
   taboo scan --update-baseline                  将现存命中写入 baseline 抑制
   taboo scan --install-hook                     安装 git pre-commit 钩子
 `);

@@ -199,6 +199,9 @@ select { color-scheme: dark; background: var(--bg); color: var(--fg); border: 1p
 .org-switch select { width:auto; max-width:260px; }
 .modal fieldset { border:1px solid var(--border, #ddd); border-radius:8px; padding:10px; margin:8px 0; min-width:0; }
 .modal .drawer-inner { width:100%; max-width:100%; padding:0; box-shadow:none; border:0; }
+.rotation-policy { margin-top: 16px; }
+.rotation-policy h4 { margin: 0 0 8px; }
+label.check { display: flex; gap: 8px; align-items: center; }
 .table-scroll { max-width:100%; overflow-x:auto; }
 .table-scroll td { overflow-wrap:anywhere; }
 .panel > .table { display:block; overflow-x:auto; }

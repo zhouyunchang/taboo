@@ -55,7 +55,7 @@ func ipOf(r *http.Request) string { return httpx.ClientIP(r) }
 // Subscribe 挂到事件总线：密钥变更 → 匹配目标 → 入队同步任务
 func (s *Service) Subscribe(bus *events.Bus) {
 	bus.Subscribe(func(tx *sql.Tx, e events.SecretEvent) error {
-		if e.Action == "deleted" {
+		if e.Action == "deleted" || e.Action == "rotation_due" {
 			return nil
 		}
 		rows, err := tx.Query(`SELECT id FROM sync_targets WHERE org_id=? AND enabled=1 AND (project_id IS NULL OR project_id=?) AND (env_slug='*' OR env_slug=?)`, e.OrgID, e.ProjectID, e.EnvSlug)
