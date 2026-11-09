@@ -30,7 +30,7 @@ func (s *Service) Security(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) PutSecurity(w http.ResponseWriter, r *http.Request) {
 	org, _, ok := s.orgOf(w, r)
-	if !ok || !s.requireMembers(w, r, org) {
+	if !ok || !s.sharedOrg(w, org) || !s.requireMembers(w, r, org) {
 		return
 	}
 	var b struct {
@@ -68,7 +68,7 @@ func (s *Service) PutSecurity(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) ListActionGrants(w http.ResponseWriter, r *http.Request) {
 	org, _, ok := s.orgOf(w, r)
-	if !ok || !s.requireMembers(w, r, org) {
+	if !ok || !s.sharedOrg(w, org) || !s.requireMembers(w, r, org) {
 		return
 	}
 	uid := chi.URLParam(r, "userId")
@@ -96,7 +96,7 @@ func (s *Service) ListActionGrants(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) PutActionGrants(w http.ResponseWriter, r *http.Request) {
 	org, _, ok := s.orgOf(w, r)
-	if !ok || !s.requireMembers(w, r, org) {
+	if !ok || !s.sharedOrg(w, org) || !s.requireMembers(w, r, org) {
 		return
 	}
 	uid := chi.URLParam(r, "userId")

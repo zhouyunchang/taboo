@@ -101,7 +101,7 @@ export default function App() {
       key={`${orgs.find(o=>o.id===selectedOrg)?.id || orgs[0]?.id}:${orgs.find(o=>o.id===selectedOrg)?.role || orgs[0]?.role}`}
       user={user}
       orgs={selectedOrg ? [...orgs.filter(o=>o.id===selectedOrg),...orgs.filter(o=>o.id!==selectedOrg)] : orgs}
-      onOrgChange={(o) => { invalidateRequests(); setSelectedOrg(o[0]?.id??''); }}
+      onOrgChange={(next) => { invalidateRequests(); setOrgs(next); setSelectedOrg(next[0]?.id ?? ''); }}
       logoutError={error}
       onLogout={() => {
         setError('');

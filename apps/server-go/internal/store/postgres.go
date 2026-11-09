@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != 18 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -350,6 +350,23 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	}
 	if v < 18 {
 		if err = installPhase6(tx, owner, role); err != nil {
+			return err
+		}
+	}
+	if v < 19 {
+		if _, err = tx.Exec(`ALTER TABLE orgs ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'organization'`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`ALTER TABLE orgs ADD COLUMN IF NOT EXISTS owner_user_id TEXT REFERENCES users(id)`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS orgs_one_personal_owner ON orgs(owner_user_id) WHERE kind = 'personal'`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`DO $$ BEGIN ALTER TABLE orgs ADD CONSTRAINT orgs_kind_check CHECK (kind IN ('personal','organization')); EXCEPTION WHEN duplicate_object THEN NULL; END $$`); err != nil {
+			return err
+		}
+		if err = classifyTenants(tx); err != nil {
 			return err
 		}
 	}

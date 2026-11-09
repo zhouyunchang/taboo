@@ -45,7 +45,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
-	if err = migrateSchema(tx); err != nil {
+	if err = migrateSchema(tx, v); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -55,7 +55,7 @@ func migrate(db *sql.DB) error {
 	// 放在列补齐之后，旧库的 lease_token 已经存在。
 	return relaxDynamicEngineCheck(db)
 }
-func migrateSchema(db migrationDB) error {
+func migrateSchema(db migrationDB, fromVersion int) error {
 	_, err := db.Exec(`
 CREATE TABLE IF NOT EXISTS users (
   id               TEXT PRIMARY KEY,
@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS orgs (
   name          TEXT NOT NULL,
   slug          TEXT NOT NULL UNIQUE,
   dek_encrypted TEXT NOT NULL,
+  kind          TEXT NOT NULL DEFAULT 'organization' CHECK (kind IN ('personal','organization')),
+  owner_user_id TEXT REFERENCES users(id),
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -514,6 +516,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 	if err := migratePhase6(db); err != nil {
 		return err
 	}
+	if err := ensureAccountModel(db, fromVersion); err != nil {
+		return err
+	}
 	// PRAGMA 不支持参数绑定，整数直接内插（值来自本文件常量，无注入面）
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 		return err
@@ -522,7 +527,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 18
+const SchemaVersion = 19
 
 func migratePhase6(db migrationDB) error {
 	for _, stmt := range []string{

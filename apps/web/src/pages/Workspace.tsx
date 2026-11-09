@@ -75,8 +75,22 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
   }
 
+  async function createOrg() {
+    const name = window.prompt('新组织名称？');
+    if (!name?.trim()) return;
+    try {
+      const made = await api.post<{ id: string }>('/api/v1/orgs', { name: name.trim() });
+      const m = await api.get<{ orgs: Org[] }>('/api/v1/me');
+      const next = m.orgs ?? [];
+      onOrgChange([...next.filter((item) => item.id === made.id), ...next.filter((item) => item.id !== made.id)]);
+    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+  }
+
   if (!org) return <div className="center-screen">没有组织</div>;
 
+  const personal = org.kind === 'personal';
+  const personalOrgs = orgs.filter((item) => item.kind === 'personal');
+  const sharedOrgs = orgs.filter((item) => item.kind !== 'personal');
   const canAdmin = org.role === 'owner' || org.role === 'admin';
   const canDelegate = org.role === 'owner' || (!federated && org.role === 'admin');
   const canAudit = org.role === 'owner' || org.role === 'admin';
@@ -90,13 +104,17 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
           <span className="brand-mark">禁</span>
           <strong>taboo · 禁制</strong>
         </div>
-        <label className="org-switch">组织<select aria-label="当前组织" value={org.id} onChange={e=>onOrgChange([...orgs.filter(o=>o.id===e.target.value),...orgs.filter(o=>o.id!==e.target.value)])}>{orgs.map(o=><option key={o.id} value={o.id}>{o.name} ({o.role})</option>)}</select></label>
+        <label className="org-switch">空间<select aria-label="当前空间" value={org.id} onChange={e=>onOrgChange([...orgs.filter(o=>o.id===e.target.value),...orgs.filter(o=>o.id!==e.target.value)])}>
+          {personalOrgs.length > 0 && <optgroup label="个人">{personalOrgs.map(o=><option key={o.id} value={o.id}>个人</option>)}</optgroup>}
+          {sharedOrgs.length > 0 && <optgroup label="组织">{sharedOrgs.map(o=><option key={o.id} value={o.id}>{o.name} ({o.role})</option>)}</optgroup>}
+        </select></label>
+        {!federated && <button type="button" className="ghost" onClick={() => void createOrg()}>创建组织</button>}
         <div className="spacer" />
         {federated && <button className="ghost" onClick={() => setSwitchOrg(true)}>切换组织</button>}
         {!federated && <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>}
         {!federated && <button className="ghost" onClick={() => setShowGitHub(true)}>GitHub</button>}
         <span>{user.name || user.email}</span>
- <button className="ghost" onClick={() => setShowIdentity(true)}>登录身份</button>
+        {!personal && <button className="ghost" onClick={() => setShowIdentity(true)}>登录身份</button>}
         <button className="ghost" onClick={onLogout}>退出</button>
       </header>
 
@@ -134,7 +152,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
             {canDelegate && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
             {canAudit && <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>}
             <button className={`tab ${tab === 'scans' ? 'active' : ''}`} onClick={() => setTab('scans')}>扫描报告</button>
-            {<button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>组织设置</button>}
+            <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>{personal ? '个人设置' : '组织设置'}</button>
           </div>
           {tab === 'secrets'
             ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} canWrite={(org.role === 'developer' && !envProtected) || canAdmin} />
@@ -143,7 +161,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
               : tab === 'dynamic'
                 ? project && <DynamicPanel key={project.id} projectId={project.id} projectSlug={project.slug} />
                 : tab === 'settings'
-                  ? <SettingsPanel orgSlug={org.slug} role={org.role} />
+                  ? <SettingsPanel orgSlug={org.slug} role={org.role} personal={personal} />
                   : tab === 'scans'
                     ? <ScanReports orgSlug={org.slug} />
                     : canAudit ? <AuditPanel orgSlug={org.slug} /> : <p className="muted">没有审计权限</p>}

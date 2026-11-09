@@ -106,7 +106,7 @@ func TestPhase6ApprovalAccessAndSCIM(t *testing.T) {
 	group := f.raw(http.MethodPost, "/api/v1/scim/v2/Groups", `{"displayName":"devs","urn:ietf:params:scim:schemas:extension:taboo:2.0:Group":{"role":"developer"},"members":[{"value":"`+createdUser.ID+`"}]}`, scimToken.Token)
 	checkStatus(t, group, 201)
 	var role string
-	if err := f.db.QueryRow(`SELECT m.role FROM org_members m JOIN scim_users u ON u.user_id=m.user_id WHERE u.user_name='ada@example.test'`).Scan(&role); err != nil || role != "developer" {
+	if err := f.db.QueryRow(`SELECT m.role FROM org_members m JOIN scim_users u ON u.user_id=m.user_id AND u.org_id=m.org_id WHERE u.user_name='ada@example.test'`).Scan(&role); err != nil || role != "developer" {
 		t.Fatalf("group role %s %v", role, err)
 	}
 }

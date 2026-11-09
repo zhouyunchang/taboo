@@ -58,9 +58,21 @@ func (s *Service) ListMembers(w http.ResponseWriter, r *http.Request) {
 	if !s.requireMembers(w, r, orgID) {
 		return
 	}
-	rows, err := s.DB.Query(`SELECT m.user_id, u.email, u.name, m.role, COALESCE(m.restricted,0), m.joined_at
+	personal, err := IsPersonal(s.DB, orgID)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	q := `SELECT m.user_id, u.email, u.name, m.role, COALESCE(m.restricted,0), m.joined_at
 		FROM org_members m JOIN users u ON u.id = m.user_id
-		WHERE m.org_id = ? ORDER BY m.joined_at`, orgID)
+		WHERE m.org_id = ?`
+	args := []any{orgID}
+	if personal {
+		q += ` AND m.user_id = (SELECT owner_user_id FROM orgs WHERE id = ?)`
+		args = append(args, orgID)
+	}
+	q += ` ORDER BY m.joined_at`
+	rows, err := s.DB.Query(q, args...)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -102,7 +114,7 @@ func (s *Service) grantsOf(orgID, userID string) []grantOut {
 
 func (s *Service) AddMember(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
-	if !ok {
+	if !ok || !s.sharedOrg(w, orgID) {
 		return
 	}
 	if !s.requireMembers(w, r, orgID) {
@@ -183,7 +195,7 @@ func (s *Service) AddMember(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) PatchMember(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
-	if !ok {
+	if !ok || !s.sharedOrg(w, orgID) {
 		return
 	}
 	if !s.requireMembers(w, r, orgID) {
@@ -283,7 +295,7 @@ func (s *Service) PatchMember(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
-	if !ok {
+	if !ok || !s.sharedOrg(w, orgID) {
 		return
 	}
 	if !s.requireMembers(w, r, orgID) {
@@ -345,7 +357,7 @@ func (s *Service) RemoveMember(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) PutGrants(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
-	if !ok {
+	if !ok || !s.sharedOrg(w, orgID) {
 		return
 	}
 	if !s.requireMembers(w, r, orgID) {
@@ -407,7 +419,7 @@ func (s *Service) PutGrants(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
-	if !ok {
+	if !ok || !s.sharedOrg(w, orgID) {
 		return
 	}
 	if !s.requireMembers(w, r, orgID) {
@@ -483,6 +495,9 @@ func (s *Service) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	if exp < time.Now().Unix() {
 		writeErr(w, apperr.New(400, "EXPIRED", "invite expired"))
+		return
+	}
+	if !s.sharedOrg(w, orgID) {
 		return
 	}
 	if !strings.EqualFold(u.Email, email) {

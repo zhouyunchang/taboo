@@ -20,6 +20,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
+	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 )
 
@@ -98,6 +99,13 @@ func (s *Service) auth(next func(http.ResponseWriter, *http.Request, string)) ht
 		if err != nil || revoked != 0 || (exp > 0 && exp <= time.Now().Unix()) {
 			s.fail(ip)
 			scimErr(w, 401, "invalid token")
+			return
+		}
+		if personal, err := orgsvc.IsPersonal(s.DB, org); err != nil {
+			scimErr(w, 503, "try again")
+			return
+		} else if personal {
+			scimErr(w, 403, "personal spaces cannot be shared or federated")
 			return
 		}
 		_, _ = s.DB.Exec(`UPDATE scim_tokens SET last_used_at=? WHERE token_hash=?`, time.Now().Unix(), tc.SHA256(raw))
@@ -235,6 +243,11 @@ func (s *Service) insertUser(tx *sql.Tx, w http.ResponseWriter, r *http.Request,
 			scimErr(w, 503, "try again")
 			return false
 		}
+	}
+	if err := orgsvc.EnsurePersonalSpace(tx, s.MasterKey, userID, email, name); err != nil {
+		slog.Error("scim personal space", "err", err)
+		scimErr(w, 503, "try again")
+		return false
 	}
 	if !auditSCIM(tx, r, org, "scim.user.write", "scim-user/"+id) {
 		scimErr(w, 503, "try again")
@@ -396,6 +409,9 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request, org, id str
 	}
 	if _, err = tx.Exec(`UPDATE users SET name=? WHERE id=?`, name, cur.userID); err != nil {
 		scimErr(w, 503, "try again")
+		return false
+	}
+	if !s.ensurePersonal(tx, w, cur.userID) {
 		return false
 	}
 	if active {
@@ -967,6 +983,13 @@ func (s *Service) orgAdmin(w http.ResponseWriter, r *http.Request) (string, bool
 		writeErr(w, apperr.NotFound)
 		return "", false
 	}
+	if personal, err := orgsvc.IsPersonal(s.DB, org); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return "", false
+	} else if personal {
+		writeErr(w, apperr.New(409, "PERSONAL_NAMESPACE", "personal spaces cannot be shared or federated"))
+		return "", false
+	}
 	actor := auth.From(r)
 	if actor == nil || actor.Kind != auth.KindUser {
 		auth.Deny(s.DB, w, r, org, "admin", "scim")
@@ -983,6 +1006,20 @@ func (s *Service) orgAdmin(w http.ResponseWriter, r *http.Request) (string, bool
 // scimEmail is always a synthetic address. The SCIM userName is kept in
 // scim_users only: a provisioning token must not be able to claim a global
 // email that a local, GitHub or invited account could later need.
+func (s *Service) ensurePersonal(tx *sql.Tx, w http.ResponseWriter, userID string) bool {
+	var email, name string
+	if err := tx.QueryRow(`SELECT email, name FROM users WHERE id=?`, userID).Scan(&email, &name); err != nil {
+		scimErr(w, 503, "try again")
+		return false
+	}
+	if err := orgsvc.EnsurePersonalSpace(tx, s.MasterKey, userID, email, name); err != nil {
+		slog.Error("scim personal space", "err", err)
+		scimErr(w, 503, "try again")
+		return false
+	}
+	return true
+}
+
 func scimEmail(org, userID string) string {
 	return "scim-" + tc.SHA256(org + "\x00" + userID)[:32] + "@external.invalid"
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/config"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 )
 
@@ -39,6 +40,10 @@ func loadRuntime(needDB bool) (*runtime, error) {
 	}
 	if err != nil {
 		return nil, exitf(1, "[taboo] open db: %v", err)
+	}
+	if err = orgsvc.BackfillPersonalSpaces(db, masterKey); err != nil {
+		db.Close()
+		return nil, exitf(1, "[taboo] personal spaces: %v", err)
 	}
 	rt.db = db
 	return rt, nil

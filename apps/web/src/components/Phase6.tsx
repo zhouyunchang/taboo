@@ -7,7 +7,7 @@ type Approval = { id: string; key: string; action: string; status: string; reque
 type Access = { id: string; project_id: string; action: string; status: string; requester_id: string; reason: string; ttl_seconds: number; expires_at: number };
 type Token = { id: string; name: string; revoked: boolean; expires_at: number };
 
-export default function Phase6({ orgSlug, canApprove }: { orgSlug: string; canApprove: boolean }) {
+export default function Phase6({ orgSlug, canApprove, showScim = true }: { orgSlug: string; canApprove: boolean; showScim?: boolean }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [envs, setEnvs] = useState<Record<string, Env[]>>({});
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -34,8 +34,8 @@ export default function Phase6({ orgSlug, canApprove }: { orgSlug: string; canAp
     }).catch((e) => setError(e instanceof ApiError ? e.message : '无法加载项目'));
     api.get<{ approvals: Approval[] }>(`/api/v1/orgs/${orgSlug}/approvals`).then((d) => setApprovals(d.approvals || [])).catch((e) => setError(e instanceof ApiError ? e.message : '无法加载审批'));
     api.get<{ requests: Access[] }>(`/api/v1/orgs/${orgSlug}/access-requests`).then((d) => setRequests(d.requests || [])).catch((e) => setError(e instanceof ApiError ? e.message : '无法加载访问申请'));
-    if (canApprove) api.get<{ tokens: Token[] }>(`/api/v1/orgs/${orgSlug}/scim/tokens`).then((d) => setTokens(d.tokens || [])).catch((e) => setError(e instanceof ApiError ? e.message : '无法加载 SCIM'));
-  }, [orgSlug, canApprove]);
+    if (canApprove && showScim) api.get<{ tokens: Token[] }>(`/api/v1/orgs/${orgSlug}/scim/tokens`).then((d) => setTokens(d.tokens || [])).catch((e) => setError(e instanceof ApiError ? e.message : '无法加载 SCIM'));
+  }, [orgSlug, canApprove, showScim]);
   useEffect(() => { load(); }, [load]);
 
   async function toggle(project: string, slug: string, on: boolean) {
@@ -77,7 +77,7 @@ export default function Phase6({ orgSlug, canApprove }: { orgSlug: string; canAp
   return (
     <div className="phase6">
       <h3>审批与访问</h3>
-      <p className="muted">开启审批的环境里，写入、删除和回滚要另一名管理员批准。限时权限到期后立刻失效。SCIM 令牌只显示一次。</p>
+      <p className="muted">开启审批的环境里，写入、删除和回滚要另一名管理员批准。限时权限到期后立刻失效。{showScim ? 'SCIM 令牌只显示一次。' : ''}</p>
       {error && <p role="alert">{error}</p>}
       {canApprove && <div className="table-scroll">
         <table>
@@ -143,7 +143,7 @@ export default function Phase6({ orgSlug, canApprove }: { orgSlug: string; canAp
           </tbody>
         </table>
       </div>
-      {canApprove && <>
+      {canApprove && showScim && <>
         <h3>SCIM</h3>
         <p className="muted">端点 /api/v1/scim/v2。令牌属于这个组织，不能按邮箱并入已有账号，也不能授予 owner。</p>
         <form onSubmit={mintToken}>

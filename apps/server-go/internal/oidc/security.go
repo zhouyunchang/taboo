@@ -56,7 +56,7 @@ func (s *Service) Security(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) PutSecurity(w http.ResponseWriter, r *http.Request) {
 	org, slug, ok := s.orgOf(w, r)
-	if !ok || !auth.Require(s.DB, w, r, org, "", rbac.Members, "") {
+	if !ok || s.personalBlocked(w, org) || !auth.Require(s.DB, w, r, org, "", rbac.Members, "") {
 		return
 	}
 	p, err := s.providerByOrgSlug(slug, chi.URLParam(r, "id"))

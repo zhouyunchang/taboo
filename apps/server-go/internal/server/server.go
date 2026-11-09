@@ -268,7 +268,7 @@ func writeErr(w http.ResponseWriter, e *apperr.Error) {
 // No worker or subscription is started while building request-scoped handlers.
 func protectedRoutes(d *Deps) *chi.Mux {
 	r := chi.NewRouter()
-	orgs := &orgsvc.Service{DB: d.DB, LookupLocalUser: d.LookupLocalUser, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
+	orgs := &orgsvc.Service{DB: d.DB, ControlDB: d.AccountDB, LookupLocalUser: d.LookupLocalUser, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
 	folders := &folder.Service{DB: d.DB}
 	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs, Events: d.Events}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}

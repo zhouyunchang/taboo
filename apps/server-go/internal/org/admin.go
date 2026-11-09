@@ -70,7 +70,7 @@ func AdminSetUserStatus(db *sql.DB, email, status string) (bool, error) {
 	return true, tx.Commit()
 }
 
-// AdminCreateUser 创建本地账号（含个人组织/默认项目/环境），供注册关闭时的运维建号。
+// AdminCreateUser 创建本地账号和个人空间（含默认项目/环境），供注册关闭时的运维建号。
 func AdminCreateUser(db *sql.DB, masterKey []byte, email, name, password string, status string) (NewLocalUser, error) {
 	email = normEmail(email)
 	if !emailRe.MatchString(email) {

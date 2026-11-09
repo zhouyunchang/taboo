@@ -8,30 +8,32 @@ import type { SyncTarget, SyncRun, Webhook, OIDCProvider } from '../api';
 import { fmtTime, timeTitle } from '../time';
 
 // 组织设置（M5 #11/#12/#13）：Secret Sync / Webhooks / OIDC SSO
-export default function SettingsPanel({ orgSlug, role }: { orgSlug: string; role: string }) {
+export default function SettingsPanel({ orgSlug, role, personal = false }: { orgSlug: string; role: string; personal?: boolean }) {
   const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso' | 'members' | 'security' | 'workloads' | 'approvals'>('sync');
   const canManage = role === 'owner' || (!hasBrowserSession() && role === 'admin');
-  const canMembers = role === 'owner';
+  const canMembers = role === 'owner' && !personal;
+  const canWorkloads = role === 'owner';
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <h2>组织设置</h2>
+        <h2>{personal ? '个人设置' : '组织设置'}</h2>
         <div className="spacer" />
         <button className={`tab ${sub === 'sync' ? 'active' : ''}`} onClick={() => setSub('sync')}>Secret Sync</button>
         <button className={`tab ${sub === 'webhooks' ? 'active' : ''}`} onClick={() => setSub('webhooks')}>Webhooks</button>
-        <button className={`tab ${sub === 'sso' ? 'active' : ''}`} onClick={() => setSub('sso')}>用户源 / SSO</button>
+        {!personal && <button className={`tab ${sub === 'sso' ? 'active' : ''}`} onClick={() => setSub('sso')}>用户源 / SSO</button>}
         <button className={`tab ${sub === 'approvals' ? 'active' : ''}`} onClick={() => setSub('approvals')}>审批与访问</button>
-        {canMembers && <><button className={`tab ${sub === 'security' ? 'active' : ''}`} onClick={() => setSub('security')}>登录策略</button><button className={`tab ${sub === 'workloads' ? 'active' : ''}`} onClick={() => setSub('workloads')}>OAuth 工作负载</button></>}
+        {canMembers && <button className={`tab ${sub === 'security' ? 'active' : ''}`} onClick={() => setSub('security')}>登录策略</button>}
+        {canWorkloads && <button className={`tab ${sub === 'workloads' ? 'active' : ''}`} onClick={() => setSub('workloads')}>OAuth 工作负载</button>}
         {canMembers && <button className={`tab ${sub === 'members' ? 'active' : ''}`} onClick={() => setSub('members')}>成员与角色</button>}
       </div>
       {!canManage && <p className="muted">当前角色为 {role}，外部登录由 owner 管理身份连接、授权和秘密同步。</p>}
       {sub === 'sync' && <SyncTab orgSlug={orgSlug} canManage={canManage} />}
       {sub === 'webhooks' && <WebhooksTab orgSlug={orgSlug} canManage={canManage} />}
-      {sub === 'sso' && <SsoTab orgSlug={orgSlug} canManage={canManage} />}
-      {sub === 'approvals' && <Phase6 orgSlug={orgSlug} canApprove={role === 'owner' || role === 'admin'} />}
+      {sub === 'sso' && !personal && <SsoTab orgSlug={orgSlug} canManage={canManage} />}
+      {sub === 'approvals' && <Phase6 orgSlug={orgSlug} canApprove={role === 'owner' || role === 'admin'} showScim={!personal} />}
       {sub === 'security' && canMembers && <OrganizationSecurity orgSlug={orgSlug} />}
-      {sub === 'workloads' && canMembers && <WorkloadGovernance orgSlug={orgSlug} />}
+      {sub === 'workloads' && canWorkloads && <WorkloadGovernance orgSlug={orgSlug} />}
       {sub === 'members' && canMembers && <MembersTab orgSlug={orgSlug} />}
     </div>
   );

@@ -321,9 +321,12 @@ func (s *Service) resolve(r *http.Request, gu ghUser, email, subject string, met
 	}
 	actor := &auth.Actor{ID: created.UserID, Email: email, Name: display, Kind: auth.KindUser}
 	if s.Cfg.JoinOrg != "" {
-		var joinID string
-		if err := tx.QueryRow(`SELECT id FROM orgs WHERE slug=?`, s.Cfg.JoinOrg).Scan(&joinID); err != nil {
+		var joinID, joinKind string
+		if err := tx.QueryRow(`SELECT id, kind FROM orgs WHERE slug=?`, s.Cfg.JoinOrg).Scan(&joinID, &joinKind); err != nil {
 			return "", denial{"join_org_missing"}
+		}
+		if joinKind == orgsvc.KindPersonal {
+			return "", denial{"join_org_personal"}
 		}
 		if _, err := tx.Exec(`INSERT INTO org_members(org_id,user_id,role) VALUES(?,?,?)`, joinID, created.UserID, s.Cfg.JoinRole); err != nil {
 			return "", err

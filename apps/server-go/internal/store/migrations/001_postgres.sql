@@ -20,8 +20,12 @@ CREATE TABLE IF NOT EXISTS orgs (
   name          TEXT NOT NULL,
   slug          TEXT NOT NULL UNIQUE,
   dek_encrypted TEXT NOT NULL,
-  created_at    TEXT NOT NULL DEFAULT (to_char(timezone('UTC', clock_timestamp()), 'YYYY-MM-DD HH24:MI:SS'))
+  kind          TEXT NOT NULL DEFAULT 'organization',
+  owner_user_id TEXT REFERENCES users(id),
+  created_at    TEXT NOT NULL DEFAULT (to_char(timezone('UTC', clock_timestamp()), 'YYYY-MM-DD HH24:MI:SS')),
+  CONSTRAINT orgs_kind_check CHECK (kind IN ('personal','organization'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS orgs_one_personal_owner ON orgs(owner_user_id) WHERE kind = 'personal';
 
 CREATE TABLE IF NOT EXISTS org_members (
   org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,

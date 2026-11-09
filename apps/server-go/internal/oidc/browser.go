@@ -15,6 +15,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	federation "github.com/zhouyunchang/taboo/apps/server-go/internal/federation/oidc"
+	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 )
 
 const flowCookie = "taboo.oidc.flow"
@@ -43,6 +44,9 @@ func (s *Service) startLogin(w http.ResponseWriter, r *http.Request, replacement
 	p, err := s.providerByOrgSlug(slug, r.URL.Query().Get("pid"))
 	if err != nil || !s.allowedIssuer(p.Issuer) {
 		writeErr(w, apperr.NotFound)
+		return
+	}
+	if s.personalBlocked(w, p.OrgID) {
 		return
 	}
 	doc, _, err := discoCache.getContext(r.Context(), p.ID, p.Issuer)
@@ -148,6 +152,9 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 		bad()
 		return
 	}
+	if s.personalBlocked(w, p.OrgID) {
+		return
+	}
 	current, err := auth.ProviderRevision(s.DB, pid)
 	if err != nil || current != revision {
 		bad()
@@ -246,6 +253,15 @@ func (s *Service) Callback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeErr(w, apperr.New(403, "OIDC_ADMISSION_REQUIRED", "ask an organization administrator to authorize this identity"))
+		return
+	}
+	var accountEmail, accountName string
+	if err = tx.QueryRow(`SELECT email, name FROM users WHERE id=?`, uid).Scan(&accountEmail, &accountName); err != nil {
+		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
+		return
+	}
+	if err = orgsvc.EnsurePersonalSpace(tx, s.MasterKey, uid, accountEmail, accountName); err != nil {
+		writeErr(w, apperr.New(503, "LOGIN_UNAVAILABLE", "try again"))
 		return
 	}
 	actor := &auth.Actor{ID: uid, Kind: auth.KindUser, AuthenticationSource: p.ID, Name: claimString(identity.Claims, "name", "preferred_username")}

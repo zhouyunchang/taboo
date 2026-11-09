@@ -25,6 +25,7 @@ type Service struct {
 	// AddMember; tenant handlers cannot query the global identity directory.
 	LookupLocalUser func(string) (string, error)
 	DB              *sql.DB
+	ControlDB       *sql.DB // Unscoped connection used to create a new tenant.
 	MasterKey       []byte
 	JWTSecret       string
 	DEKs            *tc.DEKCache
@@ -78,6 +79,7 @@ func (s *Service) PublicRoutes(r chi.Router) {
 
 func (s *Service) Routes(r chi.Router) {
 	r.Get("/me", s.Me)
+	r.Post("/orgs", s.CreateOrganization)
 	r.Post("/invites/{token}/accept", s.AcceptInvite)
 	r.Route("/orgs/{slug}", func(r chi.Router) {
 		r.Get("/projects", s.ListProjects)
@@ -167,54 +169,17 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 // NewLocalUser 是 CreateLocalUser 的结果。
 type NewLocalUser struct{ UserID, OrgID, Slug string }
 
-// CreateLocalUser 在调用方事务内创建本地账号 + 个人组织（DEK 经 Root Key 加密落库）
-// + 默认项目 + dev/staging/prod。注册接口与运维 CLI（taboo-server user create）共用。
+// CreateLocalUser 在调用方事务内创建本地账号和仅本人可用的个人空间（DEK、默认项目、
+// dev/staging/prod）。注册接口与运维 CLI（taboo-server user create）共用。组织要另外创建。
 func CreateLocalUser(tx *sql.Tx, masterKey []byte, email, name, passwordHash string) (NewLocalUser, *apperr.Error) {
-	hash := passwordHash
 	userID := tc.NewID()
 	if _, err := tx.Exec(`INSERT INTO users (id, email, name, password_hash, auth_source) VALUES (?, ?, ?, ?, 'local')`,
-		userID, email, name, hash); err != nil {
+		userID, email, name, passwordHash); err != nil {
 		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
 	}
-	// 个人组织（DEK 经 Root Key 加密落库）+ 默认项目 + dev/staging/prod
-	orgID := tc.NewID()
-	slug := slugify(strings.Split(email, "@")[0])
-	for {
-		var x string
-		if err := tx.QueryRow(`SELECT id FROM orgs WHERE slug = ?`, slug).Scan(&x); err != nil {
-			break
-		}
-		slug += "-" + tc.NewID()[:4]
-	}
-	dek := randomBytes(tc.KeyLen)
-	dekPlain, err := tc.Seal(masterKey, hexEncode(dek), tc.DEKContext(orgID))
-	if err != nil {
-		return NewLocalUser{}, apperr.New(500, "INTERNAL", "DEK encryption failed")
-	}
-	if _, err := tx.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, ?, ?, ?)`,
-		orgID, email+"'s org", slug, dekPlain); err != nil {
-		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
-	}
-	if _, err := tx.Exec(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')`, orgID, userID); err != nil {
-		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
-	}
-	projectID := tc.NewID()
-	if _, err := tx.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'default', 'default')`, projectID, orgID); err != nil {
-		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
-	}
-	for i, env := range []string{"dev", "staging", "prod"} {
-		envID := tc.NewID()
-		prot, approval := 0, 0
-		if env == "prod" {
-			prot, approval = 1, 1
-		}
-		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			envID, projectID, env, env, i, prot, approval); err != nil {
-			return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
-		}
-		if err := ensureRootFolder(tx, envID); err != nil {
-			return NewLocalUser{}, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed")
-		}
+	orgID, slug, aerr := provisionTenant(tx, masterKey, personalLabel(name, email), slugify(strings.Split(email, "@")[0]), KindPersonal, userID)
+	if aerr != nil {
+		return NewLocalUser{}, aerr
 	}
 	return NewLocalUser{UserID: userID, OrgID: orgID, Slug: slug}, nil
 }
@@ -338,11 +303,15 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		ID         string `json:"id"`
 		Name       string `json:"name"`
 		Slug       string `json:"slug"`
+		Kind       string `json:"kind"`
 		Role       string `json:"role"`
 		Restricted bool   `json:"restricted"`
 	}
-	rows, err := s.DB.Query(`SELECT o.id, o.name, o.slug, m.role, COALESCE(m.restricted,0) FROM orgs o
-		JOIN org_members m ON m.org_id = o.id WHERE m.user_id = ?`, u.ID)
+	// Organizations come first so a user who also has an empty personal space
+	// lands on the tenant that already holds shared keys.
+	rows, err := s.DB.Query(`SELECT o.id, o.name, o.slug, o.kind, m.role, COALESCE(m.restricted,0) FROM orgs o
+		JOIN org_members m ON m.org_id = o.id WHERE m.user_id = ?
+		ORDER BY CASE WHEN o.kind = 'organization' THEN 0 ELSE 1 END, o.created_at, o.id`, u.ID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -352,7 +321,7 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var o orgRow
 		var rest int
-		_ = rows.Scan(&o.ID, &o.Name, &o.Slug, &o.Role, &rest)
+		_ = rows.Scan(&o.ID, &o.Name, &o.Slug, &o.Kind, &o.Role, &rest)
 		o.Restricted = rest == 1
 		if u.OrganizationID != "" && u.OrganizationID != o.ID {
 			continue

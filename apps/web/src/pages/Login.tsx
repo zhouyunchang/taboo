@@ -185,7 +185,7 @@ export default function Login({ onSuccess }: Props) {
 
         {showRegisterToggle && (
           <button type="button" className="ghost switch" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
-            {mode === 'login' ? '没有账号？注册（自动创建个人组织）' : '已有账号？去登录'}
+            {mode === 'login' ? '没有账号？注册' : '已有账号？去登录'}
           </button>
         )}
       <VersionTag />

@@ -24,7 +24,7 @@ type Config struct {
 	AllowedOrgs  []string
 	AllowedTeams []string
 	AllowAny     bool
-	// AutoCreate provisions a new Taboo account (with a personal org) for an
+	// AutoCreate provisions a new Taboo account (with a personal space) for an
 	// admitted GitHub account that is not linked yet. Default false: unlinked
 	// accounts are rejected and must be linked from an existing account first.
 	AutoCreate bool

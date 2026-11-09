@@ -57,9 +57,9 @@ export default function CliConsent({ orgs }: { orgs: Org[] }) {
       <section className="card auth-card" aria-label="命令行登录">
         <h2>命令行登录</h2>
         <p className="muted">{device ? '把终端上的代码填在这里，批准后 CLI 会拿到你的用户会话。' : '批准后浏览器会回到本机的 taboo 命令。'}</p>
-        <label>组织
+        <label>空间
           <select value={org} onChange={(e) => setOrg(e.target.value)}>
-            {orgs.map((item) => <option key={item.id} value={item.slug}>{item.name}</option>)}
+            {orgs.map((item) => <option key={item.id} value={item.slug}>{item.kind === 'personal' ? '个人' : item.name}</option>)}
           </select>
         </label>
         {device ? (

@@ -353,6 +353,38 @@ paths:
                   orgs: { type: array, items: { $ref: '#/components/schemas/OrgMembership' } }
                   totp_enabled: { type: boolean }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/orgs:
+    post:
+      tags: [orgs]
+      summary: 创建组织（个人空间不能加人；本地会话）
+      operationId: createOrganization
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 80 }
+      responses:
+        '201':
+          description: 已创建，调用者是 owner
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, name, slug, kind, role]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  slug: { type: string }
+                  kind: { type: string, enum: [organization] }
+                  role: { type: string, enum: [owner] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/orgs/{slug}/projects:
     get:
       tags: [orgs]
@@ -2079,6 +2111,7 @@ components:
         id: { type: string }
         name: { type: string }
         slug: { type: string }
+        kind: { type: string, enum: [personal, organization], description: personal 只有本人；organization 可以添加成员 }
         role: { type: string, enum: [owner, admin, developer, viewer] }
         restricted: { type: boolean }
     OrgMember:

@@ -1788,6 +1788,8 @@ export interface components {
             name: string;
             slug: string;
             /** @enum {string} */
+            kind?: "personal" | "organization";
+            /** @enum {string} */
             role: "owner" | "admin" | "developer" | "viewer";
             restricted?: boolean;
         };

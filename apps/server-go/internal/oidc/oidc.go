@@ -27,6 +27,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
+	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 )
 
 var validRoles = map[string]bool{"viewer": true, "developer": true, "admin": true, "owner": true}
@@ -184,6 +185,19 @@ func (s *Service) orgOf(w http.ResponseWriter, r *http.Request) (orgID, slug str
 	return orgID, slug, true
 }
 
+func (s *Service) personalBlocked(w http.ResponseWriter, orgID string) bool {
+	personal, err := orgsvc.IsPersonal(s.DB, orgID)
+	if err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return true
+	}
+	if personal {
+		writeErr(w, apperr.New(409, "PERSONAL_NAMESPACE", "personal spaces cannot be shared or federated"))
+		return true
+	}
+	return false
+}
+
 func manageOnly(db *sql.DB, w http.ResponseWriter, r *http.Request, orgID string) bool {
 	u := auth.From(r)
 	if u.Kind != auth.KindUser || !auth.Can(db, u, orgID, "", auth.DelegationAction(u), "") {
@@ -279,7 +293,7 @@ func boolDefault(p *bool, def bool) bool {
 
 func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
-	if !ok {
+	if !ok || s.personalBlocked(w, orgID) {
 		return
 	}
 	if !manageOnly(s.DB, w, r, orgID) {
@@ -326,7 +340,7 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
-	if !ok {
+	if !ok || s.personalBlocked(w, orgID) {
 		return
 	}
 	if !manageOnly(s.DB, w, r, orgID) {
@@ -419,7 +433,7 @@ func (s *Service) Update(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 	orgID, slug, ok := s.orgOf(w, r)
-	if !ok {
+	if !ok || s.personalBlocked(w, orgID) {
 		return
 	}
 	if !manageOnly(s.DB, w, r, orgID) {
