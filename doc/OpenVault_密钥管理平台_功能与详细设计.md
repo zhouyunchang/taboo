@@ -149,7 +149,7 @@ openvault/
 ├── web/                      # React 前端（构建产物 embed 进二进制）
 ├── migrations/               # goose 迁移脚本
 ├── deploy/                   # Dockerfile、compose、helm
-└── Makefile
+└── justfile
 ```
 
 ---

@@ -22,7 +22,7 @@ WORKDIR /repo
 COPY apps/server-go/go.mod apps/server-go/go.sum apps/server-go/
 RUN cd apps/server-go && go mod download
 COPY apps/server-go/ apps/server-go/
-# 前端产物 + API 契约拷入 embed 目录（等价 Makefile 的 web 目标）
+# 前端产物 + API 契约拷入 embed 目录（等价 `just web`）
 COPY --from=web /repo/apps/web/dist/ apps/server-go/cmd/server/web/
 COPY api/openapi.yaml apps/server-go/cmd/server/web/
 # 版本信息经 -X 注入（deploy/dev122/deploy.sh 传入；本地 docker build 缺省为 dev/unknown）

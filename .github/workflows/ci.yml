@@ -49,8 +49,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - uses: extractions/setup-just@v3
       - name: build Go server (含前端 embed)
-        run: make -C apps/server-go build
+        run: just build
       - name: start server & smoke
         run: |
           ./apps/server-go/bin/taboo-server &

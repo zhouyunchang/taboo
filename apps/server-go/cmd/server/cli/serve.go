@@ -154,7 +154,7 @@ func serveIndex(w http.ResponseWriter, dist fs.FS) {
 	b, err := fs.ReadFile(dist, "index.html")
 	if err != nil {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("taboo (禁制) API is running. Web UI not embedded yet — run `make web` first.\n"))
+		_, _ = w.Write([]byte("taboo (禁制) API is running. Web UI not embedded yet — run `just web` first.\n"))
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

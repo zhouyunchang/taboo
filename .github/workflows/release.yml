@@ -25,6 +25,8 @@ jobs:
           node-version: 22
           cache: npm
 
+      - uses: extractions/setup-just@v3
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io

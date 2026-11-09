@@ -25,13 +25,15 @@ docker compose --profile pg up -d     # 附带 PostgreSQL 16（动态密钥联�
 
 ## 本地开发
 
+需安装 [Just](https://just.systems)（`winget install Casey.Just` / `brew install just`）。
+
 ```bash
 npm ci
-npm run dev            # 前端 vite (5173)
-cd apps/server-go && make web && make run   # 后端 (:7100，embed 前端)
-
-make smoke             # 14 项契约冒烟检查
-go test ./...          # 契约漂移检查（路由 vs openapi.yaml）
+npm run dev            # 前端 vite (5173)；可另开后端
+just web && just run   # 后端 go run（:7100，embed 静态 UI）
+just build             # 前端 embed + 编译 bin/taboo-server
+just smoke             # 14 项契约冒烟检查（服务需已启动）
+(cd apps/server-go && go test ./...)  # 契约漂移检查（路由 vs openapi.yaml）
 ```
 
 ## 启动自检

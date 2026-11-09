@@ -43,7 +43,7 @@
 | `npm ci` | 通过（副作用：`apps/cli/taboo.js` 被加上可执行位，已还原） |
 | `npm run build`（web） | 通过 |
 | `tsc --noEmit` | 通过 |
-| `make -C apps/server-go build` | 通过 |
+| `just build` | 通过 |
 | `go vet` / `go test ./...`（server-go） | 通过 |
 | `go test`（sdk-go、mcp） | 通过 |
 | `node --test apps/cli/oauth.test.js` | 通过 |
@@ -369,7 +369,7 @@ npm run build
 go -C apps/server-go vet ./... && go -C apps/server-go test -race ./...
 go -C packages/sdk-go test -race ./... && go -C apps/mcp test -race ./...
 node --test apps/cli/oauth.test.js apps/cli/phase4.test.js apps/cli/phase6.test.js
-make -C apps/server-go build && (TABOO_PORT=7199 TABOO_DATA_DIR=$(mktemp -d) ./apps/server-go/bin/taboo-server &) && TABOO_BASE=http://localhost:7199 npm run smoke
+just build && (TABOO_PORT=7199 TABOO_DATA_DIR=$(mktemp -d) ./apps/server-go/bin/taboo-server &) && TABOO_BASE=http://localhost:7199 npm run smoke
 ./scripts/test-consumers.sh
 TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
 TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh

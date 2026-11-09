@@ -68,7 +68,7 @@
 
 ## 快速开始
 
-要求：Node.js ≥ 22.5（前端/CLI/workspace 管理）；默认 server 为 Go 版，另需 Go ≥ 1.22（Node 版 server 仍可通过 `npm run start:node` 使用，无需 Go）
+要求：Node.js ≥ 22.5（前端/CLI/workspace 管理）；[Just](https://just.systems)（构建入口，`winget install Casey.Just` / `brew install just`）；默认 server 为 Go 版，另需 Go ≥ 1.22（Node 版 server 仍可通过 `npm run start:node` 使用，无需 Go）
 
 ```bash
 npm install                       # 安装全部 workspace 依赖（一次即可）
@@ -121,6 +121,7 @@ npm run smoke
 ```
 taboo/                       # 根 workspace（private）
 ├── package.json             # workspaces: ["apps/*"] + 统一脚本
+├── justfile                 # 构建/运行入口（just build / start / web / smoke）
 ├── doc/                     # 设计文档（OpenVault 功能与详细设计）
 ├── apps/
 │   ├── server/              # @taboo/server — API 服务（Node MVP，契约参考实现）
@@ -141,7 +142,7 @@ taboo/                       # 根 workspace（private）
 
 ```bash
 npm install          # 一次安装全部 workspace 依赖（提升到根 node_modules）
-npm start            # = Go server（默认）：make build（含前端 embed）后运行 bin/taboo-server，起 API + 托管 web/dist（:7100）
+npm start            # = just start：前端 embed + 编译后运行 bin/taboo-server（:7100）
 npm run start:node   # Node 版 server 启动（apps/server）
 npm run dev          # 全栈开发模式：Go server（go run, :7100）+ web（Vite, :5173）同时启动，Ctrl-C 一起退出
 npm run dev:server   # 只起 Go server 开发模式（go run ./cmd/server）

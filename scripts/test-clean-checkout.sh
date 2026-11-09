@@ -18,7 +18,7 @@ for module in apps/server-go packages/sdk-go apps/mcp; do
  go -C "$module" vet ./...
 done
 node --test apps/cli/oauth.test.js
-make -C apps/server-go build
+just build
 mkdir -p "$checkout/data"
 TABOO_DATA_DIR="$checkout/data" TABOO_PORT=17112 TABOO_LOGIN_RATE_LIMIT=10000 ./apps/server-go/bin/taboo-server >"$checkout/server.log" 2>&1 &
 server_pid=$!

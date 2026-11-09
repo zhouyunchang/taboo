@@ -35,7 +35,7 @@ worker 使用有期限的租约和完成时的 token 比较，允许故障恢复
 
 先停止全部服务器与 worker，保存数据库、原主密钥、JWT 配置和审计导出文件目录。SQLite 使用 `taboo-server backup NEW_DIRECTORY`，目标中已存在数据库时拒绝覆盖；PostgreSQL 使用由运维管理的 `pg_dump`/`pg_restore`。凭据通过环境或安全配置传递，不放在命令参数、日志或仓库中。
 
-构建：`make -C apps/server-go build`，生成 `taboo-server`（含 `migrate` 子命令）。
+构建：`just build`，生成 `taboo-server`（含 `migrate` 子命令）。
 
 1. `taboo-server migrate verify --data-dir BACKUP_DIRECTORY`：用原主密钥验证所有持久化密文可恢复，不改写密文。
 2. `taboo-server migrate envelopes --data-dir DATA_DIRECTORY`：验证并报告旧格式数量。

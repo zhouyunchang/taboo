@@ -6,7 +6,7 @@ project_name: taboo
 before:
   hooks:
     - npm ci --no-audit --no-fund
-    - make -C apps/server-go web
+    - just web
 
 builds:
   - id: taboo-server
