@@ -16,7 +16,6 @@ export default function Login({ onSuccess }: Props) {
   const [password, setPassword] = useState('');
   const [challenge, setChallenge] = useState('');
   const [code, setCode] = useState('');
-  const [orgSlug, setOrgSlug] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [sources, setSources] = useState<AuthSource[]>([]);
@@ -167,20 +166,6 @@ export default function Login({ onSuccess }: Props) {
         {!showPassword && error && <div className="error" role="alert">{error}</div>}
         {!passwordEnabled && sources.length === 0 && !githubEnabled && (
           <p className="muted">未配置外部用户源，且已关闭密码登录。请联系管理员配置身份连接。</p>
-        )}
-
-        {mode === 'login' && passwordEnabled && (
-          <details className="sso-advanced">
-            <summary className="muted">组织 SSO（未在登录页公开的 IdP）</summary>
-            <label>
-              组织 Slug
-              <input value={orgSlug} onChange={(e) => setOrgSlug(e.target.value)} placeholder="my-org" />
-            </label>
-            <button type="button" className="ghost" disabled={!orgSlug}
-              onClick={() => { window.location.href = `/api/v1/auth/oidc/${encodeURIComponent(orgSlug)}/login`; }}>
-              使用组织 SSO 登录
-            </button>
-          </details>
         )}
 
         {showRegisterToggle && (
