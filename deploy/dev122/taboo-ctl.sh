@@ -119,7 +119,7 @@ cmd_restore_drill() { # [BACKUP]
     # Decrypt every envelope with the master key from the backup set itself.
     if docker run --rm --network swetcc --env-file "$b/env" -e TABOO_DATABASE_URL="$url" -e TABOO_DATABASE_RUNTIME_ROLE=taboo_runtime \
          -v "$PG_CA:/etc/taboo/pg-ca.crt:ro" \
-         --entrypoint taboo-migrate "$tag" verify; then echo "envelope verify: OK"; else echo "envelope verify: FAILED"; rc=1; fi
+         "$tag" migrate verify; then echo "envelope verify: OK"; else echo "envelope verify: FAILED"; rc=1; fi
     docker run -d --name taboo-restore-drill --network swetcc --env-file "$b/env" -e TABOO_DATABASE_URL="$url" \
       -e TABOO_DATABASE_RUNTIME_ROLE=taboo_runtime -e TABOO_PORT=7100 -e TABOO_DATA_DIR=/tmp \
       -v "$PG_CA:/etc/taboo/pg-ca.crt:ro" -p 127.0.0.1:7198:7100 "$tag" >/dev/null

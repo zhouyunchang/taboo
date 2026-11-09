@@ -31,8 +31,7 @@ ARG TABOO_COMMIT=unknown
 ARG BUILD_TIME=
 RUN cd apps/server-go && BI=github.com/zhouyunchang/taboo/apps/server-go/internal/buildinfo \
     && LDF="-s -w -X $BI.version=${TABOO_VERSION} -X $BI.commit=${TABOO_COMMIT} -X $BI.buildTime=${BUILD_TIME}" \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="$LDF" -o /out/taboo-server ./cmd/server \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="$LDF" -o /out/taboo-migrate ./cmd/taboo-migrate
+    && CGO_ENABLED=0 go build -trimpath -ldflags="$LDF" -o /out/taboo-server ./cmd/server
 
 # ---- 阶段 3：运行时 ----
 FROM alpine:3.21
@@ -47,7 +46,7 @@ LABEL org.opencontainers.image.title="taboo" \
 RUN apk add --no-cache curl \
     && adduser -D -u 10001 taboo \
     && mkdir -p /data && chown taboo:taboo /data
-COPY --from=server /out/taboo-server /out/taboo-migrate /usr/local/bin/
+COPY --from=server /out/taboo-server /usr/local/bin/
 ENV TABOO_PORT=7100 \
     TABOO_DATA_DIR=/data \
     TABOO_CORS_ORIGIN=*

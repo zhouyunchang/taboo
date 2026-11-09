@@ -9,7 +9,7 @@
 ### 0.1 产品与架构
 
 - taboo（禁制）：开源自部署密钥管理平台（Infisical / Vault 轻量替代），MIT。
-- 后端：Go 1.27 模块化单体 `apps/server-go`（chi、`modernc.org/sqlite` 或 PostgreSQL 18 + FORCE RLS、`lib/pq`），前端经 `embed.FS` 打进单二进制；附带 `taboo-migrate`（verify / envelopes / import-sqlite）。
+- 后端：Go 1.27 模块化单体 `apps/server-go`（chi、`modernc.org/sqlite` 或 PostgreSQL 18 + FORCE RLS、`lib/pq`），前端经 `embed.FS` 打进单二进制；运维命令经 `taboo-server migrate`（verify / envelopes / import-sqlite）。
 - 前端：React 19 + TS + Vite（`apps/web`），中文管理台，深色主题（`DESIGN.md`、`UX-CONTRACT.md`）。
 - 其他：Node CLI（`apps/cli`，含 151 条规则 scan）、MCP Server（`apps/mcp`，Go）、Go SDK（`packages/sdk-go`）、OpenAPI 3.1 契约（`api/openapi.yaml`，62 个路径，路由漂移测试）、Node MVP 参考后端（`apps/server`，仅作契约回归）。
 - 部署工具：`apps/server-go/Dockerfile`（多阶段源码构建）、`deploy/Dockerfile.release`（GoReleaser 用）、`docker-compose.yml`（SQLite 单容器）、`deploy/compose.postgres.yml` + `deploy/postgres/initialize.sh`（PG 18 control/runtime 角色）、Helm chart `deploy/helm/taboo`、`.goreleaser.yaml`（多平台、cosign、SBOM）、GitHub Actions `ci.yml`（8 个 job）/ `release.yml`。
@@ -153,7 +153,7 @@
 任务：
 1. `deploy/dev122/deploy.sh` 完善：参数 `--image`/`--rollback`；升级前自动停机备份（`pg_dump` + `/data` + 记录镜像 ID），按 `docs/runbooks/standard-federation-release.zh-CN.md` 顺序执行；保留最近 N 份。
 2. 版本可见：`/api/v1/healthz` 或新端点返回 `version`/`commit`（Dockerfile 注入 `-X main.version`），前端页脚显示；OpenAPI 同步更新并通过漂移测试。
-3. 备份恢复演练：在 dev122 临时库 `taboo_restore_test` 恢复最新 dump + 原根密钥，用 `taboo-migrate verify` 校验，演练结果写入 runbook。
+3. 备份恢复演练：在 dev122 临时库 `taboo_restore_test` 恢复最新 dump + 原根密钥，用 `taboo-server migrate verify` 校验，演练结果写入 runbook。
 4. 定时备份：dev122 cron 或 systemd timer 每日 `pg_dump`，保留 7 份。
 5. 本机脚本 `scripts/verify-all.sh`：串起 §通用验证 全部命令，输出汇总。
 6. 可选：Woodpecker（`ci-dev122`）流水线，在 `develop` push 时构建 amd64 镜像并推本地 registry（需用户确认是否启用及仓库授权）。
@@ -171,7 +171,7 @@
 | dev122 升级 | `taboo:dev-c4cfe39` → `taboo:dev-d7093f4`，升级前备份 `20261031-144553-pre-upgrade` |
 | 回滚演练 | 升级 → 冒烟 15/15 → 回滚到 c4cfe39 → 冒烟 15/15（SQL 兜底启停账号）→ 再升级 d7093f4 → 冒烟 15/15；`releases.log` 记录 baseline/upgrade/rollback/upgrade |
 | 浏览器检查 | `scripts/browser-check.mjs` 经 HTTPS 对 dev122：1280 与 390 均通过（版本显示、更新时间为 Asia/Shanghai 本地时间、无横向溢出、操作按钮完整可见） |
-| 恢复演练 | `20261031-144859-pre-upgrade` → `taboo_restore_test`：39 表 154 行一致，`taboo-migrate verify` 通过，临时实例 readyz OK，PASS（见 `docs/runbooks/dev122-operations.zh-CN.md`） |
+| 恢复演练 | `20261031-144859-pre-upgrade` → `taboo_restore_test`：39 表 154 行一致，`taboo-server migrate verify` 通过，临时实例 readyz OK，PASS（见 `docs/runbooks/dev122-operations.zh-CN.md`） |
 | 定时器 | `taboo-backup.timer` 每日 03:30（保留 7 份），`taboo-restore-drill.timer` 每周日 04:15；已手动触发一次 daily 备份成功 |
 | 遗留账号 | `smoke-1793427846712@taboo.dev` 已禁用（未删除） |
 

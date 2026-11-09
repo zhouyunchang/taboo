@@ -17,7 +17,7 @@
 | KTI-08 | 实际 SDK、CLI、MCP 标准 OAuth 与本地流程；配置隔离、内存缓存、拒绝错误目标/凭据/scope；SDK/CLI/UI 幂等与版本前置条件 |
 | KTI-09 | verify/envelopes/import-sqlite；计数/关联/密文与审计链核验；双身份证明替换；旧公开版本容器升级和原根材料恢复 |
 | KTI-10 | Go race/vet、前端类型/构建、Keycloak、PG、真实消费者及包装 CI job；全部使用公共依赖和临时凭据，无闭源服务前置 |
-| KTI-11 | Docker 同时交付 server/migrate；PG Compose、Helm 外部 Secret/身份配置、多副本存储限制；快速开始、停写升级与回退手册 |
+| KTI-11 | Docker 交付单一 `taboo-server`（含 migrate 子命令）；PG Compose、Helm 外部 Secret/身份配置、多副本存储限制；快速开始、停写升级与回退手册 |
 
 ## 验证及范围
 
@@ -27,7 +27,7 @@
 - 真实消费者分别覆盖严格 JWT、opaque 内省、本地身份。SDK 和 CLI 同请求重放不新增版本；错误版本拒绝；MCP 默认不返回明文。
 - 构建公开 Docker 镜像后，全新安装、停机备份恢复、重启后原版本解密通过；错误或缺失 root 拒绝，未生成替代 root。固定公开基线 `d5724d32f4d5828ee89734be6e6223a992ec74b8` 建立数据后升级到 schema 15，秘密和版本保持。PG Compose 新建/写入/重启/解密通过。
 - 干净 checkout（只复制已提交文件）重新安装依赖、生成契约无漂移、类型检查、全部 Go 模块 race/vet、二进制构建、14 项旧模式冒烟和真实消费者均通过。已修复原有未跟踪 embed 目录导致首次编译失败的问题。
-- GoReleaser 2.18.0 配置检查与不发布快照通过；8 个 server/migrate 二进制、4 个跨平台压缩包包含恢复手册。专用发布镜像通过安装/重启/恢复测试。未执行远端上传、SBOM 生成或 OIDC 签名；公开 CI 已加入配置与快照检查，tag 流水线安装 syft 并分别签署校验和/镜像 digest。
+- GoReleaser 2.18.0 配置检查与不发布快照通过；4 个 `taboo-server` 二进制（linux/darwin × amd64/arm64）、4 个跨平台压缩包包含恢复手册。专用发布镜像通过安装/重启/恢复测试。未执行远端上传、SBOM 生成或 OIDC 签名；公开 CI 已加入配置与快照检查，tag 流水线安装 syft 并分别签署校验和/镜像 digest。
 - Helm lint 与 SQLite/PG/可选联邦配置渲染通过，拒绝 SQLite 多副本、缺少 DSN Secret、PG 多副本未共享导出卷。此项是模板验收，没有创建生产 Kubernetes 工作负载。
 
 复现命令见 [发行运行手册](../runbooks/standard-federation-release.zh-CN.md)。GitHub Actions 定义已包含这些独立必需 job；本记录不把本地通过称作远端 CI 成功。远端 push、PR、发布 tag 与真实租户切换分别记录。

@@ -83,7 +83,7 @@ ssh dev122-root $T install-timers            # (re)install systemd timers
 ```
 
 The drill checks SHA256SUMS, restores into `taboo_restore_test`, compares per-table row
-counts with `counts.tsv`, decrypts every envelope with `taboo-migrate verify` using the
+counts with `counts.tsv`, decrypts every envelope with `taboo-server migrate verify` using the
 backup's own master key, starts a throwaway server on `127.0.0.1:7198` against it and
 waits for `readyz`, then drops the temporary database. A log is written next to the backup.
 

@@ -17,7 +17,6 @@ LDFLAGS       := -X $(BI_PKG).version=$(TABOO_VERSION) -X $(BI_PKG).commit=$(TAB
 
 build: web
 	go build -ldflags "$(LDFLAGS)" -o bin/taboo-server ./cmd/server
-	go build -ldflags "$(LDFLAGS)" -o bin/taboo-migrate ./cmd/taboo-migrate
 
 version:
 	@echo "$(TABOO_VERSION) $(TABOO_COMMIT)"

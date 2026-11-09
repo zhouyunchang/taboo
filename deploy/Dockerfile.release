@@ -1,9 +1,9 @@
-# GoReleaser supplies the two already-built Linux binaries in its build context.
+# GoReleaser supplies the already-built Linux taboo-server binary in its build context.
 FROM alpine:3.21
 RUN apk add --no-cache curl \
     && adduser -D -u 10001 taboo \
     && mkdir -p /data && chown taboo:taboo /data
-COPY taboo-server taboo-migrate /usr/local/bin/
+COPY taboo-server /usr/local/bin/
 ENV TABOO_PORT=7100 TABOO_DATA_DIR=/data TABOO_CORS_ORIGIN=*
 VOLUME ["/data"]
 EXPOSE 7100

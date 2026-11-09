@@ -4,7 +4,7 @@
 
 ## 部署和引导
 
-参照 [快速开始](../quickstart.md) 与 [Helm 参数](../../deploy/helm/taboo/README.md)。镜像包含 `taboo-server` 和 `taboo-migrate`；二进制发行包同时包含两者。应用的 control DB 登录必须 NOSUPERUSER/NOBYPASSRLS，独立 runtime 角色必须 NOLOGIN/NOSUPERUSER/NOBYPASSRLS；不允许 runtime 继承 control。应用验证这些条件后才启动。
+参照 [快速开始](../quickstart.md) 与 [Helm 参数](../../deploy/helm/taboo/README.md)。镜像与二进制发行包交付单一 `taboo-server`（含 `migrate` 运维子命令）。应用的 control DB 登录必须 NOSUPERUSER/NOBYPASSRLS，独立 runtime 角色必须 NOLOGIN/NOSUPERUSER/NOBYPASSRLS；不允许 runtime 继承 control。应用验证这些条件后才启动。
 
 保存原始主密钥、JWT 签名材料、数据库、审计导出目录。PG 所有实例显式使用相同根材料；多副本共享导出目录（Helm 使用 ReadWriteMany）。不要跨版本混跑 worker。SQLite 使用单副本/Recreate；数据库迁移期间先停写再升级。
 
@@ -16,9 +16,9 @@
 
 1. 停止所有应用实例和 worker，记录正在回收的动态数据库账号；保留其引擎配置和后台任务，不能因切换登录而丢弃回收责任。
 2. 复制停机 SQLite 数据目录，或由 DBA 执行一致的 PostgreSQL `pg_dump`。独立保存原始根材料和导出文件目录。恢复旧版本必须使用与其 schema 对应的原备份，不能让旧程序打开 schema 15。
-3. 在隔离副本上执行 `taboo-migrate verify -data-dir COPY`。该命令打开数据库会进行 schema 迁移；“verify”只保证不改写密文，不代表 schema 只读。缺失/错误根密钥必须失败，已有数据库不会生成替代根密钥。
-4. `taboo-migrate envelopes -data-dir COPY` 先报告旧密文数量，再使用 `-apply` 原子升级。失败不部分改写；成功清除临时浏览器会话，要求重新登录。原组织/用户/项目/秘密 ID 不变。
-5. 如需 SQLite → PG，设置目标 DSN/runtime 角色和原 `TABOO_MASTER_KEY`，执行 `taboo-migrate import-sqlite -source COPY -data-dir KEY_DIRECTORY`。目标业务表必须为空；逐表计数、关联及密文保持，浏览器会话不复制。再执行 `verify` 并核对审计链。
+3. 在隔离副本上执行 `taboo-server migrate verify --data-dir COPY`。该命令打开数据库会进行 schema 迁移；“verify”只保证不改写密文，不代表 schema 只读。缺失/错误根密钥必须失败，已有数据库不会生成替代根密钥。
+4. `taboo-server migrate envelopes --data-dir COPY` 先报告旧密文数量，再使用 `--apply` 原子升级。失败不部分改写；成功清除临时浏览器会话，要求重新登录。原组织/用户/项目/秘密 ID 不变。
+5. 如需 SQLite → PG，设置目标 DSN/runtime 角色和原 `TABOO_MASTER_KEY`，执行 `taboo-server migrate import-sqlite --source COPY --data-dir KEY_DIRECTORY`。目标业务表必须为空；逐表计数、关联及密文保持，浏览器会话不复制。再执行 `migrate verify` 并核对审计链。
 6. schema 15 引入投递顺序和 worker 租约。没有顺序号的历史 outbox 任务进入可诊断的 dead 状态；确认旧队列后，从同步目标“全量重推”生成当前状态任务。不会猜测时间戳顺序或重放过期秘密覆盖新值。
 7. 启动新版本，验证 readiness、原秘密解密、审计链、组织隔离、每种实际使用的客户端与身份连接，然后开放写入。审计导出须保留原文件路径或重新生成。
 
@@ -62,4 +62,4 @@ node scripts/test-container-recovery.mjs
 测试只使用公开临时夹具，不需真实租户或秘密。Docker、网络依赖和可用端口是前置；必要套件失败或缺少工具应失败，不能当作通过。普通 Go 单测会注明真实 OP/PG/消费者测试未启用，CI 中上述专用 job 显式启用。
 
 
-发行流水线用 GoReleaser 2.18.0 生成含 server/migrate 的 Linux、macOS（amd64/arm64）压缩包；发布镜像当前为 Linux amd64，从已编译二进制的专用 Dockerfile 打包。直接从源码构建的主 Dockerfile 仍由宿主目标平台决定架构。公共 CI 验证配置和不发布快照；tag 发布需 GHCR 登录、syft 与 GitHub OIDC 签名权限。校验和使用 cosign sign-blob，容器使用 digest 签名；这两类签名不能混用。配置依据 [GoReleaser 制品签名](https://goreleaser.com/customization/sign/sign/) 和 [容器签名](https://goreleaser.com/customization/sign/docker_sign/)。本次未执行上传、远端签名或 tag 发布。
+发行流水线用 GoReleaser 2.18.0 生成含 `taboo-server` 的 Linux、macOS（amd64/arm64）压缩包；发布镜像当前为 Linux amd64，从已编译二进制的专用 Dockerfile 打包。直接从源码构建的主 Dockerfile 仍由宿主目标平台决定架构。公共 CI 验证配置和不发布快照；tag 发布需 GHCR 登录、syft 与 GitHub OIDC 签名权限。校验和使用 cosign sign-blob，容器使用 digest 签名；这两类签名不能混用。配置依据 [GoReleaser 制品签名](https://goreleaser.com/customization/sign/sign/) 和 [容器签名](https://goreleaser.com/customization/sign/docker_sign/)。本次未执行上传、远端签名或 tag 发布。

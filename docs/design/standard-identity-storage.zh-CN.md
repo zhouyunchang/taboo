@@ -35,12 +35,12 @@ worker 使用有期限的租约和完成时的 token 比较，允许故障恢复
 
 先停止全部服务器与 worker，保存数据库、原主密钥、JWT 配置和审计导出文件目录。SQLite 使用 `taboo-server backup NEW_DIRECTORY`，目标中已存在数据库时拒绝覆盖；PostgreSQL 使用由运维管理的 `pg_dump`/`pg_restore`。凭据通过环境或安全配置传递，不放在命令参数、日志或仓库中。
 
-构建：`make -C apps/server-go build`，同时生成 `taboo-server` 和 `taboo-migrate`。
+构建：`make -C apps/server-go build`，生成 `taboo-server`（含 `migrate` 子命令）。
 
-1. `taboo-migrate verify -data-dir BACKUP_DIRECTORY`：用原主密钥验证所有持久化密文可恢复，不改写密文。
-2. `taboo-migrate envelopes -data-dir DATA_DIRECTORY`：验证并报告旧格式数量。
-3. `taboo-migrate envelopes -data-dir DATA_DIRECTORY -apply`：原子升级；任何损坏或错误主密钥使整个升级回滚。升级清除浏览器登录流程及会话，用户须重新登录。重复执行不重复加密。
-4. SQLite → PostgreSQL：先对停止服务后的 SQLite 副本做备份；设置目标 `TABOO_DATABASE_URL`、`TABOO_DATABASE_RUNTIME_ROLE` 和原 `TABOO_MASTER_KEY`，执行 `taboo-migrate import-sqlite -source SOURCE_COPY -data-dir KEY_DIRECTORY`。目标业务表必须全部为空，稳定 ID、密文、审计链与幂等收据原样复制，并逐表核对数量。浏览器临时会话不复制。
+1. `taboo-server migrate verify --data-dir BACKUP_DIRECTORY`：用原主密钥验证所有持久化密文可恢复，不改写密文。
+2. `taboo-server migrate envelopes --data-dir DATA_DIRECTORY`：验证并报告旧格式数量。
+3. `taboo-server migrate envelopes --data-dir DATA_DIRECTORY --apply`：原子升级；任何损坏或错误主密钥使整个升级回滚。升级清除浏览器登录流程及会话，用户须重新登录。重复执行不重复加密。
+4. SQLite → PostgreSQL：先对停止服务后的 SQLite 副本做备份；设置目标 `TABOO_DATABASE_URL`、`TABOO_DATABASE_RUNTIME_ROLE` 和原 `TABOO_MASTER_KEY`，执行 `taboo-server migrate import-sqlite --source SOURCE_COPY --data-dir KEY_DIRECTORY`。目标业务表必须全部为空，稳定 ID、密文、审计链与幂等收据原样复制，并逐表核对数量。浏览器临时会话不复制。
 5. 对目标执行 `verify`；完成组织、密钥、审计及消费者验收后才切换连接配置。审计导出文件需复制到相同配置的数据目录，或重新生成导出。
 6. 回滚：保持服务停止，恢复原数据库副本和匹配主密钥、原连接配置与版本。切换后发生的新写入不得直接丢弃；需要另行安排停写窗口和数据回收。旧二进制不支持 schema 11，不直接打开升级后的库。
 

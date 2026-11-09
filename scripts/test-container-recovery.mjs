@@ -29,8 +29,8 @@ try{
  docker('run','--rm','--user','0','--entrypoint','sh','-v',`${volume}:/source:ro`,'-v',`${backup}:/backup`,image,'-c','cp -a /source/. /backup/');
  await start(volume);assert.equal((await request(`/projects/${pid}/secrets/RECOVER?env=dev`)).value,'public-recovery-fixture');stop();
  await start(backup);const restored=await request(`/projects/${pid}/secrets/RECOVER?env=dev`);assert.equal(restored.value,'public-recovery-fixture');assert.equal(restored.version,1);stop();
- const verify=JSON.parse(docker('run','--rm','--entrypoint','taboo-migrate','-v',`${backup}:/data`,image,'verify','-data-dir','/data'));assert.equal(verify.verified,true);
- assert.throws(()=>docker('run','--rm','--entrypoint','taboo-migrate','-e',`TABOO_MASTER_KEY=${'01'.repeat(32)}`,'-v',`${backup}:/data`,image,'verify','-data-dir','/data'));
+ const verify=JSON.parse(docker('run','--rm','-v',`${backup}:/data`,image,'migrate','verify','--data-dir','/data'));assert.equal(verify.verified,true);
+ assert.throws(()=>docker('run','--rm','-e',`TABOO_MASTER_KEY=${'01'.repeat(32)}`,'-v',`${backup}:/data`,image,'migrate','verify','--data-dir','/data'));
  docker('run','--rm','--entrypoint','sh','-v',`${backup}:/data`,image,'-c','rm /data/master.key');
  assert.throws(()=>docker('run','--rm','-e','TABOO_JWT_SECRET=fixture','-v',`${backup}:/data`,image,'--check'));
  assert.equal(docker('run','--rm','--entrypoint','sh','-v',`${backup}:/data`,image,'-c','test ! -f /data/master.key && echo absent'),'absent');

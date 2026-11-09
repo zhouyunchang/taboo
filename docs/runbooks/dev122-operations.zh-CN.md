@@ -82,7 +82,7 @@ ssh dev122-root $D/taboo-ctl.sh restore backups/<dir> --yes     # 真正恢复�
 ```
 
 - **restore-drill**：校验 SHA256 → 新建临时库 `taboo_restore_test`（owner `taboo_control`）→ pg_restore → 对比各表行数 →
-  用备份自带的根密钥运行 `taboo-migrate verify`（解密全部信封）→ 以临时容器 `taboo-restore-drill`（127.0.0.1:7198）启动并检查 readyz →
+  用备份自带的根密钥运行 `taboo-server migrate verify`（解密全部信封）→ 以临时容器 `taboo-restore-drill`（127.0.0.1:7198）启动并检查 readyz →
   记录迁移后的 schema 版本 → 日志写到备份目录 `restore-drill-*.log`，退出时删除临时库和容器。
 - **restore**：确认当前根密钥与备份一致 → 先做 `pre-restore` 备份 → 停止 taboo → `pg_restore --clean --if-exists --single-transaction` →
   启动并对比行数。只操作 `taboo` 库，不动共享 postgres 的其他库。
@@ -91,7 +91,7 @@ ssh dev122-root $D/taboo-ctl.sh restore backups/<dir> --yes     # 真正恢复�
 
 | 日期 | 备份 | 结果 |
 |---|---|---|
-| 2026-10-31 14:49 CST | `20261031-144859-pre-upgrade` | PASS：39 张表 154 行一致；`taboo-migrate verify` verified=true、legacy 0；临时实例 readyz OK（d7093f4）；临时库已删除 |
+| 2026-10-31 14:49 CST | `20261031-144859-pre-upgrade` | PASS：39 张表 154 行一致；`taboo-migrate verify`（现为 `taboo-server migrate verify`）verified=true、legacy 0；临时实例 readyz OK（d7093f4）；临时库已删除 |
 | 2026-11-01 10:49 CST | `20261101-104636-pre-upgrade`（schema 15） | PASS：39 张表 3807 行一致；verify verified=true、legacy 0；临时实例（967bdbd）readyz OK，并把恢复出的库迁移到 schema 16；临时库已删除 |
 | 2026-11-01 11:55 CST | `20261101-115152-pre-upgrade`（schema 16） | PASS：40 表 4158 行一致，迁移后 schema 17 |
 | 2026-11-01 约 13:00 CST | `20261101-125433-pre-upgrade`（schema 17） | PASS：41 表 4450 行一致，信封校验 OK，迁移后 schema 18 |
