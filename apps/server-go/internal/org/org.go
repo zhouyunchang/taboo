@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/pathcode"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 )
@@ -79,6 +81,8 @@ func (s *Service) PublicRoutes(r chi.Router) {
 
 func (s *Service) Routes(r chi.Router) {
 	r.Get("/me", s.Me)
+	r.Patch("/me/handle", s.UpdateHandle)
+	r.Post("/me/handle/confirm", s.ConfirmHandle)
 	r.Post("/orgs", s.CreateOrganization)
 	r.Post("/invites/{token}/accept", s.AcceptInvite)
 	r.Route("/orgs/{slug}", func(r chi.Router) {
@@ -177,7 +181,14 @@ func CreateLocalUser(tx *sql.Tx, masterKey []byte, email, name, passwordHash str
 		userID, email, name, passwordHash); err != nil {
 		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
 	}
-	orgID, slug, aerr := provisionTenant(tx, masterKey, personalLabel(name, email), slugify(strings.Split(email, "@")[0]), KindPersonal, userID)
+	code, err := userHandle(tx, userID, email)
+	if err != nil {
+		if errors.Is(err, pathcode.ErrTaken) || errors.Is(err, pathcode.ErrInvalid) {
+			return NewLocalUser{}, apperr.New(409, "CODE_TAKEN", "this code is already used")
+		}
+		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
+	}
+	orgID, slug, aerr := provisionTenant(tx, masterKey, personalLabel(name, email), code, KindPersonal, userID)
 	if aerr != nil {
 		return NewLocalUser{}, aerr
 	}
@@ -336,7 +347,132 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	orgs = visible
-	writeJSON(w, 200, map[string]any{"user": u, "orgs": orgs, "totp_enabled": totpEnabledOf(s.DB, u.ID)})
+	handle, confirmed := handleOf(s.DB, u.ID)
+	writeJSON(w, 200, map[string]any{"user": meUser{Actor: *u, Handle: handle, HandleConfirmed: confirmed}, "orgs": orgs, "totp_enabled": totpEnabledOf(s.DB, u.ID)})
+}
+
+type meUser struct {
+	auth.Actor
+	Handle          string `json:"handle"`
+	HandleConfirmed bool   `json:"handle_confirmed"`
+}
+
+func handleOf(db *sql.DB, userID string) (string, bool) {
+	var handle string
+	var confirmed int
+	if err := db.QueryRow(`SELECT COALESCE(handle,''), COALESCE(handle_confirmed,0) FROM users WHERE id=?`, userID).Scan(&handle, &confirmed); err != nil {
+		return "", false
+	}
+	return handle, confirmed == 1
+}
+
+func (s *Service) UpdateHandle(w http.ResponseWriter, r *http.Request) {
+	u := auth.From(r)
+	if u == nil || u.Kind != auth.KindUser {
+		writeErr(w, apperr.Forbidden)
+		return
+	}
+	var b struct {
+		Handle string `json:"handle"`
+	}
+	if jsonDecode(r, &b) != nil {
+		writeErr(w, apperr.InvalidInput)
+		return
+	}
+	code := strings.ToLower(strings.TrimSpace(b.Handle))
+	if !pathcode.Valid(code) {
+		writeErr(w, apperr.New(400, "INVALID_CODE", "code must be 1-39 lowercase letters, digits, or inner hyphens"))
+		return
+	}
+	tx, started := auth.BeginMutation(s.controlDB(), w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
+	var current string
+	var confirmed int
+	if err := tx.QueryRow(`SELECT COALESCE(handle,''), COALESCE(handle_confirmed,0) FROM users WHERE id=?`, u.ID).Scan(&current, &confirmed); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if confirmed == 1 {
+		writeErr(w, apperr.New(409, "HANDLE_LOCKED", "the username is confirmed and can no longer change"))
+		return
+	}
+	if current != code {
+		if err := pathcode.Claim(tx, code, pathcode.KindUser, u.ID); err != nil {
+			if errors.Is(err, pathcode.ErrTaken) {
+				writeErr(w, apperr.New(409, "CODE_TAKEN", "this code is already used"))
+				return
+			}
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		if _, err := tx.Exec(`UPDATE users SET handle=? WHERE id=?`, code, u.ID); err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		if _, err := tx.Exec(`UPDATE orgs SET slug=? WHERE kind='personal' AND owner_user_id=?`, code, u.ID); err != nil {
+			if isUnique(err) {
+				writeErr(w, apperr.New(409, "CODE_TAKEN", "this code is already used"))
+				return
+			}
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		if current != "" {
+			if err := pathcode.Release(tx, current); err != nil {
+				writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+				return
+			}
+		}
+	}
+	orgID := personalOrgID(tx, u.ID)
+	if !auth.CommitMutation(tx, w, r, orgID, u, "user.handle", "user/"+u.ID, map[string]any{"handle": code}) {
+		return
+	}
+	writeJSON(w, 200, map[string]any{"handle": code, "handle_confirmed": false})
+}
+
+func (s *Service) ConfirmHandle(w http.ResponseWriter, r *http.Request) {
+	u := auth.From(r)
+	if u == nil || u.Kind != auth.KindUser {
+		writeErr(w, apperr.Forbidden)
+		return
+	}
+	tx, started := auth.BeginMutation(s.controlDB(), w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
+	var handle string
+	var confirmed int
+	if err := tx.QueryRow(`SELECT COALESCE(handle,''), COALESCE(handle_confirmed,0) FROM users WHERE id=?`, u.ID).Scan(&handle, &confirmed); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if handle == "" || !pathcode.Valid(handle) {
+		writeErr(w, apperr.New(400, "INVALID_CODE", "choose a username before confirming it"))
+		return
+	}
+	if confirmed == 0 {
+		if _, err := tx.Exec(`UPDATE users SET handle_confirmed=1 WHERE id=?`, u.ID); err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		if !auth.CommitMutation(tx, w, r, personalOrgID(tx, u.ID), u, "user.handle.confirm", "user/"+u.ID, map[string]any{"handle": handle}) {
+			return
+		}
+	}
+	writeJSON(w, 200, map[string]any{"handle": handle, "handle_confirmed": true})
+}
+
+func personalOrgID(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, userID string) string {
+	var id string
+	_ = q.QueryRow(`SELECT id FROM orgs WHERE kind='personal' AND owner_user_id=?`, userID).Scan(&id)
+	return id
 }
 
 func totpEnabledOf(db *sql.DB, userID string) bool {
@@ -406,19 +542,30 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var b struct {
 		Name string `json:"name"`
+		Code string `json:"code"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if strings.TrimSpace(b.Name) == "" {
 		writeErr(w, apperr.InvalidInput)
 		return
 	}
-	slug := slugify(b.Name)
-	for {
-		var x string
-		if err := s.DB.QueryRow(`SELECT id FROM projects WHERE org_id = ? AND slug = ?`, orgID, slug).Scan(&x); err != nil {
-			break
-		}
-		slug += "-" + tc.NewID()[:4]
+	slug := strings.ToLower(strings.TrimSpace(b.Code))
+	if slug == "" {
+		slug = slugify(b.Name)
+	}
+	if !pathcode.ValidToken(slug) {
+		writeErr(w, apperr.New(400, "INVALID_CODE", "project code must be 1-39 lowercase letters, digits, or inner hyphens"))
+		return
+	}
+	var existing string
+	err := s.DB.QueryRow(`SELECT id FROM projects WHERE org_id = ? AND slug = ?`, orgID, slug).Scan(&existing)
+	if err == nil {
+		writeErr(w, apperr.New(409, "CODE_TAKEN", "this project code is already used"))
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
 	}
 	tx, started := auth.BeginMutation(s.DB, w, r)
 	if !started {

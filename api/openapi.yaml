@@ -353,6 +353,54 @@ paths:
                   orgs: { type: array, items: { $ref: '#/components/schemas/OrgMembership' } }
                   totp_enabled: { type: boolean }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/me/handle:
+    patch:
+      tags: [orgs]
+      summary: 确认前修改用户名
+      operationId: updateHandle
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle]
+              properties:
+                handle: { type: string, maxLength: 39 }
+      responses:
+        '200':
+          description: 已改名，仍可再次修改
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handle, handle_confirmed]
+                properties:
+                  handle: { type: string }
+                  handle_confirmed: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/me/handle/confirm:
+    post:
+      tags: [orgs]
+      summary: 确认用户名。确认后不能再改
+      operationId: confirmHandle
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      responses:
+        '200':
+          description: 用户名已锁定
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handle, handle_confirmed]
+                properties:
+                  handle: { type: string }
+                  handle_confirmed: { type: boolean, enum: [true] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /api/v1/orgs:
     post:
       tags: [orgs]
@@ -368,6 +416,7 @@ paths:
               required: [name]
               properties:
                 name: { type: string, maxLength: 80 }
+                code: { type: string, maxLength: 39, description: 组织 code。省略时由名称生成。创建后不能修改 }
       responses:
         '201':
           description: 已创建，调用者是 owner
@@ -408,7 +457,9 @@ paths:
             schema:
               type: object
               required: [name]
-              properties: { name: { type: string } }
+              properties:
+                name: { type: string }
+                code: { type: string, maxLength: 39, description: 项目代号。省略时由名称生成。同一归属下唯一 }
       responses:
         '201': { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -2098,6 +2149,8 @@ components:
         email: { type: string, format: email }
         name: { type: string }
         kind: { type: string, enum: [user, identity] }
+        handle: { type: string }
+        handle_confirmed: { type: boolean }
     AuthSource:
       type: object
       properties:

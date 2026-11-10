@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != 18 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != 18 && v != 19 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -367,6 +367,14 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 			return err
 		}
 		if err = classifyTenants(tx); err != nil {
+			return err
+		}
+	}
+	if v < 20 {
+		if err = ensurePathCodes(tx); err != nil {
+			return err
+		}
+		if err = installPathCodes(tx, owner, role); err != nil {
 			return err
 		}
 	}
@@ -514,4 +522,12 @@ func installPhase6(tx *sql.Tx, owner, role string) error {
 		}
 	}
 	return nil
+}
+
+func installPathCodes(tx *sql.Tx, owner, role string) error {
+	user := `nullif(current_setting('taboo.user_id',true),'')`
+	predicate := `kind='user' AND ref_id=` + user + ` OR kind='organization' AND ref_id IN (SELECT org_id FROM org_members WHERE user_id=` + user + `)`
+	q := `ALTER TABLE path_codes ENABLE ROW LEVEL SECURITY; ALTER TABLE path_codes FORCE ROW LEVEL SECURITY; DROP POLICY IF EXISTS tenant_scope ON path_codes; CREATE POLICY tenant_scope ON path_codes USING (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)) WITH CHECK (current_user=` + pq.QuoteLiteral(owner) + ` OR (` + predicate + `)); GRANT SELECT,INSERT,UPDATE,DELETE ON path_codes TO ` + pq.QuoteIdentifier(role)
+	_, err := tx.Exec(q)
+	return err
 }

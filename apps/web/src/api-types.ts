@@ -381,6 +381,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/handle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** 确认前修改用户名 */
+        patch: operations["updateHandle"];
+        trace?: never;
+    };
+    "/api/v1/me/handle/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 确认用户名。确认后不能再改 */
+        post: operations["confirmHandle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 创建组织（个人空间不能加人；本地会话） */
+        post: operations["createOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orgs/{slug}/projects": {
         parameters: {
             query?: never;
@@ -1777,6 +1828,8 @@ export interface components {
             name?: string;
             /** @enum {string} */
             kind?: "user" | "identity";
+            handle?: string;
+            handle_confirmed?: boolean;
         };
         AuthSource: {
             id?: string;
@@ -1787,7 +1840,10 @@ export interface components {
             id: string;
             name: string;
             slug: string;
-            /** @enum {string} */
+            /**
+             * @description personal 只有本人；organization 可以添加成员
+             * @enum {string}
+             */
             kind?: "personal" | "organization";
             /** @enum {string} */
             role: "owner" | "admin" | "developer" | "viewer";
@@ -2834,6 +2890,103 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    updateHandle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    handle: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 已改名，仍可再次修改 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        handle: string;
+                        handle_confirmed: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    confirmHandle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 用户名已锁定 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        handle: string;
+                        /** @enum {boolean} */
+                        handle_confirmed: true;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    /** @description 组织 code。省略时由名称生成。创建后不能修改 */
+                    code?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 已创建，调用者是 owner */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id: string;
+                        name: string;
+                        slug: string;
+                        /** @enum {string} */
+                        kind: "organization";
+                        /** @enum {string} */
+                        role: "owner";
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     listProjects: {
         parameters: {
             query?: never;
@@ -2872,6 +3025,8 @@ export interface operations {
             content: {
                 "application/json": {
                     name: string;
+                    /** @description 项目代号。省略时由名称生成。同一归属下唯一 */
+                    code?: string;
                 };
             };
         };

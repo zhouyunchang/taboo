@@ -44,7 +44,23 @@ func TestPersonalSpaceAndCreatedOrganization(t *testing.T) {
 	checkStatus(t, f.plain("POST", "/api/v1/orgs/"+created.Slug+"/invites", `{"email":"peer@example.test","role":"developer"}`, token), 409)
 	checkStatus(t, f.plain("PUT", "/api/v1/orgs/"+created.Slug+"/security", `{"login_policy":"EXTERNAL_REQUIRED"}`, token), 409)
 
-	made := f.plain("POST", "/api/v1/orgs", `{"name":"Acme"}`, token)
+	var profile struct {
+		User struct {
+			Handle          string `json:"handle"`
+			HandleConfirmed bool   `json:"handle_confirmed"`
+		} `json:"user"`
+	}
+	if json.Unmarshal(me.Body.Bytes(), &profile) != nil || profile.User.Handle != "person" || profile.User.HandleConfirmed {
+		t.Fatalf("generated handle: %s", me.Body.String())
+	}
+	checkStatus(t, f.plain("POST", "/api/v1/orgs", `{"name":"Taken","code":"person"}`, token), 409)
+	renamed := f.plain("PATCH", "/api/v1/me/handle", `{"handle":"person-renamed"}`, token)
+	checkStatus(t, renamed, 200)
+	confirmed := f.plain("POST", "/api/v1/me/handle/confirm", ``, token)
+	checkStatus(t, confirmed, 200)
+	checkStatus(t, f.plain("PATCH", "/api/v1/me/handle", `{"handle":"person-again"}`, token), 409)
+
+	made := f.plain("POST", "/api/v1/orgs", `{"name":"Acme","code":"acme"}`, token)
 	checkStatus(t, made, 201)
 	var org struct {
 		ID, Slug, Kind, Role string

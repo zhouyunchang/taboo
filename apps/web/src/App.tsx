@@ -83,7 +83,7 @@ export default function App() {
           const invite = window.location.pathname.startsWith('/invite/')
             ? window.location.pathname.slice('/invite/'.length)
             : '';
-          const go = () => api.get<{ orgs: Org[] }>('/api/v1/me').then((m) => setOrgs(m.orgs));
+          const go = () => api.get<{ user: User; orgs: Org[] }>('/api/v1/me').then((m) => { setUser(m.user); setOrgs(m.orgs); });
           if (invite) {
             api.post(`/api/v1/invites/${invite}/accept`).then(() => { window.history.replaceState({}, '', '/'); go(); }).catch(go);
           } else {
@@ -100,6 +100,7 @@ export default function App() {
     <Workspace
       key={`${orgs.find(o=>o.id===selectedOrg)?.id || orgs[0]?.id}:${orgs.find(o=>o.id===selectedOrg)?.role || orgs[0]?.role}`}
       user={user}
+      onUser={setUser}
       orgs={selectedOrg ? [...orgs.filter(o=>o.id===selectedOrg),...orgs.filter(o=>o.id!==selectedOrg)] : orgs}
       onOrgChange={(next) => { invalidateRequests(); setOrgs(next); setSelectedOrg(next[0]?.id ?? ''); }}
       logoutError={error}

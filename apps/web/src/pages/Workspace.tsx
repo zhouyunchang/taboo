@@ -19,11 +19,12 @@ interface Props {
   user: User;
   orgs: Org[];
   onOrgChange: (orgs: Org[]) => void;
+  onUser: (user: User) => void;
   onLogout: () => void;
   logoutError?: string;
 }
 
-export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutError }: Props) {
+export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, logoutError }: Props) {
   const org = orgs[0];
   const federated = hasBrowserSession();
   const session = getBrowserSessionInfo();
@@ -69,8 +70,11 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
   async function createProject() {
     const name = window.prompt('新项目名称？');
     if (!name) return;
+    const suggested = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 39);
+    const code = window.prompt('项目代号（这个归属下唯一，创建后不能改）', suggested || 'project');
+    if (!code?.trim()) return;
     try {
-      await api.post(`/api/v1/orgs/${org.slug}/projects`, { name });
+      await api.post(`/api/v1/orgs/${org.slug}/projects`, { name, code: code.trim().toLowerCase() });
       await loadProjects();
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
   }
@@ -78,8 +82,11 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
   async function createOrg() {
     const name = window.prompt('新组织名称？');
     if (!name?.trim()) return;
+    const suggested = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 39);
+    const code = window.prompt('组织 code（全局唯一，创建后不能改）', suggested || 'team');
+    if (!code?.trim()) return;
     try {
-      const made = await api.post<{ id: string }>('/api/v1/orgs', { name: name.trim() });
+      const made = await api.post<{ id: string }>('/api/v1/orgs', { name: name.trim(), code: code.trim().toLowerCase() });
       const m = await api.get<{ orgs: Org[] }>('/api/v1/me');
       const next = m.orgs ?? [];
       onOrgChange([...next.filter((item) => item.id === made.id), ...next.filter((item) => item.id !== made.id)]);
@@ -113,10 +120,11 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
         {federated && <button className="ghost" onClick={() => setSwitchOrg(true)}>切换组织</button>}
         {!federated && <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>}
         {!federated && <button className="ghost" onClick={() => setShowGitHub(true)}>GitHub</button>}
-        <span>{user.name || user.email}</span>
+        <span>{user.name || user.email}{user.handle ? ` · ${user.handle}` : ''}</span>
         {!personal && <button className="ghost" onClick={() => setShowIdentity(true)}>登录身份</button>}
         <button className="ghost" onClick={onLogout}>退出</button>
       </header>
+      {user.handle_confirmed === false && <HandleConfirm user={user} orgs={orgs} onUser={onUser} onOrgChange={onOrgChange} />}
 
       {githubNotice && <p className="session-notice" role="status">{githubNotice} <button className="ghost" onClick={() => setGithubNotice('')}>知道了</button></p>}
       {federated && <p className="session-notice" role="status">外部登录 · 当前组织：{org.name} · {session?.revocation_profile === 'ONLINE_REQUIRED' ? '每次访问检查上游状态，故障时拒绝访问。' : '会话有效期内使用已验证身份，上游停用最迟在会话到期时生效。'}
@@ -940,5 +948,38 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
         </div>
       </ValidatedForm>
     </Modal>
+  );
+}
+
+function HandleConfirm({ user, orgs, onUser, onOrgChange }: { user: User; orgs: Org[]; onUser: (user: User) => void; onOrgChange: (orgs: Org[]) => void }) {
+  const [handle, setHandle] = useState(user.handle ?? '');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function save(confirm: boolean) {
+    setError('');
+    setBusy(true);
+    try {
+      const next = handle.trim().toLowerCase();
+      if (next && next !== user.handle) await api.patch('/api/v1/me/handle', { handle: next });
+      if (confirm) await api.post('/api/v1/me/handle/confirm');
+      const me = await api.get<{ user: User; orgs: Org[] }>('/api/v1/me');
+      onUser(me.user);
+      onOrgChange(orgs.map((item) => me.orgs.find((org) => org.id === item.id) ?? item));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="session-notice" onSubmit={(e) => { e.preventDefault(); void save(false); }}>
+      <label>用户名<input aria-label="用户名" value={handle} autoComplete="off" onChange={(e) => setHandle(e.target.value)} /></label>
+      <button type="submit" className="ghost" disabled={busy}>保存</button>
+      <button type="button" disabled={busy} onClick={() => void save(true)}>确认用户名</button>
+      <span>确认后不能再改，它会成为定位符的第一段。</span>
+      {error && <span className="error" role="alert">{error}</span>}
+    </form>
   );
 }

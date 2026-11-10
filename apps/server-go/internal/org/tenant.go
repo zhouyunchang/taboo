@@ -9,6 +9,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/pathcode"
 )
 
 const (
@@ -69,15 +70,16 @@ func provisionTenant(tx *sql.Tx, masterKey []byte, name, slug, kind, ownerUserID
 	if strings.TrimSpace(name) == "" || ownerUserID == "" {
 		return "", "", apperr.InvalidInput
 	}
-	if slug == "" {
-		slug = "org"
+	if !pathcode.Valid(slug) {
+		return "", "", apperr.New(400, "INVALID_CODE", "code must be 1-39 lowercase letters, digits, or inner hyphens")
 	}
-	for {
-		var existing string
-		if err := tx.QueryRow(`SELECT id FROM orgs WHERE slug=?`, slug).Scan(&existing); err != nil {
-			break
-		}
-		slug += "-" + tc.NewID()[:4]
+	var existing string
+	err := tx.QueryRow(`SELECT id FROM orgs WHERE slug=?`, slug).Scan(&existing)
+	if err == nil {
+		return "", "", apperr.New(409, "CODE_TAKEN", "this code is already used")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", "", apperr.New(500, "INTERNAL", err.Error())
 	}
 	orgID := tc.NewID()
 	sealed, err := tc.Seal(masterKey, hexEncode(randomBytes(tc.KeyLen)), tc.DEKContext(orgID))
@@ -88,8 +90,19 @@ func provisionTenant(tx *sql.Tx, masterKey []byte, name, slug, kind, ownerUserID
 	if kind == KindPersonal {
 		owner = ownerUserID
 	}
+	if kind == KindOrganization {
+		if err = pathcode.Claim(tx, slug, pathcode.KindOrganization, orgID); err != nil {
+			if errors.Is(err, pathcode.ErrTaken) || errors.Is(err, pathcode.ErrInvalid) {
+				return "", "", apperr.New(409, "CODE_TAKEN", "this code is already used")
+			}
+			return "", "", apperr.New(500, "INTERNAL", err.Error())
+		}
+	}
 	if _, err = tx.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted, kind, owner_user_id) VALUES (?, ?, ?, ?, ?, ?)`,
 		orgID, name, slug, sealed, kind, owner); err != nil {
+		if isUnique(err) {
+			return "", "", apperr.New(409, "CODE_TAKEN", "this code is already used")
+		}
 		return "", "", apperr.New(500, "INTERNAL", err.Error())
 	}
 	if _, err = tx.Exec(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')`, orgID, ownerUserID); err != nil {
@@ -121,17 +134,46 @@ func provisionTenant(tx *sql.Tx, masterKey []byte, name, slug, kind, ownerUserID
 func EnsurePersonalSpace(tx *sql.Tx, masterKey []byte, userID, email, name string) error {
 	var id string
 	err := tx.QueryRow(`SELECT id FROM orgs WHERE kind='personal' AND owner_user_id=?`, userID).Scan(&id)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	_, _, aerr := provisionTenant(tx, masterKey, personalLabel(name, email), slugify(strings.Split(email, "@")[0]), KindPersonal, userID)
+	code, err := userHandle(tx, userID, email)
+	if err != nil {
+		return err
+	}
+	if id != "" {
+		return nil
+	}
+	_, _, aerr := provisionTenant(tx, masterKey, personalLabel(name, email), code, KindPersonal, userID)
 	if aerr != nil {
 		return aerr
 	}
 	return nil
+}
+
+func userHandle(tx *sql.Tx, userID, email string) (string, error) {
+	var handle string
+	if err := tx.QueryRow(`SELECT COALESCE(handle,'') FROM users WHERE id=?`, userID).Scan(&handle); err != nil {
+		return "", err
+	}
+	if handle != "" {
+		if err := pathcode.Claim(tx, handle, pathcode.KindUser, userID); err != nil {
+			return "", err
+		}
+		return handle, nil
+	}
+	seed := email
+	if at := strings.IndexByte(email, '@'); at > 0 {
+		seed = email[:at]
+	}
+	code, err := pathcode.ClaimNew(tx, seed, pathcode.KindUser, userID)
+	if err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(`UPDATE users SET handle=? WHERE id=?`, code, userID); err != nil {
+		return "", err
+	}
+	return code, nil
 }
 
 // BackfillPersonalSpaces creates an empty personal space for every user who
@@ -191,6 +233,7 @@ func (s *Service) CreateOrganization(w http.ResponseWriter, r *http.Request) {
 	}
 	var b struct {
 		Name string `json:"name"`
+		Code string `json:"code"`
 	}
 	if jsonDecode(r, &b) != nil {
 		writeErr(w, apperr.InvalidInput)
@@ -201,12 +244,20 @@ func (s *Service) CreateOrganization(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.InvalidInput)
 		return
 	}
+	code := strings.ToLower(strings.TrimSpace(b.Code))
+	if code == "" {
+		code = slugify(name)
+	}
+	if !pathcode.Valid(code) {
+		writeErr(w, apperr.New(400, "INVALID_CODE", "code must be 1-39 lowercase letters, digits, or inner hyphens"))
+		return
+	}
 	tx, started := auth.BeginMutation(s.controlDB(), w, r)
 	if !started {
 		return
 	}
 	defer tx.Rollback()
-	orgID, slug, aerr := provisionTenant(tx, s.MasterKey, name, slugify(name), KindOrganization, u.ID)
+	orgID, slug, aerr := provisionTenant(tx, s.MasterKey, name, code, KindOrganization, u.ID)
 	if aerr != nil {
 		writeErr(w, aerr)
 		return

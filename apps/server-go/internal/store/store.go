@@ -519,6 +519,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 	if err := ensureAccountModel(db, fromVersion); err != nil {
 		return err
 	}
+	if err := ensurePathCodes(db); err != nil {
+		return err
+	}
 	// PRAGMA 不支持参数绑定，整数直接内插（值来自本文件常量，无注入面）
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 		return err
@@ -527,7 +530,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 19
+const SchemaVersion = 20
 
 func migratePhase6(db migrationDB) error {
 	for _, stmt := range []string{
