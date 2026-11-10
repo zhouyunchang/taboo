@@ -280,6 +280,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	orgs.Routes(r)
 	r.Get("/access", secrets.Access)
 	r.Put("/access", secrets.Access)
+	r.Post("/access", secrets.Access)
 	r.Delete("/access", secrets.Access)
 	d.Workloads.WithDB(d.DB).Routes(r)
 	totps.Routes(r)

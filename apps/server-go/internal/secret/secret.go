@@ -331,8 +331,8 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 	}
 	if isCreate {
 		secretID = tc.NewID()
-		if _, err := tx.Exec(`INSERT INTO secrets (id, env_id, folder, folder_id, key, comment, tags) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			secretID, envID, normPath, folderID, b.Key, strOr(b.Comment, ""), tagsOr(b.Tags)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO secrets (id, env_id, project_id, folder, folder_id, key, comment, tags) VALUES (?, ?, (SELECT project_id FROM environments WHERE id=?), ?, ?, ?, ?, ?)`,
+			secretID, envID, envID, normPath, folderID, b.Key, strOr(b.Comment, ""), tagsOr(b.Tags)); err != nil {
 			if store.IsUniqueViolation(err) {
 				writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret was created concurrently; reload before retrying"))
 				return

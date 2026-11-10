@@ -116,7 +116,10 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, apperr.New(400, "INVALID", "permission must be read, reveal or write"))
 			return
 		}
-		if sc.ProjectID == "" || sc.EnvSlug == "" || sc.EnvSlug == "*" || sc.ProjectID == "*" {
+		if sc.EnvSlug == "" {
+			sc.EnvSlug = "dev"
+		}
+		if sc.ProjectID == "" || sc.EnvSlug == "*" || sc.ProjectID == "*" {
 			writeErr(w, apperr.New(400, "INVALID", "wildcard scope not allowed"))
 			return
 		}

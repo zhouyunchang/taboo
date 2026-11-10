@@ -375,7 +375,8 @@ export interface paths {
         get: operations["accessLocator"];
         /** 按定位符写入密钥 */
         put: operations["putLocator"];
-        post?: never;
+        /** 按定位符导入 .env */
+        post: operations["importLocator"];
         /** 按定位符删除密钥 */
         delete: operations["deleteLocator"];
         options?: never;
@@ -2891,6 +2892,8 @@ export interface operations {
                 locator: string;
                 /** @description 密钥名。省略时列出该目录 */
                 key?: string;
+                /** @description 为 1 时导出 .env */
+                export?: "1";
             };
             header?: never;
             path?: never;
@@ -2898,7 +2901,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 目录内容或密钥明文 */
+            /** @description 目录内容、密钥明文或 .env */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2942,6 +2945,39 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    importLocator: {
+        parameters: {
+            query: {
+                locator: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    content: string;
+                    format?: string;
+                    strategy?: string;
+                    preview?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description 导入结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     deleteLocator: {

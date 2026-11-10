@@ -205,8 +205,8 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		eventAction := "created"
 		if !cur.exists {
 			secretID = tc.NewID()
-			if _, err = tx.Exec(`INSERT INTO secrets (id, env_id, folder, folder_id, key, comment, tags) VALUES (?, ?, ?, ?, ?, '', '[]')`,
-				secretID, envID, normPath, folderID, cur.item.Key); err != nil {
+			if _, err = tx.Exec(`INSERT INTO secrets (id, env_id, project_id, folder, folder_id, key, comment, tags) VALUES (?, ?, (SELECT project_id FROM environments WHERE id=?), ?, ?, ?, '', '[]')`,
+				secretID, envID, envID, normPath, folderID, cur.item.Key); err != nil {
 				internalErr(w, err)
 				return
 			}

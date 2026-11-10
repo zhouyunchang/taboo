@@ -52,6 +52,8 @@ func (s *Service) Access(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPut:
 		s.Upsert(w, r)
+	case http.MethodPost:
+		s.Import(w, r)
 	case http.MethodDelete:
 		key := query.Get("key")
 		if key == "" {
@@ -60,6 +62,10 @@ func (s *Service) Access(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Delete(w, withKeyParam(r, key))
 	default:
+		if query.Get("export") == "1" {
+			s.Export(w, r)
+			return
+		}
 		if key := query.Get("key"); key != "" {
 			s.Reveal(w, withKeyParam(r, key))
 			return

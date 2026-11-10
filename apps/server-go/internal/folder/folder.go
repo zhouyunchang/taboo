@@ -101,8 +101,8 @@ func ResolveID(db folderDB, envID, path string, create bool) (string, error) {
 	if path == "/" {
 		// 根目录：parent 为 NULL，直接插入，勿递归（parentPathOf("/") 仍是 "/"，会自引用爆栈）
 		id = tc.NewID()
-		if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/')`,
-			id, envID); err != nil {
+		if _, err := db.Exec(`INSERT INTO folders (id, env_id, project_id, parent_id, name, path) VALUES (?, ?, (SELECT project_id FROM environments WHERE id=?), NULL, '/', '/')`,
+			id, envID, envID); err != nil {
 			return "", err
 		}
 		return id, nil
@@ -113,8 +113,8 @@ func ResolveID(db folderDB, envID, path string, create bool) (string, error) {
 		return "", err
 	}
 	id = tc.NewID()
-	if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, ?, ?, ?)`,
-		id, envID, parentID, nameOf(path), path); err != nil {
+	if _, err := db.Exec(`INSERT INTO folders (id, env_id, project_id, parent_id, name, path) VALUES (?, ?, (SELECT project_id FROM environments WHERE id=?), ?, ?, ?)`,
+		id, envID, envID, parentID, nameOf(path), path); err != nil {
 		return "", err
 	}
 	return id, nil

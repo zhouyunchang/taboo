@@ -344,8 +344,34 @@ paths:
       parameters:
         - { name: locator, in: query, required: true, schema: { type: string }, description: 归属/项目/目录。根目录不写目录段 }
         - { name: key, in: query, schema: { type: string }, description: 密钥名。省略时列出该目录 }
+        - { name: export, in: query, schema: { type: string, enum: ['1'] }, description: 为 1 时导出 .env }
       responses:
-        '200': { description: 目录内容或密钥明文 }
+        '200': { description: 目录内容、密钥明文或 .env }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [secrets]
+      summary: 按定位符导入 .env
+      operationId: importLocator
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { name: locator, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                format: { type: string }
+                strategy: { type: string }
+                preview: { type: boolean }
+      responses:
+        '200': { description: 导入结果 }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }

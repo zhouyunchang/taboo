@@ -27,6 +27,9 @@ const flag = (name, def) => {
 };
 const env = flag('env', 'dev');
 const resolveQuery = args.includes('--raw') ? '' : '&resolve=true';
+function isLocator(value) {
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)+$/.test(value);
+}
 function positional(valueFlags = ['env', 'project', 'org', 'strategy', 'path', 'idempotency-key', 'expected-version', 'client-id', 'client-secret']) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
@@ -185,7 +188,7 @@ switch (cmd) {
     if(expected!==undefined && (!/^\d+$/.test(expected)||!Number.isSafeInteger(Number(expected)))){console.error('--expected-version must be a non-negative integer');process.exit(2);}
     const extra = expected!==undefined?{expectedVersion:Number(expected)}:{};
     console.error(`mutation receipt: ${idempotencyKey}; if the outcome is unknown, repeat the identical command with --idempotency-key ${idempotencyKey}`);
-    if (pos[0]?.includes('/')) {
+    if (isLocator(pos[0])) {
       const [locator, key, value] = pos;
       if (!locator || !key || value === undefined) { console.error('usage: taboo set <locator> <KEY> <VALUE>'); process.exit(1); }
       const d = await call('PUT', `/api/v1/access?locator=${encodeURIComponent(locator)}`, { key, value, ...extra }, false, idempotencyKey);
@@ -201,7 +204,7 @@ switch (cmd) {
   }
   case 'get': {
     const pos = positional();
-    if (pos[0]?.includes('/')) {
+    if (isLocator(pos[0])) {
       const [locator, key] = pos;
       if (!key) { console.error('usage: taboo get <locator> <KEY>'); process.exit(1); }
       const d = await call('GET', `/api/v1/access?locator=${encodeURIComponent(locator)}&key=${encodeURIComponent(key)}`);
@@ -215,7 +218,7 @@ switch (cmd) {
   }
   case 'list': {
     const pos = positional();
-    if (pos[0]?.includes('/')) {
+    if (isLocator(pos[0])) {
       const d = await call('GET', `/api/v1/access?locator=${encodeURIComponent(pos[0])}`);
       for (const s of d.secrets) console.log(`${s.key}\tv${s.version}\t${s.updated_at}`);
       break;
@@ -225,13 +228,19 @@ switch (cmd) {
     break;
   }
   case 'export': {
-    const res = await call('GET', `/api/v1/projects/${await projectId()}/export?env=${encodeURIComponent(env)}${resolveQuery}`, null, true);
+    const pos = positional();
+    const path = isLocator(pos[0])
+      ? `/api/v1/access?locator=${encodeURIComponent(pos[0])}&export=1${resolveQuery}`
+      : `/api/v1/projects/${await projectId()}/export?env=${encodeURIComponent(env)}${resolveQuery}`;
+    const res = await call('GET', path, null, true);
     process.stdout.write(await res.text());
     break;
   }
   case 'import': {
-    const file = positional()[0];
-    if (!file) { console.error('usage: taboo import <file> [--format dotenv|doppler|1password] [--env] [--project] [--path /] [--preview] [--strategy skip|overwrite]'); process.exit(1); }
+    const pos = positional();
+    const located = isLocator(pos[0]);
+    const file = located ? pos[1] : pos[0];
+    if (!file) { console.error('usage: taboo import <locator> <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]'); process.exit(1); }
     const content = fs.readFileSync(file, 'utf8');
     const strategy = flag('strategy', '');
     const format = flag('format', 'dotenv');
@@ -241,7 +250,10 @@ switch (cmd) {
     if (!['dotenv', 'doppler', '1password'].includes(format)) { console.error('--format must be dotenv, doppler, or 1password'); process.exit(2); }
     const idempotencyKey = preview ? undefined : flag('idempotency-key', randomUUID());
     if (!preview) console.error(`mutation receipt: ${idempotencyKey}; if the outcome is unknown, repeat the identical command with --idempotency-key ${idempotencyKey}`);
-    const d = await call('POST', `/api/v1/projects/${await projectId()}/import?env=${encodeURIComponent(env)}&path=${encodeURIComponent(folder)}`,
+    const importURL = located
+      ? `/api/v1/access?locator=${encodeURIComponent(pos[0])}`
+      : `/api/v1/projects/${await projectId()}/import?env=${encodeURIComponent(env)}&path=${encodeURIComponent(folder)}`;
+    const d = await call('POST', importURL,
       { content, format, preview, ...(strategy ? { strategy } : {}) }, false, idempotencyKey);
     const conflicts = d.conflicts?.length ? ` conflicts=${d.conflicts.join(',')}` : '';
     console.log(`${preview ? 'preview' : 'imported'}: created=${d.created} updated=${d.updated} skipped=${d.skipped}${conflicts}`);
@@ -251,8 +263,12 @@ switch (cmd) {
   }
   case 'run': {    // 密钥注入子进程；默认展开引用
     const idx = args.indexOf('--');
-    if (idx < 0 || idx === args.length - 1) { console.error('usage: taboo run [--raw] -- <cmd...>'); process.exit(1); }
-    const res = await call('GET', `/api/v1/projects/${await projectId()}/export?env=${encodeURIComponent(env)}${resolveQuery}`, null, true);
+    if (idx < 0 || idx === args.length - 1) { console.error('usage: taboo run [<locator>] [--raw] -- <cmd...>'); process.exit(1); }
+    const located = isLocator(positional()[0]) ? positional()[0] : '';
+    const exportURL = located
+      ? `/api/v1/access?locator=${encodeURIComponent(located)}&export=1${resolveQuery}`
+      : `/api/v1/projects/${await projectId()}/export?env=${encodeURIComponent(env)}${resolveQuery}`;
+    const res = await call('GET', exportURL, null, true);
     const text = await res.text();
     const childEnv = { ...process.env };
     for (const line of text.split('\n')) {
@@ -290,9 +306,12 @@ switch (cmd) {
   taboo set <KEY> <VALUE> [--env] [--project]   旧写法，仍可用
   taboo get <KEY> [--env] [--project] [--raw]   旧写法，仍可用
   taboo list [--env] [--project]                旧写法，仍可用
-  taboo export [--env] [--project] [--raw]      导出 .env（默认解析引用）
-  taboo import <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]
-  taboo run [--raw] -- <cmd...>                 注入解析后的环境变量执行命令
+  taboo export <locator> [--raw]               按定位符导出 .env
+  taboo import <locator> <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]
+  taboo run <locator> [--raw] -- <cmd...>       注入该目录的密钥后执行命令
+  taboo export [--env] [--project] [--raw]      旧写法，仍可用
+  taboo import <file> [--env] [--project]       旧写法，仍可用
+  taboo run [--raw] -- <cmd...>                 旧写法，仍可用
   taboo scan [--staged|--json|--list-rules]     密钥泄漏扫描（150+ 规则，命中即非零退出）
   taboo scan --upload [--org slug]              上传报告（服务端 HMAC，原文不落库）
   taboo scan --update-baseline                  将现存命中写入 baseline 抑制

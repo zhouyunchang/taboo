@@ -34,6 +34,10 @@ func TestLocatorReadsAndWritesASecret(t *testing.T) {
 	if !strings.Contains(listed.Body.String(), `"key":"TOKEN"`) {
 		t.Fatal(listed.Body.String())
 	}
+	var projectID string
+	if err := f.db.QueryRow(`SELECT project_id FROM secrets WHERE key='TOKEN'`).Scan(&projectID); err != nil || projectID == "" {
+		t.Fatalf("secret project %q %v", projectID, err)
+	}
 }
 
 func TestPersonalSpaceAndCreatedOrganization(t *testing.T) {
