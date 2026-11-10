@@ -578,21 +578,15 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	for i, env := range []string{"dev", "staging", "prod"} {
-		envID := tc.NewID()
-		prot, approval := 0, 0
-		if env == "prod" {
-			prot, approval = 1, 1
-		}
-		if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			envID, pid, env, env, i, prot, approval); err != nil {
-			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
-			return
-		}
-		if err := ensureRootFolder(tx, envID); err != nil {
-			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
-			return
-		}
+	envID := tc.NewID()
+	if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, 'dev', 'dev', 0, 0, 0)`,
+		envID, pid); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+		return
+	}
+	if err := ensureRootFolder(tx, envID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+		return
 	}
 
 	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "project.create", "project/"+slug, nil) {
@@ -730,6 +724,10 @@ func (s *Service) PatchEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE projects SET approval_required=? WHERE id=?`, flag, p.ID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
 	res, err := tx.Exec(`UPDATE environments SET approval_required=? WHERE project_id=? AND slug=?`, flag, p.ID, slug)
 	if err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))

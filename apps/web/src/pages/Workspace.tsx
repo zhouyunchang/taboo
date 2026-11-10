@@ -150,12 +150,6 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
 
         <main className="main">
           <div className="tabs">
-            {envs.map((e) => (
-              <button key={e.id} className={`tab ${env === e.slug ? 'active' : ''}`} aria-label={e.name} title={e.approval_required ? '写入、删除和回滚需要审批' : undefined} onClick={() => { setEnv(e.slug); setTab('secrets'); }}>
-                {e.name}{e.approval_required ? ' · 审批' : ''}
-              </button>
-            ))}
-            <div className="spacer" />
             {canDelegate && <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>}
             {canDelegate && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
             {canAudit && <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>}
@@ -795,9 +789,6 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
           {scopes.map((s, idx) => (
             <div key={idx} className="scope-row">
               <span className="tag">{project.slug}</span>
-              <select value={s.env} onChange={(e) => setScopes(scopes.map((x, i) => i === idx ? { ...x, env: e.target.value } : x))}>
-                {envs.map((en) => <option key={en.id} value={en.slug}>{en.name}</option>)}
-              </select>
               <select value={s.permission} onChange={(e) => setScopes(scopes.map((x, i) => i === idx ? { ...x, permission: e.target.value as IdentityScope['permission'] } : x))}>
                 <option value="read">read（仅元数据）</option>
                 <option value="reveal">reveal（明文）</option>

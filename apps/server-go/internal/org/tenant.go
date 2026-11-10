@@ -112,19 +112,13 @@ func provisionTenant(tx *sql.Tx, masterKey []byte, name, slug, kind, ownerUserID
 	if _, err = tx.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'default', 'default')`, projectID, orgID); err != nil {
 		return "", "", apperr.New(500, "INTERNAL", err.Error())
 	}
-	for i, env := range []string{"dev", "staging", "prod"} {
-		envID := tc.NewID()
-		prot, approval := 0, 0
-		if env == "prod" {
-			prot, approval = 1, 1
-		}
-		if _, err = tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			envID, projectID, env, env, i, prot, approval); err != nil {
-			return "", "", apperr.New(500, "INTERNAL", err.Error())
-		}
-		if err = ensureRootFolder(tx, envID); err != nil {
-			return "", "", apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed")
-		}
+	envID := tc.NewID()
+	if _, err = tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, 'dev', 'dev', 0, 0, 0)`,
+		envID, projectID); err != nil {
+		return "", "", apperr.New(500, "INTERNAL", err.Error())
+	}
+	if err = ensureRootFolder(tx, envID); err != nil {
+		return "", "", apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed")
 	}
 	return orgID, slug, nil
 }

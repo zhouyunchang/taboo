@@ -58,7 +58,7 @@ func (s *Service) Subscribe(bus *events.Bus) {
 		if e.Action == "deleted" || e.Action == "rotation_due" {
 			return nil
 		}
-		rows, err := tx.Query(`SELECT id FROM sync_targets WHERE org_id=? AND enabled=1 AND (project_id IS NULL OR project_id=?) AND (env_slug='*' OR env_slug=?)`, e.OrgID, e.ProjectID, e.EnvSlug)
+		rows, err := tx.Query(`SELECT id FROM sync_targets WHERE org_id=? AND enabled=1 AND (project_id IS NULL OR project_id=?)`, e.OrgID, e.ProjectID)
 		if err != nil {
 			return err
 		}

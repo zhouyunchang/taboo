@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != 18 && v != 19 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != 18 && v != 19 && v != 20 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -375,6 +375,11 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 			return err
 		}
 		if err = installPathCodes(tx, owner, role); err != nil {
+			return err
+		}
+	}
+	if v < 21 {
+		if err = CollapseEnvironments(tx); err != nil {
 			return err
 		}
 	}

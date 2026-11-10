@@ -97,7 +97,7 @@ func applying(r *http.Request) bool {
 
 func (s *Service) needsApproval(envID string) (bool, error) {
 	var n int
-	err := s.DB.QueryRow(`SELECT COALESCE(approval_required,0) FROM environments WHERE id=?`, envID).Scan(&n)
+	err := s.DB.QueryRow(`SELECT CASE WHEN COALESCE(p.approval_required,0)=1 OR COALESCE(e.approval_required,0)=1 THEN 1 ELSE 0 END FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=?`, envID).Scan(&n)
 	return n == 1, err
 }
 
