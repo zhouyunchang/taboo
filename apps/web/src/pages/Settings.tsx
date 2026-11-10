@@ -9,7 +9,7 @@ import { fmtTime, timeTitle } from '../time';
 
 // 组织设置（M5 #11/#12/#13）：Secret Sync / Webhooks / OIDC SSO
 export default function SettingsPanel({ orgSlug, role, personal = false }: { orgSlug: string; role: string; personal?: boolean }) {
-  const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso' | 'members' | 'security' | 'workloads' | 'approvals'>('sync');
+  const [sub, setSub] = useState<'sync' | 'webhooks' | 'sso' | 'members' | 'security' | 'workloads' | 'approvals'>(!personal && role === 'owner' ? 'members' : 'sync');
   const canManage = role === 'owner' || (!hasBrowserSession() && role === 'admin');
   const canMembers = role === 'owner' && !personal;
   const canWorkloads = role === 'owner';

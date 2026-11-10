@@ -179,24 +179,47 @@ switch (cmd) {
     break;
   }
   case 'set': {
-    const [key, value] = args.filter((a) => !a.startsWith('--'));
-    if (!key || value === undefined) { console.error('usage: taboo set <KEY> <VALUE> [--env dev]'); process.exit(1); }
+    const pos = positional();
     const idempotencyKey=flag('idempotency-key',randomUUID());
     const expected=flag('expected-version',undefined);
     if(expected!==undefined && (!/^\d+$/.test(expected)||!Number.isSafeInteger(Number(expected)))){console.error('--expected-version must be a non-negative integer');process.exit(2);}
-    const pid=await projectId();
+    const extra = expected!==undefined?{expectedVersion:Number(expected)}:{};
     console.error(`mutation receipt: ${idempotencyKey}; if the outcome is unknown, repeat the identical command with --idempotency-key ${idempotencyKey}`);
-    const d = await call('POST', `/api/v1/projects/${pid}/secrets?env=${encodeURIComponent(env)}`, { key, value, ...(expected!==undefined?{expectedVersion:Number(expected)}:{}) },false,idempotencyKey);
+    if (pos[0]?.includes('/')) {
+      const [locator, key, value] = pos;
+      if (!locator || !key || value === undefined) { console.error('usage: taboo set <locator> <KEY> <VALUE>'); process.exit(1); }
+      const d = await call('PUT', `/api/v1/access?locator=${encodeURIComponent(locator)}`, { key, value, ...extra }, false, idempotencyKey);
+      console.log(`${key} saved (v${d.version})`);
+      break;
+    }
+    const [key, value] = pos;
+    if (!key || value === undefined) { console.error('usage: taboo set <locator> <KEY> <VALUE>  |  taboo set <KEY> <VALUE> [--env dev]'); process.exit(1); }
+    const pid=await projectId();
+    const d = await call('POST', `/api/v1/projects/${pid}/secrets?env=${encodeURIComponent(env)}`, { key, value, ...extra },false,idempotencyKey);
     console.log(`${key} saved (v${d.version})`);
     break;
   }
   case 'get': {
-    const key = args.find((a) => !a.startsWith('--'));
+    const pos = positional();
+    if (pos[0]?.includes('/')) {
+      const [locator, key] = pos;
+      if (!key) { console.error('usage: taboo get <locator> <KEY>'); process.exit(1); }
+      const d = await call('GET', `/api/v1/access?locator=${encodeURIComponent(locator)}&key=${encodeURIComponent(key)}`);
+      console.log(d.value);
+      break;
+    }
+    const key = pos[0];
     const d = await call('GET', `/api/v1/projects/${await projectId()}/secrets/${encodeURIComponent(key)}?env=${encodeURIComponent(env)}${resolveQuery}`);
     console.log(d.value);
     break;
   }
   case 'list': {
+    const pos = positional();
+    if (pos[0]?.includes('/')) {
+      const d = await call('GET', `/api/v1/access?locator=${encodeURIComponent(pos[0])}`);
+      for (const s of d.secrets) console.log(`${s.key}\tv${s.version}\t${s.updated_at}`);
+      break;
+    }
     const d = await call('GET', `/api/v1/projects/${await projectId()}/secrets?env=${env}`);
     for (const s of d.secrets) console.log(`${s.key}\tv${s.version}\t${s.updated_at}`);
     break;
@@ -261,9 +284,12 @@ switch (cmd) {
   taboo login --browser                         浏览器 PKCE 登录（回环）
   taboo login --device                          设备码登录
   taboo login --client-id X --client-secret Y   机器身份登录（token 临期自动重换）
-  taboo set <KEY> <VALUE> [--env] [--project]   写入/更新密钥（--idempotency-key KEY --expected-version N）
-  taboo get <KEY> [--env] [--project] [--raw]   读取明文（默认解析引用，审计）
-  taboo list [--env] [--project]                列出密钥（无值）
+  taboo set <locator> <KEY> <VALUE>            按 归属/项目/目录 写入密钥
+  taboo get <locator> <KEY>                    按定位符读取明文
+  taboo list <locator>                         列出该目录的密钥
+  taboo set <KEY> <VALUE> [--env] [--project]   旧写法，仍可用
+  taboo get <KEY> [--env] [--project] [--raw]   旧写法，仍可用
+  taboo list [--env] [--project]                旧写法，仍可用
   taboo export [--env] [--project] [--raw]      导出 .env（默认解析引用）
   taboo import <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]
   taboo run [--raw] -- <cmd...>                 注入解析后的环境变量执行命令

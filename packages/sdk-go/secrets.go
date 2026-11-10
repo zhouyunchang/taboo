@@ -149,6 +149,36 @@ func resolvePair(options []GetOptions) string {
 	return ""
 }
 
+// GetByLocator 按 归属/项目/目录 读取密钥。密钥名不在定位符里。
+func (c *Client) GetByLocator(ctx context.Context, locator, key string) (*SecretValue, error) {
+	var out SecretValue
+	err := c.do(ctx, "GET", "/api/v1/access?locator="+url.QueryEscape(locator)+"&key="+url.QueryEscape(key), nil, &out)
+	return &out, err
+}
+
+// PutByLocator 按定位符写入密钥。
+func (c *Client) PutByLocator(ctx context.Context, locator, key, value string, options ...MutationOptions) (int, error) {
+	var out struct {
+		Version int `json:"version"`
+	}
+	opt := firstMutationOption(options)
+	body := map[string]any{"key": key, "value": value}
+	if opt.ExpectedVersion != nil {
+		body["expectedVersion"] = *opt.ExpectedVersion
+	}
+	err := c.doMutation(ctx, "PUT", "/api/v1/access?locator="+url.QueryEscape(locator), body, &out, opt)
+	return out.Version, err
+}
+
+// ListByLocator 列出定位符目录下的密钥名。
+func (c *Client) ListByLocator(ctx context.Context, locator string) ([]SecretMeta, error) {
+	var out struct {
+		Secrets []SecretMeta `json:"secrets"`
+	}
+	err := c.do(ctx, "GET", "/api/v1/access?locator="+url.QueryEscape(locator), nil, &out)
+	return out.Secrets, err
+}
+
 // GetSecret 读取明文（reveal 权限，记审计）。Resolve 为 true 时展开引用。
 func (c *Client) GetSecret(ctx context.Context, projectID, env, folderPath, key string, options ...GetOptions) (*SecretValue, error) {
 	var out SecretValue

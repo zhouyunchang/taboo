@@ -228,6 +228,19 @@ class Client:
             body["expectedVersion"] = options["expected_version"]
         return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets{_query(['env', env, 'path', folder_path])}", body, options.get("idempotency_key"))
 
+    def get_by_locator(self, locator, key):
+        return self.request("GET", "/api/v1/access?" + urllib.parse.urlencode({"locator": locator, "key": key}))
+
+    def put_by_locator(self, locator, key, value, options=None):
+        options = options or {}
+        body = {"key": key, "value": value}
+        if options.get("expected_version") is not None:
+            body["expectedVersion"] = options["expected_version"]
+        return self.request("PUT", "/api/v1/access?" + urllib.parse.urlencode({"locator": locator}), body, options.get("idempotency_key"))
+
+    def list_by_locator(self, locator):
+        return self.request("GET", "/api/v1/access?" + urllib.parse.urlencode({"locator": locator}))
+
     def get_secret(self, project_id, env, folder_path, key, resolve=False):
         return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}{_query(['env', env, 'path', folder_path, 'resolve', 'true' if resolve else ''])}")
 

@@ -33,6 +33,10 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
   const [envs, setEnvs] = useState<Env[]>([]);
   const [env, setEnv] = useState('dev');
   const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings' | 'scans'>('secrets');
+  const [menu, setMenu] = useState<'project' | 'account' | null>(null);
+  const [draft, setDraft] = useState<'project' | 'org' | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const [draftCode, setDraftCode] = useState('');
   const [switchOrg,setSwitchOrg] = useState(false);
   const [showGitHub, setShowGitHub] = useState(false);
   const [githubNotice, setGithubNotice] = useState('');
@@ -52,7 +56,7 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
     if (!org) return;
     const d = await api.get<{ projects: Project[] }>(`/api/v1/orgs/${org.slug}/projects`);
     setProjects(d.projects);
-    setProject((p) => p ?? d.projects[0] ?? null);
+    setProject((p) => d.projects.find((item) => item.id === p?.id) ?? d.projects[0] ?? null);
   }, [org?.slug]);
 
   useEffect(() => { loadProjects().catch((e) => setError(String(e))); }, [loadProjects]);
@@ -67,35 +71,48 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
     return () => { live = false; };
   }, [project?.id]);
 
-  async function createProject() {
-    const name = window.prompt('新项目名称？');
-    if (!name) return;
-    const suggested = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 39);
-    const code = window.prompt('项目代号（这个归属下唯一，创建后不能改）', suggested || 'project');
-    if (!code?.trim()) return;
-    try {
-      await api.post(`/api/v1/orgs/${org.slug}/projects`, { name, code: code.trim().toLowerCase() });
-      await loadProjects();
-    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+  function itemStyle(active: boolean): React.CSSProperties {
+    return { display: 'block', width: '100%', textAlign: 'left', fontWeight: 400, background: active ? undefined : 'transparent', color: active ? undefined : 'inherit' };
   }
 
-  async function createOrg() {
-    const name = window.prompt('新组织名称？');
-    if (!name?.trim()) return;
-    const suggested = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 39);
-    const code = window.prompt('组织 code（全局唯一，创建后不能改）', suggested || 'team');
-    if (!code?.trim()) return;
+  function suggestCode(name: string) {
+    return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 39);
+  }
+
+  function openDraft(kind: 'project' | 'org') {
+    setDraft(kind);
+    setDraftName('');
+    setDraftCode('');
+    setMenu(kind === 'project' ? 'project' : 'account');
+  }
+
+  async function submitDraft(e: React.FormEvent) {
+    e.preventDefault();
+    const name = draftName.trim();
+    const code = (draftCode.trim() || suggestCode(name)).toLowerCase();
+    if (!name || !code) return;
     try {
-      const made = await api.post<{ id: string }>('/api/v1/orgs', { name: name.trim(), code: code.trim().toLowerCase() });
-      const m = await api.get<{ orgs: Org[] }>('/api/v1/me');
-      const next = m.orgs ?? [];
-      onOrgChange([...next.filter((item) => item.id === made.id), ...next.filter((item) => item.id !== made.id)]);
-    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+      if (draft === 'project') {
+        await api.post(`/api/v1/orgs/${org.slug}/projects`, { name, code });
+        setDraft(null);
+        setMenu(null);
+        await loadProjects();
+      } else {
+        const made = await api.post<{ id: string }>('/api/v1/orgs', { name, code });
+        const m = await api.get<{ orgs: Org[] }>('/api/v1/me');
+        const next = m.orgs ?? [];
+        onOrgChange([...next.filter((item) => item.id === made.id), ...next.filter((item) => item.id !== made.id)]);
+        setDraft(null);
+        setMenu(null);
+        setTab('secrets');
+      }
+    } catch (err) { setError(err instanceof ApiError ? err.message : String(err)); }
   }
 
   if (!org) return <div className="center-screen">没有组织</div>;
 
   const personal = org.kind === 'personal';
+  const ownerLabel = personal ? '个人' : org.name;
   const personalOrgs = orgs.filter((item) => item.kind === 'personal');
   const sharedOrgs = orgs.filter((item) => item.kind !== 'personal');
   const canAdmin = org.role === 'owner' || org.role === 'admin';
@@ -111,18 +128,44 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
           <span className="brand-mark">禁</span>
           <strong>taboo · 禁制</strong>
         </div>
-        <label className="org-switch">空间<select aria-label="当前空间" value={org.id} onChange={e=>onOrgChange([...orgs.filter(o=>o.id===e.target.value),...orgs.filter(o=>o.id!==e.target.value)])}>
-          {personalOrgs.length > 0 && <optgroup label="个人">{personalOrgs.map(o=><option key={o.id} value={o.id}>个人</option>)}</optgroup>}
-          {sharedOrgs.length > 0 && <optgroup label="组织">{sharedOrgs.map(o=><option key={o.id} value={o.id}>{o.name} ({o.role})</option>)}</optgroup>}
-        </select></label>
-        {!federated && <button type="button" className="ghost" onClick={() => void createOrg()}>创建组织</button>}
+        <div style={{ position: 'relative' }}>
+          <button type="button" className="ghost" aria-expanded={menu === 'project'} onClick={() => { setMenu(menu === 'project' ? null : 'project'); setDraft(null); }}>
+            {ownerLabel} / {project?.name ?? '无项目'}
+          </button>
+          {menu === 'project' && <div className="card" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 4, width: 280, padding: 8 }}>
+            <p className="muted">{ownerLabel}的项目</p>
+            {projects.map((item) => (
+              <button key={item.id} type="button" className="ghost" style={{ display: 'block', width: '100%', textAlign: 'left' }} onClick={() => { setProject(item); setTab('secrets'); setMenu(null); }}>{item.name}</button>
+            ))}
+            {projects.length === 0 && <p className="muted">还没有项目</p>}
+            {draft === 'project' ? <form onSubmit={(e) => void submitDraft(e)} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              <input aria-label="项目名称" placeholder="显示名称" value={draftName} onChange={(e) => setDraftName(e.target.value)} required />
+              <input aria-label="项目代号" placeholder="项目代号" value={draftCode} onChange={(e) => setDraftCode(e.target.value)} />
+              <div className="drawer-actions"><button type="button" className="ghost" onClick={() => setDraft(null)}>取消</button><button type="submit">创建项目</button></div>
+            </form> : canAdmin && <button type="button" className="ghost" onClick={() => openDraft('project')}>新建项目</button>}
+          </div>}
+        </div>
         <div className="spacer" />
-        {federated && <button className="ghost" onClick={() => setSwitchOrg(true)}>切换组织</button>}
-        {!federated && <button className="ghost" onClick={() => setShow2FA(true)}>两步验证</button>}
-        {!federated && <button className="ghost" onClick={() => setShowGitHub(true)}>GitHub</button>}
-        <span>{user.name || user.email}{user.handle ? ` · ${user.handle}` : ''}</span>
-        {!personal && <button className="ghost" onClick={() => setShowIdentity(true)}>登录身份</button>}
-        <button className="ghost" onClick={onLogout}>退出</button>
+        <div style={{ position: 'relative' }}>
+          <button type="button" className="ghost" aria-label="账户菜单" aria-expanded={menu === 'account'} onClick={() => { setMenu(menu === 'account' ? null : 'account'); setDraft(null); }}>{(user.name || user.email || '我').slice(0, 1)}</button>
+          {menu === 'account' && <div className="card" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 4, width: 280, padding: 8 }}>
+            <p style={{ margin: '4px 8px' }}>{user.name || user.email}{user.handle ? ` · ${user.handle}` : ''}</p>
+            <p className="muted" style={{ margin: '0 8px 8px' }}>{user.email}</p>
+            <p className="muted" style={{ margin: '0 8px' }}>切换到</p>
+            {personalOrgs.map((item) => <button key={item.id} type="button" className="ghost" style={{ display: 'block', width: '100%', textAlign: 'left' }} onClick={() => { onOrgChange([item, ...orgs.filter((o) => o.id !== item.id)]); setMenu(null); }}>个人</button>)}
+            {sharedOrgs.map((item) => <button key={item.id} type="button" className="ghost" style={{ display: 'block', width: '100%', textAlign: 'left' }} onClick={() => { onOrgChange([item, ...orgs.filter((o) => o.id !== item.id)]); setMenu(null); }}>{item.name} · {item.role}</button>)}
+            {federated && <button type="button" className="ghost" onClick={() => { setMenu(null); setSwitchOrg(true); }}>切换组织</button>}
+            {!federated && (draft === 'org' ? <form onSubmit={(e) => void submitDraft(e)} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              <input aria-label="组织名称" placeholder="显示名称" value={draftName} onChange={(e) => setDraftName(e.target.value)} required />
+              <input aria-label="组织 code" placeholder="组织 code" value={draftCode} onChange={(e) => setDraftCode(e.target.value)} />
+              <div className="drawer-actions"><button type="button" className="ghost" onClick={() => setDraft(null)}>取消</button><button type="submit">创建组织</button></div>
+            </form> : <button type="button" className="ghost" onClick={() => openDraft('org')}>创建组织</button>)}
+            {!federated && <button type="button" className="ghost" onClick={() => { setMenu(null); setShow2FA(true); }}>两步验证</button>}
+            {!federated && <button type="button" className="ghost" onClick={() => { setMenu(null); setShowGitHub(true); }}>GitHub</button>}
+            {!personal && <button type="button" className="ghost" onClick={() => { setMenu(null); setShowIdentity(true); }}>登录身份</button>}
+            <button type="button" className="ghost" onClick={onLogout}>退出</button>
+          </div>}
+        </div>
       </header>
       {user.handle_confirmed === false && <HandleConfirm user={user} orgs={orgs} onUser={onUser} onOrgChange={onOrgChange} />}
 
@@ -135,35 +178,29 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
       {logoutError && <p className="error" role="alert">{logoutError}</p>}
       <div className="body">
         <aside className="sidebar">
-          <div className="sidebar-title">
-            项目
-            {canAdmin && <button className="ghost" onClick={createProject} title="新建项目">＋</button>}
+          <div className="sidebar-title" style={{ display: 'block', textTransform: 'none' }}>
+            <strong style={{ color: 'var(--fg)' }}>{ownerLabel}</strong>
+            <div>{personal ? '你的项目和密钥' : `组织 · ${org.role}`}</div>
           </div>
-          {projects.map((p) => (
-            <button key={p.id} className={`nav-item ${project?.id === p.id ? 'active' : ''}`} onClick={() => { setProject(p); setTab('secrets'); }}>
-              {p.name}
-            </button>
-          ))}
+          <button type="button" className={`nav-item ${tab === 'secrets' ? 'active' : ''}`} style={itemStyle(tab === 'secrets')} onClick={() => setTab('secrets')}>密钥</button>
+          {canDelegate && <button type="button" className={`nav-item ${tab === 'identities' ? 'active' : ''}`} style={itemStyle(tab === 'identities')} onClick={() => setTab('identities')}>机器身份</button>}
+          {canDelegate && <button type="button" className={`nav-item ${tab === 'dynamic' ? 'active' : ''}`} style={itemStyle(tab === 'dynamic')} onClick={() => setTab('dynamic')}>动态密钥</button>}
+          {canAudit && <button type="button" className={`nav-item ${tab === 'audit' ? 'active' : ''}`} style={itemStyle(tab === 'audit')} onClick={() => setTab('audit')}>审计日志</button>}
+          <button type="button" className={`nav-item ${tab === 'scans' ? 'active' : ''}`} style={itemStyle(tab === 'scans')} onClick={() => setTab('scans')}>扫描报告</button>
+          <button type="button" className={`nav-item ${tab === 'settings' ? 'active' : ''}`} style={itemStyle(tab === 'settings')} onClick={() => setTab('settings')}>{personal ? '个人设置' : '组织设置'}</button>
           {error && <div className="error">{error}</div>}
           <VersionTag className="sidebar-version" />
         </aside>
 
         <main className="main">
-          <div className="tabs">
-            {canDelegate && <button className={`tab ${tab === 'identities' ? 'active' : ''}`} onClick={() => setTab('identities')}>机器身份</button>}
-            {canDelegate && <button className={`tab ${tab === 'dynamic' ? 'active' : ''}`} onClick={() => setTab('dynamic')}>动态密钥</button>}
-            {canAudit && <button className={`tab ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>审计日志</button>}
-            <button className={`tab ${tab === 'scans' ? 'active' : ''}`} onClick={() => setTab('scans')}>扫描报告</button>
-            <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>{personal ? '个人设置' : '组织设置'}</button>
-          </div>
           {tab === 'secrets'
-            ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} canWrite={(org.role === 'developer' && !envProtected) || canAdmin} />
+            ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} ownerLabel={ownerLabel} canWrite={(org.role === 'developer' && !envProtected) || canAdmin} />
             : tab === 'identities'
               ? <IdentitiesPanel orgSlug={org.slug} project={project} envs={envs} />
               : tab === 'dynamic'
                 ? project && <DynamicPanel key={project.id} projectId={project.id} projectSlug={project.slug} />
                 : tab === 'settings'
-                  ? <SettingsPanel orgSlug={org.slug} role={org.role} personal={personal} />
+                  ? <SettingsPanel key={org.id} orgSlug={org.slug} role={org.role} personal={personal} />
                   : tab === 'scans'
                     ? <ScanReports orgSlug={org.slug} />
                     : canAudit ? <AuditPanel orgSlug={org.slug} /> : <p className="muted">没有审计权限</p>}
@@ -275,7 +312,7 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SecretsPanel({ projectId, env, projectSlug, canWrite: legacyCanWrite }: { projectId: string; env: string; projectSlug: string; canWrite: boolean }) {
+function SecretsPanel({ projectId, env, projectSlug, ownerLabel, canWrite: legacyCanWrite }: { projectId: string; env: string; projectSlug: string; ownerLabel: string; canWrite: boolean }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
   const [cur, setCur] = useState('/'); // 当前文件夹路径（物化路径 /a/b/）
@@ -332,7 +369,7 @@ function SecretsPanel({ projectId, env, projectSlug, canWrite: legacyCanWrite }:
   return (
     <div className="panel">
       <div className="panel-head">
-        <h2>{projectSlug} / {env}</h2>
+        <div><h2>{projectSlug}</h2><p className="muted" style={{ margin: '4px 0 0' }}>归属于{ownerLabel}</p></div>
         {canWrite && <button className="ghost" onClick={createFolder}>＋ 新建文件夹</button>}
         {(permissions?.delete ?? (!hasBrowserSession() && canWrite)) && cur !== '/' && <button className="ghost" onClick={deleteFolder}>删除此空文件夹</button>}
         {canWrite && <button className="ghost" onClick={() => setImporting(true)}>导入 .env</button>}

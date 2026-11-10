@@ -176,6 +176,16 @@ export class Client {
     const body = { key, value, comment, tags: tags ?? [], ...(options.expectedVersion != null ? { expectedVersion: options.expectedVersion } : {}) };
     return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets${query(['env', env, 'path', folderPath])}`, { body, idempotencyKey: options.idempotencyKey });
   }
+  getByLocator(locator, key) {
+    return this.request('GET', `/api/v1/access?${new URLSearchParams({ locator, key })}`);
+  }
+  putByLocator(locator, key, value, options = {}) {
+    const body = { key, value, ...(options.expectedVersion != null ? { expectedVersion: options.expectedVersion } : {}) };
+    return this.request('PUT', `/api/v1/access?${new URLSearchParams({ locator })}`, { body, idempotencyKey: options.idempotencyKey });
+  }
+  listByLocator(locator) {
+    return this.request('GET', `/api/v1/access?${new URLSearchParams({ locator })}`);
+  }
   getSecret(projectID, env, folderPath, key, options = {}) {
     return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}${query(['env', env, 'path', folderPath, 'resolve', options.resolve ? 'true' : ''])}`);
   }
