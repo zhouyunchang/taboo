@@ -15,7 +15,6 @@ import (
 func TestGovernanceMutationsRollbackWithAudit(t *testing.T) {
 	for _, c := range []struct{ name, method, path, body, table string }{
 		{"project", "POST", "/api/v1/orgs/a/projects", `{"name":"atomic"}`, "projects"},
-		{"environment", "POST", "/api/v1/projects/project-a/environments", `{"name":"atomic"}`, "environments"},
 		{"folder", "POST", "/api/v1/projects/project-a/folders?env=dev", `{"path":"/parent/child/"}`, "folders"},
 		{"identity", "POST", "/api/v1/orgs/a/identities", `{"name":"atomic","scopes":[{"project_id":"project-a","env":"dev","permission":"read"}]}`, "machine_identities"},
 		{"sync", "POST", "/api/v1/orgs/a/sync/targets", `{"name":"atomic","platform":"github","config":{"token":"public-fixture","owner":"fixture","repo":"fixture"}}`, "sync_targets"},

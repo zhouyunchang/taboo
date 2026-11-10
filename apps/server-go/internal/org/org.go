@@ -1,4 +1,4 @@
-// 组织/项目/环境 + 认证（注册/登录/refresh）+ 审计查询
+// 组织/项目 + 认证（注册/登录/refresh）+ 审计查询
 package org
 
 import (
@@ -503,10 +503,10 @@ func (s *Service) ListProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.From(r)
 	role, restricted, _ := auth.MemberInfo(s.DB, orgID, u.ID)
-	q := `SELECT id, name, slug, created_at FROM projects WHERE org_id = ? ORDER BY created_at`
+	q := `SELECT id, name, slug, created_at, approval_required FROM projects WHERE org_id = ? ORDER BY created_at`
 	args := []any{orgID}
 	if restricted && !rbac.Privileged(role) {
-		q = `SELECT p.id, p.name, p.slug, p.created_at FROM projects p
+		q = `SELECT p.id, p.name, p.slug, p.created_at, p.approval_required FROM projects p
 			JOIN project_grants g ON g.project_id = p.id AND g.user_id = ?
 			WHERE p.org_id = ? ORDER BY p.created_at`
 		args = []any{u.ID, orgID}
@@ -518,15 +518,18 @@ func (s *Service) ListProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type proj struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		Slug    string `json:"slug"`
-		Created string `json:"created_at"`
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Slug     string `json:"slug"`
+		Created  string `json:"created_at"`
+		Approval bool   `json:"approval_required"`
 	}
 	out := []proj{}
 	for rows.Next() {
 		var p proj
-		_ = rows.Scan(&p.ID, &p.Name, &p.Slug, &p.Created)
+		var approval int
+		_ = rows.Scan(&p.ID, &p.Name, &p.Slug, &p.Created, &approval)
+		p.Approval = approval == 1
 		out = append(out, p)
 	}
 	writeJSON(w, 200, map[string]any{"projects": out})
@@ -611,95 +614,16 @@ func (s *Service) projectOf(w http.ResponseWriter, r *http.Request) (secret.Proj
 	return p, true
 }
 
-func (s *Service) ListEnvs(w http.ResponseWriter, r *http.Request) {
-	p, ok := s.projectOf(w, r)
-	if !ok {
-		return
-	}
-	rows, err := s.DB.Query(`SELECT id, name, slug, sort_order, COALESCE(protected,0), COALESCE(approval_required,0) FROM environments WHERE project_id = ? ORDER BY sort_order`, p.ID)
-	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	defer rows.Close()
-	type env struct {
-		ID               string `json:"id"`
-		Name             string `json:"name"`
-		Slug             string `json:"slug"`
-		Sort             int    `json:"sort_order"`
-		Protected        bool   `json:"protected"`
-		ApprovalRequired bool   `json:"approval_required"`
-	}
-	out := []env{}
-	for rows.Next() {
-		var e env
-		var prot, approval int
-		_ = rows.Scan(&e.ID, &e.Name, &e.Slug, &e.Sort, &prot, &approval)
-		e.Protected = prot == 1
-		e.ApprovalRequired = approval == 1
-		out = append(out, e)
-	}
-	writeJSON(w, 200, map[string]any{"environments": out})
+// soleEnvID 是项目里唯一保留的环境。对外接口不再暴露环境，授权仍落到这一行。
+func soleEnvID(q interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, orgID, projectID string) (string, error) {
+	var id string
+	err := q.QueryRow(`SELECT e.id FROM environments e JOIN projects p ON p.id = e.project_id WHERE p.org_id = ? AND p.id = ? ORDER BY e.sort_order LIMIT 1`, orgID, projectID).Scan(&id)
+	return id, err
 }
 
-func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
-	p, ok := s.projectOf(w, r)
-	if !ok {
-		return
-	}
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, rbac.Admin, "") {
-		return
-	}
-	var b struct {
-		Name             string `json:"name"`
-		Protected        bool   `json:"protected"`
-		ApprovalRequired *bool  `json:"approval_required"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&b)
-	if strings.TrimSpace(b.Name) == "" {
-		writeErr(w, apperr.InvalidInput)
-		return
-	}
-	var maxSort int
-	_ = s.DB.QueryRow(`SELECT COALESCE(MAX(sort_order), -1) FROM environments WHERE project_id = ?`, p.ID).Scan(&maxSort)
-	id := tc.NewID()
-	slug := slugify(b.Name)
-	prot := 0
-	if b.Protected || slug == "prod" {
-		prot = 1
-	}
-	approval := 0
-	if slug == "prod" {
-		approval = 1
-	}
-	if b.ApprovalRequired != nil {
-		approval = 0
-		if *b.ApprovalRequired {
-			approval = 1
-		}
-	}
-	tx, started := auth.BeginMutation(s.DB, w, r)
-	if !started {
-		return
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, p.ID, b.Name, slug, maxSort+1, prot, approval); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	if err := ensureRootFolder(tx, id); err != nil {
-		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
-		return
-	}
-
-	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "env.create", "project/"+p.Slug+"/env/"+slug, map[string]any{"protected": prot == 1, "approval_required": approval == 1}) {
-		return
-	}
-	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "slug": slug, "protected": prot == 1, "approval_required": approval == 1})
-}
-
-func (s *Service) PatchEnv(w http.ResponseWriter, r *http.Request) {
+func (s *Service) PatchProject(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.projectOf(w, r)
 	if !ok {
 		return
@@ -718,7 +642,6 @@ func (s *Service) PatchEnv(w http.ResponseWriter, r *http.Request) {
 	if *b.ApprovalRequired {
 		flag = 1
 	}
-	slug := chi.URLParam(r, "env")
 	tx, started := auth.BeginMutation(s.DB, w, r)
 	if !started {
 		return
@@ -728,20 +651,14 @@ func (s *Service) PatchEnv(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
-	res, err := tx.Exec(`UPDATE environments SET approval_required=? WHERE project_id=? AND slug=?`, flag, p.ID, slug)
-	if err != nil {
+	if _, err := tx.Exec(`UPDATE environments SET approval_required=? WHERE project_id=?`, flag, p.ID); err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		writeErr(w, apperr.NotFound)
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "project.approval", "project/"+p.Slug, map[string]any{"approval_required": flag == 1}) {
 		return
 	}
-	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "env.approval", "project/"+p.Slug+"/env/"+slug, map[string]any{"approval_required": flag == 1}) {
-		return
-	}
-	writeJSON(w, 200, map[string]any{"slug": slug, "approval_required": flag == 1})
+	writeJSON(w, 200, map[string]any{"id": p.ID, "approval_required": flag == 1})
 }
 
 // ---------- 审计查询 ----------

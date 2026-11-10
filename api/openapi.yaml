@@ -904,20 +904,11 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-  /api/v1/projects/{pid}/environments:
-    get:
+  /api/v1/projects/{pid}:
+    patch:
       tags: [orgs]
-      summary: 项目环境列表
-      operationId: listEnvs
-      security: [{ bearerAuth: [] }, { browserSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }]
-      responses:
-        '200': { description: 环境列表, content: { application/json: { schema: { type: object, properties: { environments: { type: array, items: { $ref: '#/components/schemas/Environment' } } } } } } }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-    post:
-      tags: [orgs]
-      summary: 新建环境（自动建根文件夹）
-      operationId: createEnv
+      summary: 开关项目的变更审批
+      operationId: patchProject
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Pid' }]
       requestBody:
@@ -926,17 +917,20 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name]
-              properties: { name: { type: string } }
+              required: [approval_required]
+              properties: { approval_required: { type: boolean } }
       responses:
-        '201': { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/Environment' } } } }
+        '200': { description: 已更新, content: { application/json: { schema: { type: object, properties: { id: { type: string }, approval_required: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/projects/{pid}/folders:
     get:
       tags: [folders]
       summary: 平铺文件夹列表（前端按 parent_id 建树）
       operationId: listFolders
       security: [{ bearerAuth: [] }, { browserSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
       responses:
         '200': { description: 文件夹列表, content: { application/json: { schema: { type: object, properties: { folders: { type: array, items: { $ref: '#/components/schemas/Folder' } } } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -945,7 +939,7 @@ paths:
       summary: 创建文件夹（自动补中间节点，幂等）
       operationId: createFolder
       security: [{ bearerAuth: [] }, { browserSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
       requestBody:
         required: true
         content:
@@ -964,7 +958,6 @@ paths:
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: path, in: query, required: true, schema: { type: string } }
       responses:
         '200': { description: 已删除 }
@@ -976,7 +969,7 @@ paths:
       summary: 移动/重命名文件夹（级联更新子孙物化路径与密钥 folder 冗余列）
       operationId: moveFolder
       security: [{ bearerAuth: [] }, { browserSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
       requestBody:
         required: true
         content:
@@ -994,13 +987,12 @@ paths:
   /api/v1/projects/{pid}/secrets:
     get:
       tags: [secrets]
-      summary: 密钥列表（无值；?path= 按文件夹过滤，缺省全环境）
+      summary: 密钥列表（无值；?path= 按文件夹过滤，缺省整个项目）
       operationId: listSecrets
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
-        - { name: path, in: query, schema: { type: string, description: 物化路径 /a/b/，缺省列出整个环境 } }
+        - { name: path, in: query, schema: { type: string, description: 物化路径 /a/b/，缺省列出整个项目 } }
       responses:
         '200': { description: 密钥元数据列表, content: { application/json: { schema: { type: object, properties: { secrets: { type: array, items: { $ref: '#/components/schemas/SecretMeta' } }, permissions: { $ref: '#/components/schemas/SecretPermissions' } } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1011,7 +1003,6 @@ paths:
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: path, in: query, schema: { type: string, default: / } }
         - { name: Idempotency-Key, in: header, schema: { type: string }, description: 可选，最长 128 字符；同一主体和组织内相同请求重放原响应，不同请求复用返回 409 }
       requestBody:
@@ -1031,7 +1022,6 @@ paths:
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
         - { $ref: '#/components/parameters/Resolve' }
@@ -1046,7 +1036,6 @@ paths:
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
         - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 }, description: 同一请求重放原响应，不同请求复用返回 409 }
@@ -1064,7 +1053,6 @@ paths:
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
       responses:
@@ -1087,7 +1075,6 @@ paths:
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
         - { name: path, in: query, schema: { type: string, default: / } }
@@ -1105,7 +1092,6 @@ paths:
       parameters:
         - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 }, description: 同一请求重放原响应，不同请求复用返回 409 }
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
       requestBody:
@@ -1127,7 +1113,7 @@ paths:
       summary: 导出 .env 格式（export 权限；resolve=true 时展开引用，值仅出现在响应体）
       operationId: exportSecrets
       security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }, { $ref: '#/components/parameters/Resolve' }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Resolve' }]
       responses:
         '200':
           description: text/plain .env 内容
@@ -1143,7 +1129,6 @@ paths:
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: path, in: query, schema: { type: string, default: / } }
         - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 } }
       requestBody:
@@ -1162,7 +1147,7 @@ paths:
       summary: 读取密钥轮换策略（到期只发事件，不生成新明文）
       operationId: getRotationPolicy
       security: [{ bearerAuth: [] }, { browserSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
       responses:
         '200': { description: 策略, content: { application/json: { schema: { $ref: '#/components/schemas/RotationPolicy' } } } }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1171,7 +1156,7 @@ paths:
       summary: 设置密钥轮换策略（间隔或五段 cron，至少 5 分钟一次）
       operationId: putRotationPolicy
       security: [{ bearerAuth: [] }, { browserSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
       requestBody:
         required: true
         content:
@@ -1186,7 +1171,7 @@ paths:
       summary: 删除密钥轮换策略
       operationId: deleteRotationPolicy
       security: [{ bearerAuth: [] }, { browserSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
       responses:
         '200': { description: 已删除 }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1999,7 +1984,7 @@ paths:
               required: [project_id, action]
               properties:
                 project_id: { type: string }
-                env: { type: string }
+                env: { type: string, description: 可省略，使用项目唯一目录树 }
                 action: { type: string, enum: [reveal, export, write, delete, rollback] }
                 ttl_seconds: { type: integer, minimum: 60, maximum: 14400 }
                 reason: { type: string }
@@ -2066,26 +2051,6 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: 已吊销 }
-  /api/v1/projects/{pid}/environments/{env}:
-    patch:
-      tags: [orgs]
-      summary: 开关环境的变更审批
-      operationId: patchEnvironment
-      security: [{ bearerAuth: [] }, { browserSession: [] }]
-      parameters:
-        - { $ref: '#/components/parameters/Pid' }
-        - { name: env, in: path, required: true, schema: { type: string } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [approval_required]
-              properties: { approval_required: { type: boolean } }
-      responses:
-        '200': { description: 已更新 }
-        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/scim/v2/ServiceProviderConfig:
     get:
       tags: [sso]
@@ -2202,7 +2167,6 @@ components:
   parameters:
     OrgSlug: { name: slug, in: path, required: true, schema: { type: string } }
     Pid: { name: pid, in: path, required: true, schema: { type: string } }
-    Env: { name: env, in: query, schema: { type: string, default: dev } }
     Resolve:
       name: resolve
       in: query
@@ -2211,7 +2175,7 @@ components:
   responses:
     BadRequest: { description: 参数错误, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Unauthorized: { description: 未认证/凭证错误, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    Forbidden: { description: 权限不足（RBAC），如 viewer 取明文、developer 写 prod, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: 权限不足（RBAC），如 viewer 取明文, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     NotFound: { description: 资源不存在, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Conflict: { description: 冲突（如邮箱已注册）, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     RateLimited: { description: 限流（5 次/分钟/IP，可用 TABOO_LOGIN_RATE_LIMIT 调整）, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -2273,15 +2237,6 @@ components:
         name: { type: string }
         slug: { type: string }
         created_at: { type: string, format: date-time }
-    Environment:
-      type: object
-      required: [id, name, slug]
-      properties:
-        id: { type: string }
-        name: { type: string }
-        slug: { type: string }
-        sort_order: { type: integer }
-        protected: { type: boolean }
         approval_required: { type: boolean, description: 为真时写入、删除和回滚进入审批，不立即改密钥 }
     Folder:
       type: object
@@ -2427,10 +2382,10 @@ components:
         external_secret_permissions: { type: string, readOnly: true, enum: [EXPLICIT_ACTIONS] }
     MemberActionGrant:
       type: object
-      required: [project_id, environment_id, action]
+      required: [project_id, action]
       properties:
         project_id: { type: string }
-        environment_id: { type: string }
+        environment_id: { type: string, description: 可省略。服务端写入项目唯一目录树 }
         action: { type: string, enum: [read, write, reveal, export, rollback, delete] }
     MemberActions:
       type: object
@@ -2468,10 +2423,10 @@ components:
         revocation_profile: { type: string, enum: [BOUNDED, ONLINE_REQUIRED] }
     WorkloadGrant:
       type: object
-      required: [project_id, environment_id, action, required_scope]
+      required: [project_id, action, required_scope]
       properties:
         project_id: { type: string }
-        environment_id: { type: string }
+        environment_id: { type: string, description: 可省略。服务端写入项目唯一目录树 }
         action: { type: string, enum: [read, reveal, write, export, rollback, delete], description: 六种动作独立，不隐含其他动作 }
         required_scope: { type: string, description: 该动作必须在已验证 Token 中出现的精确 scope }
     WorkloadGrantsInput:
@@ -2615,7 +2570,7 @@ components:
       properties:
         project_id: { type: string }
         project_slug: { type: string }
-        env: { type: string, description: 显式环境，禁止通配 }
+        env: { type: string, description: 省略时为 dev。项目只有一棵目录树，禁止通配 }
         permission: { type: string, enum: [read, reveal, write] }
     Identity:
       type: object

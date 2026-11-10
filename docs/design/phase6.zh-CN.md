@@ -4,7 +4,7 @@
 
 ## 审批
 
-环境增加 `approval_required`。新建项目的 `prod` 默认为开，已有环境保持关闭，可在控制台或 `PATCH /projects/{id}/environments/{slug}` 切换。
+项目增加 `approval_required`。新建项目默认关闭，可在控制台或 `PATCH /projects/{id}` 切换。
 
 开启后，`upsert` / `delete` / `rollback` 不直接改密钥，而是写入 `approval_requests`。明文用组织 DEK 以 `approval` 用途密封，审计、列表和日志都不含明文。批准人必须是另一名 owner 或 admin（机器身份不能批，申请人不能批自己）。批准与写入在同一事务：冲突或失败会回滚，请求仍是 `pending`。默认 24 小时过期，过期后不能再批。导入在这种环境上直接拒绝，预览仍可用。
 

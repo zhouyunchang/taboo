@@ -122,7 +122,7 @@ ssh dev122-root $D/taboo-ctl.sh user status|enable|disable <email>
 
 ### Phase 6 线上核对
 
-- 审批：`PATCH /projects/{pid}/environments/{env}` 设 `approval_required`；写入返回 202 并排队，`GET /orgs/{slug}/approvals` 只给元数据，`POST .../approvals/{id}/approve|reject|cancel`。自批 403 `SELF_APPROVAL`，期间密钥被改过则 409 `VERSION_CONFLICT`。
+- 审批：`PATCH /projects/{pid}` 设 `approval_required`；写入返回 202 并排队，`GET /orgs/{slug}/approvals` 只给元数据，`POST .../approvals/{id}/approve|reject|cancel`。自批 403 `SELF_APPROVAL`，期间密钥被改过则 409 `VERSION_CONFLICT`。
 - 限时访问：`POST /orgs/{slug}/access-requests`（1 分钟–4 小时），管理员批准后生效，到期立即失效。
 - SCIM：`POST /orgs/{slug}/scim/tokens` 只显示一次原文；`/api/v1/scim/v2/Users`。同一 IP 每分钟 20 次错误令牌后 429。
 - 设备码：`POST /api/v1/auth/device` → 在 `/device` 手动输入代码并勾选确认。

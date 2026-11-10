@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
-import type { Env, Project } from '../api';
+import type { Project } from '../api';
 import Modal from './Modal';
 
 type Approval = { id: string; key: string; action: string; status: string; requester_id: string; reason: string; expires_at: number };
@@ -9,27 +9,19 @@ type Token = { id: string; name: string; revoked: boolean; expires_at: number };
 
 export default function Phase6({ orgSlug, canApprove, showScim = true }: { orgSlug: string; canApprove: boolean; showScim?: boolean }) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [envs, setEnvs] = useState<Record<string, Env[]>>({});
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [requests, setRequests] = useState<Access[]>([]);
   const [tokens, setTokens] = useState<Token[]>([]);
   const [fresh, setFresh] = useState('');
   const [error, setError] = useState('');
   const [projectID, setProjectID] = useState('');
-  const [env, setEnv] = useState('dev');
   const [action, setAction] = useState('reveal');
   const [ttl, setTtl] = useState(30);
   const [reason, setReason] = useState('');
 
   const load = useCallback(() => {
-    api.get<{ projects: Project[] }>(`/api/v1/orgs/${orgSlug}/projects`).then(async (d) => {
+    api.get<{ projects: Project[] }>(`/api/v1/orgs/${orgSlug}/projects`).then((d) => {
       setProjects(d.projects);
-      const next: Record<string, Env[]> = {};
-      for (const project of d.projects) {
-        const envs = await api.get<{ environments: Env[] }>(`/api/v1/projects/${project.id}/environments`);
-        next[project.id] = envs.environments;
-      }
-      setEnvs(next);
       setProjectID((cur) => cur || d.projects[0]?.id || '');
     }).catch((e) => setError(e instanceof ApiError ? e.message : '无法加载项目'));
     api.get<{ approvals: Approval[] }>(`/api/v1/orgs/${orgSlug}/approvals`).then((d) => setApprovals(d.approvals || [])).catch((e) => setError(e instanceof ApiError ? e.message : '无法加载审批'));
@@ -38,10 +30,10 @@ export default function Phase6({ orgSlug, canApprove, showScim = true }: { orgSl
   }, [orgSlug, canApprove, showScim]);
   useEffect(() => { load(); }, [load]);
 
-  async function toggle(project: string, slug: string, on: boolean) {
+  async function toggle(project: string, on: boolean) {
     setError('');
     try {
-      await api.patch(`/api/v1/projects/${project}/environments/${encodeURIComponent(slug)}`, { approval_required: on });
+      await api.patch(`/api/v1/projects/${project}`, { approval_required: on });
       load();
     } catch (e) { setError(e instanceof ApiError ? e.message : '没有更新'); }
   }
@@ -56,7 +48,7 @@ export default function Phase6({ orgSlug, canApprove, showScim = true }: { orgSl
     e.preventDefault();
     setError('');
     try {
-      await api.post(`/api/v1/orgs/${orgSlug}/access-requests`, { project_id: projectID, env, action, ttl_seconds: ttl * 60, reason });
+      await api.post(`/api/v1/orgs/${orgSlug}/access-requests`, { project_id: projectID, action, ttl_seconds: ttl * 60, reason });
       setReason('');
       load();
     } catch (err) { setError(err instanceof ApiError ? err.message : '没有提交'); }
@@ -77,19 +69,18 @@ export default function Phase6({ orgSlug, canApprove, showScim = true }: { orgSl
   return (
     <div className="phase6">
       <h3>审批与访问</h3>
-      <p className="muted">开启审批的环境里，写入、删除和回滚要另一名管理员批准。限时权限到期后立刻失效。{showScim ? 'SCIM 令牌只显示一次。' : ''}</p>
+      <p className="muted">开启审批的项目里，写入、删除和回滚要另一名管理员批准。限时权限到期后立刻失效。{showScim ? 'SCIM 令牌只显示一次。' : ''}</p>
       {error && <p role="alert">{error}</p>}
       {canApprove && <div className="table-scroll">
         <table>
-          <thead><tr><th>项目</th><th>环境</th><th>变更审批</th></tr></thead>
+          <thead><tr><th>项目</th><th>变更审批</th></tr></thead>
           <tbody>
-            {projects.flatMap((project) => (envs[project.id] || []).map((item) => (
-              <tr key={item.id}>
+            {projects.map((project) => (
+              <tr key={project.id}>
                 <td>{project.name}</td>
-                <td>{item.name}</td>
-                <td><button type="button" onClick={() => void toggle(project.id, item.slug, !item.approval_required)}>{item.approval_required ? '已开启' : '已关闭'}</button></td>
+                <td><button type="button" onClick={() => void toggle(project.id, !project.approval_required)}>{project.approval_required ? '已开启' : '已关闭'}</button></td>
               </tr>
-            )))}
+            ))}
           </tbody>
         </table>
       </div>}
@@ -118,7 +109,6 @@ export default function Phase6({ orgSlug, canApprove, showScim = true }: { orgSl
         <label>项目
           <select value={projectID} onChange={(e) => setProjectID(e.target.value)}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
         </label>
-        <label>环境 <input value={env} onChange={(e) => setEnv(e.target.value)} /></label>
         <label>动作
           <select value={action} onChange={(e) => setAction(e.target.value)}>
             {['reveal', 'export', 'write', 'delete', 'rollback'].map((item) => <option key={item}>{item}</option>)}

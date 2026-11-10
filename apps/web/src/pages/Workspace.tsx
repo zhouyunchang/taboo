@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, hasBrowserSession, getBrowserSessionInfo } from '../api';
-import type { User, Org, Project, Env, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
+import type { User, Org, Project, Folder, SecretMeta, SecretValue, Version, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
 import SettingsPanel from './Settings';
 import { OrganizationSwitcher } from '../components/Governance';
 import IdentityReplacement from '../components/IdentityReplacement';
@@ -30,8 +30,7 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
   const session = getBrowserSessionInfo();
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
-  const [envs, setEnvs] = useState<Env[]>([]);
-  const [env, setEnv] = useState('dev');
+  const env = 'dev';
   const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings' | 'scans'>('secrets');
   const [menu, setMenu] = useState<'project' | 'account' | null>(null);
   const [draft, setDraft] = useState<'project' | 'org' | null>(null);
@@ -60,16 +59,6 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
   }, [org?.slug]);
 
   useEffect(() => { loadProjects().catch((e) => setError(String(e))); }, [loadProjects]);
-
-  useEffect(() => {
-    let live = true;
-    setEnvs([]);
-    if (!project) return;
-    api.get<{ environments: Env[] }>(`/api/v1/projects/${project.id}/environments`)
-      .then((d) => { if (live) { setEnvs(d.environments); setEnv(d.environments[0]?.slug ?? 'dev'); } })
-      .catch((e) => { if (live) setError(String(e)); });
-    return () => { live = false; };
-  }, [project?.id]);
 
   function itemStyle(active: boolean): React.CSSProperties {
     return { display: 'block', width: '100%', textAlign: 'left', fontWeight: 400, background: active ? undefined : 'transparent', color: active ? undefined : 'inherit' };
@@ -118,8 +107,6 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
   const canAdmin = org.role === 'owner' || org.role === 'admin';
   const canDelegate = org.role === 'owner' || (!federated && org.role === 'admin');
   const canAudit = org.role === 'owner' || org.role === 'admin';
-  const envMeta = envs.find((e) => e.slug === env);
-  const envProtected = Boolean(envMeta && 'protected' in envMeta && (envMeta as { protected?: boolean }).protected);
 
   return (
     <div className="layout">
@@ -194,9 +181,9 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
 
         <main className="main">
           {tab === 'secrets'
-            ? project && <SecretsPanel key={`${project.id}:${env}`} projectId={project.id} env={env} projectSlug={project.slug} ownerLabel={ownerLabel} canWrite={(org.role === 'developer' && !envProtected) || canAdmin} />
+            ? project && <SecretsPanel key={project.id} projectId={project.id} env={env} projectSlug={project.slug} ownerLabel={ownerLabel} canWrite={org.role === 'developer' || canAdmin} />
             : tab === 'identities'
-              ? <IdentitiesPanel orgSlug={org.slug} project={project} envs={envs} />
+              ? <IdentitiesPanel orgSlug={org.slug} project={project} />
               : tab === 'dynamic'
                 ? project && <DynamicPanel key={project.id} projectId={project.id} projectSlug={project.slug} />
                 : tab === 'settings'
@@ -713,7 +700,7 @@ function AuditPanel({ orgSlug }: { orgSlug: string }) {
 }
 
 
-function IdentitiesPanel({ orgSlug, project, envs }: { orgSlug: string; project: Project | null; envs: Env[] }) {
+function IdentitiesPanel({ orgSlug, project }: { orgSlug: string; project: Project | null }) {
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [error, setError] = useState('');
   const [showNew, setShowNew] = useState(false);
@@ -760,7 +747,7 @@ function IdentitiesPanel({ orgSlug, project, envs }: { orgSlug: string; project:
               <td className="mono" data-label="名称">{i.name}</td>
               <td className="mono muted" data-label="Client ID">{i.client_id}</td>
               <td>{i.scopes.map((s, idx) => (
-                <div key={idx}><span className="tag">{s.project_slug}</span><span className="tag">{s.env}</span><span className="tag">{s.permission}</span></div>
+                <div key={idx}><span className="tag">{s.project_slug}</span><span className="tag">{s.permission}</span></div>
               ))}</td>
               <td className="mono" data-label="IP 白名单">{i.allowed_cidrs?.length ? i.allowed_cidrs.join(', ') : '不限制'}</td>
               <td data-label="扫描报告">{i.list_scan_reports ? '全部' : '仅自己'}</td>
@@ -777,7 +764,6 @@ function IdentitiesPanel({ orgSlug, project, envs }: { orgSlug: string; project:
         <IdentityCreator
           orgSlug={orgSlug}
           project={project}
-          envs={envs}
           onClose={() => setShowNew(false)}
           onCreated={(d) => { setShowNew(false); setOnce(d); load(); }}
         />
@@ -786,8 +772,8 @@ function IdentitiesPanel({ orgSlug, project, envs }: { orgSlug: string; project:
   );
 }
 
-function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
-  orgSlug: string; project: Project; envs: Env[];
+function IdentityCreator({ orgSlug, project, onClose, onCreated }: {
+  orgSlug: string; project: Project;
   onClose: () => void; onCreated: (d: CreatedIdentity) => void;
 }) {
   const [name, setName] = useState('');
@@ -834,7 +820,7 @@ function IdentityCreator({ orgSlug, project, envs, onClose, onCreated }: {
               <button type="button" className="ghost" disabled={scopes.length === 1} onClick={() => setScopes(scopes.filter((_, i) => i !== idx))}>✕</button>
             </div>
           ))}
-          <button type="button" className="ghost" onClick={() => setScopes([...scopes, { project_id: project.id, project_slug: project.slug, env: envs[0]?.slug || 'dev', permission: 'read' }])}>＋ 添加 scope</button>
+          <button type="button" className="ghost" onClick={() => setScopes([...scopes, { project_id: project.id, project_slug: project.slug, env: 'dev', permission: 'read' }])}>＋ 添加 scope</button>
         </div>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">

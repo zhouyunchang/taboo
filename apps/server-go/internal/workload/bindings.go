@@ -33,7 +33,8 @@ func (s *Service) validateGrants(w http.ResponseWriter, org string, grants []Gra
 		return false
 	}
 	seen := map[string]bool{}
-	for _, g := range grants {
+	for i := range grants {
+		g := &grants[i]
 		if g.Action != "read" && g.Action != "reveal" && g.Action != "write" && g.Action != "export" && g.Action != "rollback" && g.Action != "delete" {
 			fail(w, 400, "INVALID_GRANTS", "unsupported workload action")
 			return false
@@ -41,6 +42,12 @@ func (s *Service) validateGrants(w http.ResponseWriter, org string, grants []Gra
 		if g.RequiredScope == "" || len(g.RequiredScope) > 200 || strings.ContainsAny(g.RequiredScope, " \t\r\n") {
 			fail(w, 400, "INVALID_GRANTS", "one exact OAuth scope is required for each action")
 			return false
+		}
+		if g.EnvironmentID == "" {
+			if err := s.DB.QueryRow(`SELECT e.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE p.id=? AND p.org_id=? ORDER BY e.sort_order LIMIT 1`, g.ProjectID, org).Scan(&g.EnvironmentID); err != nil {
+				fail(w, 400, "INVALID_GRANTS", "project must belong to this organization")
+				return false
+			}
 		}
 		key := g.ProjectID + "\x00" + g.EnvironmentID + "\x00" + g.Action
 		if seen[key] {
@@ -50,7 +57,7 @@ func (s *Service) validateGrants(w http.ResponseWriter, org string, grants []Gra
 		seen[key] = true
 		var n int
 		if err := s.DB.QueryRow(`SELECT COUNT(*) FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=? AND p.id=? AND p.org_id=?`, g.EnvironmentID, g.ProjectID, org).Scan(&n); err != nil || n != 1 {
-			fail(w, 400, "INVALID_GRANTS", "project and environment must belong to this organization")
+			fail(w, 400, "INVALID_GRANTS", "project must belong to this organization")
 			return false
 		}
 	}

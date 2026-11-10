@@ -63,15 +63,7 @@ check('identity list dev 200 (no values)', list.status === 200 && list.data.secr
 const write = await call('POST', `/api/v1/projects/${projectId}/secrets?env=dev`, { token: itoken, body: { key: 'X', value: 'y' } });
 check('read scope write 403', write.status === 403);
 
-// 8. 无 prod scope → 403
-const prodRead = await call('GET', `/api/v1/projects/${projectId}/secrets?env=prod`, { token: itoken });
-check('no prod scope 403', prodRead.status === 403);
-
-// 9. 项目级环境列表允许（项目内任一 scope）
-const envs = await call('GET', `/api/v1/projects/${projectId}/environments`, { token: itoken });
-check('identity env list 200', envs.status === 200 && envs.data.environments.length === 3);
-
-// 10. 错误 secret 统一 401
+// 8. 错误 secret 统一 401
 const bad = await call('POST', '/api/v1/identities/token', { body: { client_id, client_secret: 'wrong' } });
 check('bad secret 401', bad.status === 401);
 

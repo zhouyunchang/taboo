@@ -159,7 +159,6 @@ type Schemas = components['schemas'];
 export type User = Schemas['User'];
 export type Org = Schemas['OrgMembership'];
 export type Project = Schemas['Project'];
-export type Env = Schemas['Environment'];
 export type Folder = Schemas['Folder'];
 export type SecretMeta = Schemas['SecretMeta'];
 export type SecretValue = Schemas['SecretValue'];

@@ -714,22 +714,21 @@ export interface paths {
         patch: operations["updateIdentity"];
         trace?: never;
     };
-    "/api/v1/projects/{pid}/environments": {
+    "/api/v1/projects/{pid}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** 项目环境列表 */
-        get: operations["listEnvs"];
+        get?: never;
         put?: never;
-        /** 新建环境（自动建根文件夹） */
-        post: operations["createEnv"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /** 开关项目的变更审批 */
+        patch: operations["patchProject"];
         trace?: never;
     };
     "/api/v1/projects/{pid}/folders": {
@@ -775,7 +774,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 密钥列表（无值；?path= 按文件夹过滤，缺省全环境） */
+        /** 密钥列表（无值；?path= 按文件夹过滤，缺省整个项目） */
         get: operations["listSecrets"];
         put?: never;
         /** 创建/更新密钥（AES-256-GCM 信封加密，产生新版本；同 key 不同目录互不冲突） */
@@ -1685,23 +1684,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/projects/{pid}/environments/{env}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** 开关环境的变更审批 */
-        patch: operations["patchEnvironment"];
-        trace?: never;
-    };
     "/api/v1/scim/v2/ServiceProviderConfig": {
         parameters: {
             query?: never;
@@ -1890,13 +1872,6 @@ export interface components {
             slug: string;
             /** Format: date-time */
             created_at?: string;
-        };
-        Environment: {
-            id: string;
-            name: string;
-            slug: string;
-            sort_order?: number;
-            protected?: boolean;
             /** @description 为真时写入、删除和回滚进入审批，不立即改密钥 */
             approval_required?: boolean;
         };
@@ -2038,7 +2013,8 @@ export interface components {
         };
         MemberActionGrant: {
             project_id: string;
-            environment_id: string;
+            /** @description 可省略。服务端写入项目唯一目录树 */
+            environment_id?: string;
             /** @enum {string} */
             action: "read" | "write" | "reveal" | "export" | "rollback" | "delete";
         };
@@ -2085,7 +2061,8 @@ export interface components {
         };
         WorkloadGrant: {
             project_id: string;
-            environment_id: string;
+            /** @description 可省略。服务端写入项目唯一目录树 */
+            environment_id?: string;
             /**
              * @description 六种动作独立，不隐含其他动作
              * @enum {string}
@@ -2251,7 +2228,7 @@ export interface components {
         IdentityScope: {
             project_id?: string;
             project_slug?: string;
-            /** @description 显式环境，禁止通配 */
+            /** @description 省略时为 dev。项目只有一棵目录树，禁止通配 */
             env?: string;
             /** @enum {string} */
             permission?: "read" | "reveal" | "write";
@@ -2407,7 +2384,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description 权限不足（RBAC），如 viewer 取明文、developer 写 prod */
+        /** @description 权限不足（RBAC），如 viewer 取明文 */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -2447,7 +2424,6 @@ export interface components {
     parameters: {
         OrgSlug: string;
         Pid: string;
-        Env: string;
         /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
         Resolve: boolean;
     };
@@ -3738,32 +3714,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    listEnvs: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                pid: components["parameters"]["Pid"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description 环境列表 */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        environments?: components["schemas"]["Environment"][];
-                    };
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    createEnv: {
+    patchProject: {
         parameters: {
             query?: never;
             header?: never;
@@ -3775,27 +3726,31 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    name: string;
+                    approval_required: boolean;
                 };
             };
         };
         responses: {
-            /** @description 已创建 */
-            201: {
+            /** @description 已更新 */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Environment"];
+                    "application/json": {
+                        id?: string;
+                        approval_required?: boolean;
+                    };
                 };
             };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listFolders: {
         parameters: {
-            query?: {
-                env?: components["parameters"]["Env"];
-            };
+            query?: never;
             header?: never;
             path: {
                 pid: components["parameters"]["Pid"];
@@ -3820,9 +3775,7 @@ export interface operations {
     };
     createFolder: {
         parameters: {
-            query?: {
-                env?: components["parameters"]["Env"];
-            };
+            query?: never;
             header?: never;
             path: {
                 pid: components["parameters"]["Pid"];
@@ -3856,7 +3809,6 @@ export interface operations {
     deleteFolder: {
         parameters: {
             query: {
-                env?: components["parameters"]["Env"];
                 path: string;
             };
             header?: never;
@@ -3880,9 +3832,7 @@ export interface operations {
     };
     moveFolder: {
         parameters: {
-            query?: {
-                env?: components["parameters"]["Env"];
-            };
+            query?: never;
             header?: never;
             path: {
                 pid: components["parameters"]["Pid"];
@@ -3914,7 +3864,6 @@ export interface operations {
     listSecrets: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
             };
             header?: never;
@@ -3943,7 +3892,6 @@ export interface operations {
     upsertSecret: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
             };
             header?: {
@@ -3979,7 +3927,6 @@ export interface operations {
     revealSecret: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
                 /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
                 resolve?: components["parameters"]["Resolve"];
@@ -4009,7 +3956,6 @@ export interface operations {
     deleteSecret: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
                 /** @description 当前版本前置条件，不匹配返回 409 */
                 expectedVersion?: number;
@@ -4052,7 +3998,6 @@ export interface operations {
     secretVersions: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
             };
             header?: never;
@@ -4083,7 +4028,6 @@ export interface operations {
     revealSecretVersion: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
                 /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
                 resolve?: components["parameters"]["Resolve"];
@@ -4114,7 +4058,6 @@ export interface operations {
     rollbackSecret: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
             };
             header?: {
@@ -4154,7 +4097,6 @@ export interface operations {
     exportSecrets: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
                 resolve?: components["parameters"]["Resolve"];
             };
@@ -4182,7 +4124,6 @@ export interface operations {
     importSecrets: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
             };
             header?: {
@@ -4216,7 +4157,6 @@ export interface operations {
     getRotationPolicy: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
             };
             header?: never;
@@ -4243,7 +4183,6 @@ export interface operations {
     putRotationPolicy: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
             };
             header?: never;
@@ -4275,7 +4214,6 @@ export interface operations {
     deleteRotationPolicy: {
         parameters: {
             query?: {
-                env?: components["parameters"]["Env"];
                 path?: string;
             };
             header?: never;
@@ -5852,6 +5790,7 @@ export interface operations {
             content: {
                 "application/json": {
                     project_id: string;
+                    /** @description 可省略，使用项目唯一目录树 */
                     env?: string;
                     /** @enum {string} */
                     action: "reveal" | "export" | "write" | "delete" | "rollback";
@@ -5992,34 +5931,6 @@ export interface operations {
                 };
                 content?: never;
             };
-        };
-    };
-    patchEnvironment: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                pid: components["parameters"]["Pid"];
-                env: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    approval_required: boolean;
-                };
-            };
-        };
-        responses: {
-            /** @description 已更新 */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            403: components["responses"]["Forbidden"];
         };
     };
     scimConfig: {

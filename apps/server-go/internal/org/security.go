@@ -123,12 +123,20 @@ func (s *Service) PutActionGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seen := map[string]bool{}
-	for _, g := range b.Grants {
+	for i := range b.Grants {
+		g := &b.Grants[i]
 		switch g.Action {
 		case "read", "write", "reveal", "export", "rollback", "delete":
 		default:
 			writeErr(w, apperr.InvalidInput)
 			return
+		}
+		if g.EnvironmentID == "" {
+			g.EnvironmentID, err = soleEnvID(tx, org, g.ProjectID)
+			if err != nil {
+				writeErr(w, apperr.InvalidInput)
+				return
+			}
 		}
 		key := g.ProjectID + "\x00" + g.EnvironmentID + "\x00" + g.Action
 		if seen[key] {

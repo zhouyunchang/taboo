@@ -18,7 +18,7 @@
 | `GET /api/v1/auth/sources` | 登录页 Realm 列表 + 是否允许本地注册/密码 |
 | `GET /api/v1/auth/oidc/{slug}/login` `…/callback` | OIDC 外部用户源（PKCE；`?pid=` 指定配置） |
 | `GET /api/v1/me` | 当前用户 + 组织成员关系 |
-| `GET/POST /api/v1/orgs/{slug}/projects` | 项目；`GET/POST …/projects/{pid}/environments` 环境 |
+| `GET/POST /api/v1/orgs/{slug}/projects` | 项目。`PATCH /api/v1/projects/{pid}` 开关变更审批 |
 | `GET/POST /api/v1/projects/{pid}/secrets` | 密钥列表 / upsert（产生新版本） |
 | `GET/DELETE /api/v1/projects/{pid}/secrets/{key}` | reveal（审计）/ 删除 |
 | `GET …/secrets/{key}/versions` `POST …/rollback` | 版本历史 / 回滚 |

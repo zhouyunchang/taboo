@@ -113,10 +113,8 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
   const headers = { Authorization: `Bearer ${localTokens.access}` };
   const projects = await (await request.get('/api/v1/orgs/a/projects', { headers })).json();
   const pid = projects.projects[0].id;
-  const environments = await (await request.get(`/api/v1/projects/${pid}/environments`, { headers })).json();
-  const environment = environments.environments.find((x: { slug: string }) => x.slug === 'dev');
   const granted = await request.put(`/api/v1/orgs/a/members/${uid}/actions`, { headers, data: {
-    grants: ['read', 'write', 'reveal', 'rollback'].map((action) => ({ project_id: pid, environment_id: environment.id, action })),
+    grants: ['read', 'write', 'reveal', 'rollback'].map((action) => ({ project_id: pid, action })),
   }});
   expect(granted.status()).toBe(200);
   await page.reload();

@@ -93,7 +93,7 @@ function SyncTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean }
             <tr key={t.id}>
               <td className="mono">{t.name}</td>
               <td><span className="tag">{t.platform}</span></td>
-              <td className="muted">{t.project_id ? `项目 ${t.project_id.slice(0, 8)}…` : '全部项目'} / {t.env_slug === '*' ? '全部环境' : t.env_slug}</td>
+              <td className="muted">{t.project_id ? `项目 ${t.project_id.slice(0, 8)}…` : '全部项目'}</td>
               <td><span className={`tag ${t.enabled ? 'ok' : ''}`}>{t.enabled ? '启用' : '停用'}</span></td>
               <td className="actions">
                 {canManage && <button className="ghost" onClick={() => t.id && retry(t.id)}>全量重推</button>}
@@ -130,7 +130,6 @@ function SyncTab({ orgSlug, canManage }: { orgSlug: string; canManage: boolean }
 function SyncTargetCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const [platform, setPlatform] = useState('github');
-  const [envSlug, setEnvSlug] = useState('*');
   const [configText, setConfigText] = useState('');
   const [ping, setPing] = useState(true);
   const [err, setErr] = useState('');
@@ -146,7 +145,7 @@ function SyncTargetCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; o
     }
     try {
       await api.post(`/api/v1/orgs/${orgSlug}/sync/targets${ping ? '?ping=1' : ''}`, {
-        name, platform, env_slug: envSlug, config,
+        name, platform, config,
       });
       onCreated();
     } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : String(e2)); }
@@ -165,7 +164,6 @@ function SyncTargetCreator({ orgSlug, onClose, onCreated }: { orgSlug: string; o
             <option value="cloudflare">Cloudflare Workers</option>
           </select>
         </label>
-        <label>环境（'*' 为全部）<input value={envSlug} onChange={(e) => setEnvSlug(e.target.value)} /></label>
         <label>配置（每行 key=value；平台令牌经 Master Key 加密落库）
           <textarea className="mono resize-none" rows={5} value={configText} onChange={(e) => setConfigText(e.target.value)} required
             placeholder={PLATFORM_HINTS[platform]} />

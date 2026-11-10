@@ -168,7 +168,6 @@ export class Client {
   }
   me() { return this.request('GET', '/api/v1/me'); }
   projects(orgSlug) { return this.request('GET', `/api/v1/orgs/${encodeURIComponent(orgSlug)}/projects`); }
-  environments(projectID) { return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/environments`); }
   listFolders(projectID, env) { return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/folders${query(['env', env])}`); }
   createFolder(projectID, env, path) { return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/folders${query(['env', env])}`, { body: { path } }); }
   listSecrets(projectID, env, folderPath = '') { return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets${query(['env', env, 'path', folderPath])}`); }

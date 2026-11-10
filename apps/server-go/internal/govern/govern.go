@@ -206,11 +206,14 @@ func (s *Service) createAccess(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.NotFound)
 		return
 	}
-	if b.Env != "" {
-		if s.DB.QueryRow(`SELECT id FROM environments WHERE project_id=? AND slug=?`, b.ProjectID, b.Env).Scan(&envID) != nil {
+	if b.Env == "" {
+		if s.DB.QueryRow(`SELECT id FROM environments WHERE project_id=? ORDER BY sort_order LIMIT 1`, b.ProjectID).Scan(&envID) != nil {
 			writeErr(w, apperr.NotFound)
 			return
 		}
+	} else if s.DB.QueryRow(`SELECT id FROM environments WHERE project_id=? AND slug=?`, b.ProjectID, b.Env).Scan(&envID) != nil {
+		writeErr(w, apperr.NotFound)
+		return
 	}
 	var pending int
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM access_requests WHERE org_id=? AND requester_id=? AND status='pending'`, org, actor.ID).Scan(&pending); err != nil {

@@ -302,12 +302,10 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	r.Route("/orgs/{slug}/approvals", gov.ApprovalRoutes)
 	r.Route("/orgs/{slug}/access-requests", gov.AccessRoutes)
 	r.Route("/orgs/{slug}/scim/tokens", (&scim.Service{DB: d.DB, MasterKey: d.MasterKey}).TokenRoutes)
-	// 项目作用域：注入 ProjectCtx 后挂环境管理 + 密钥 + 文件夹路由
+	// 项目作用域：注入 ProjectCtx 后挂密钥与文件夹路由
 	r.Route("/projects/{pid}", func(r chi.Router) {
 		r.Use(projectCtx(d.DB))
-		r.Get("/environments", orgs.ListEnvs)
-		r.Post("/environments", orgs.CreateEnv)
-		r.Patch("/environments/{env}", orgs.PatchEnv)
+		r.Patch("/", orgs.PatchProject)
 		folders.Routes(r)
 		secrets.Routes(r)
 		(&rotation.Service{DB: d.DB}).Routes(r)

@@ -31,7 +31,7 @@ func TestFederationCredentialDelegationRequiresLocalOwner(t *testing.T) {
 				}
 				checkStatus(t, f.browserRequest("POST", x.path, x.body, c), want)
 			}
-			checkStatus(t, f.request("GET", "/api/v1/projects/project-a/environments", c, false), 200)
+			checkStatus(t, f.request("GET", "/api/v1/orgs/a/projects", c, false), 200)
 			checkStatus(t, f.request("GET", "/api/v1/projects/project-a/secrets?env=dev", c, false), 403)
 		})
 	}

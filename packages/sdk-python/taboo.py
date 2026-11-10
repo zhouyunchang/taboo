@@ -209,9 +209,6 @@ class Client:
     def projects(self, org_slug):
         return self.request("GET", f"/api/v1/orgs/{urllib.parse.quote(org_slug)}/projects")
 
-    def environments(self, project_id):
-        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/environments")
-
     def list_folders(self, project_id, env):
         return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/folders{_query(['env', env])}")
 

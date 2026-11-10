@@ -17,7 +17,7 @@ import (
 
 func TestPhase6ApprovalAccessAndSCIM(t *testing.T) {
 	f := phase4Ready(t)
-	checkStatus(t, f.localRequest("PATCH", "/api/v1/projects/project-a/environments/dev", `{"approval_required":true}`, ""), 200)
+	checkStatus(t, f.localRequest("PATCH", "/api/v1/projects/project-a", `{"approval_required":true}`, ""), 200)
 	queued := f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"LOCKED","value":"phase6-secret","reason":"rotate"}`, "p6-queue")
 	checkStatus(t, queued, 202)
 	if strings.Contains(queued.Body.String(), "phase6-secret") || !strings.Contains(queued.Body.String(), `"status":"pending"`) {

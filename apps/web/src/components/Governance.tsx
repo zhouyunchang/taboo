@@ -52,24 +52,17 @@ export function GrantEditor({
           `/api/v1/orgs/${orgSlug}/projects`,
         ),
       ]);
-      const envs = await Promise.all(
-        p.projects.map(async (p) =>
-          (
-            await api.get<{ environments: { id: string; name: string }[] }>(
-              `/api/v1/projects/${p.id}/environments`,
-            )
-          ).environments.map((e) => ({
-            ...e,
-            project: p.id,
-            projectName: p.name,
-          })),
-        ),
-      );
+      const choices = p.projects.map((item) => ({
+        id: item.id,
+        name: item.name,
+        project: item.id,
+        projectName: item.name,
+      }));
       if (live) {
         setLoaded(true);
         setGrants(g.grants ?? []);
-        setChoices(envs.flat());
-        setSelected(envs.flat()[0]?.id ?? "");
+        setChoices(choices);
+        setSelected(choices[0]?.id ?? "");
       }
     })()
       .catch((e) => {
@@ -107,14 +100,14 @@ export function GrantEditor({
         ) : (
           <>
             <label>
-              项目 / 环境
+              项目
               <select
                 value={selected}
                 onChange={(e) => setSelected(e.target.value)}
               >
                 {choices.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.projectName} / {c.name}
+                    {c.name}
                   </option>
                 ))}
               </select>
@@ -122,7 +115,7 @@ export function GrantEditor({
             {choice &&
               Object.entries(actions).map(([action, label]) => {
                 const grant = grants.find(
-                  (g) => g.environment_id === selected && g.action === action,
+                  (g) => g.project_id === selected && g.action === action,
                 );
                 return (
                   <fieldset key={action}>
@@ -137,7 +130,7 @@ export function GrantEditor({
                                   ...g,
                                   {
                                     project_id: choice.project,
-                                    environment_id: selected,
+                                    environment_id: "",
                                     action,
                                     ...(machine
                                       ? { required_scope: `secrets:${action}` }

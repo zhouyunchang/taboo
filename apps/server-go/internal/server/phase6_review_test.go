@@ -12,7 +12,7 @@ import (
 func TestPhase6ApprovalPinsVersionAndDropsPayload(t *testing.T) {
 	f := phase4Ready(t)
 	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"RACE","value":"v1"}`, ""), 200)
-	checkStatus(t, f.localRequest("PATCH", "/api/v1/projects/project-a/environments/dev", `{"approval_required":true}`, ""), 200)
+	checkStatus(t, f.localRequest("PATCH", "/api/v1/projects/project-a", `{"approval_required":true}`, ""), 200)
 	f.exec(`INSERT INTO users(id,email,name,password_hash) VALUES('admin2','admin2@example.test','Admin','!')`)
 	f.exec(`INSERT INTO org_members(org_id,user_id,role) VALUES('a','admin2','admin')`)
 	admin := mustToken(t, "admin2", "admin2@example.test")

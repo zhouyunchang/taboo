@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // taboo CLI（MVP）—— 对齐设计文档 §2 CLI 命令子集
 //   taboo login <email> <password>          登录，会话存 ~/.taboo/session.json
-//   taboo set <KEY> <VALUE> [--env dev]     写入/更新密钥（产生新版本）
-//   taboo get <KEY> [--env dev]             读取明文（记审计）
-//   taboo list [--env dev]                  列密钥（无值）
-//   taboo export [--env dev]                导出 .env 到 stdout
-//   taboo run -- <cmd...>                   注入环境变量并执行子进程（设计文档 §7.1 流程）
+//   taboo set <locator> <KEY> <VALUE>       写入/更新密钥（产生新版本）
+//   taboo get <locator> <KEY>               读取明文（记审计）
+//   taboo list <locator>                    列密钥（无值）
+//   taboo export <locator>                  导出 .env 到 stdout
+//   taboo run <locator> -- <cmd...>         注入环境变量并执行子进程（设计文档 §7.1 流程）
 //   taboo scan [opts]                       密钥泄漏扫描（M3 #6，设计文档 §2）
 // 用法：node cli/taboo.js <command> [args]   （后续打包为独立二进制分发）
 import fs from 'node:fs';
@@ -25,7 +25,6 @@ const flag = (name, def) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : def;
 };
-const env = flag('env', 'dev');
 const resolveQuery = args.includes('--raw') ? '' : '&resolve=true';
 function isLocator(value) {
   return typeof value === 'string' && /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)+$/.test(value);
@@ -140,21 +139,6 @@ async function orgSlug() {
   return me.orgs[0].slug;
 }
 
-async function projectId() {
-  const explicit = flag('project', process.env.TABOO_PROJECT_ID || null);
-  if (explicit) return explicit;
-  const s = oauth ? { kind: 'oauth' } : loadSession();
-  if (s?.kind === 'identity' || s?.kind === 'oauth') {
-    console.error('机器身份会话请显式指定 --project <project_id>（scope 内项目）');
-    process.exit(1);
-  }
-  const me = await call('GET', '/api/v1/me');
-  const slug = me.orgs[0].slug;
-  const projects = await call('GET', `/api/v1/orgs/${slug}/projects`);
-  const p = projects.projects.find((x) => x.slug === 'default') || projects.projects[0];
-  return p.id;
-}
-
 switch (cmd) {
   case 'login': {
     if (oauth) { await oauth.session(); console.log('External OAuth credentials verified; no token or credential saved to disk.'); break; }
@@ -188,71 +172,48 @@ switch (cmd) {
     if(expected!==undefined && (!/^\d+$/.test(expected)||!Number.isSafeInteger(Number(expected)))){console.error('--expected-version must be a non-negative integer');process.exit(2);}
     const extra = expected!==undefined?{expectedVersion:Number(expected)}:{};
     console.error(`mutation receipt: ${idempotencyKey}; if the outcome is unknown, repeat the identical command with --idempotency-key ${idempotencyKey}`);
-    if (isLocator(pos[0])) {
-      const [locator, key, value] = pos;
-      if (!locator || !key || value === undefined) { console.error('usage: taboo set <locator> <KEY> <VALUE>'); process.exit(1); }
-      const d = await call('PUT', `/api/v1/access?locator=${encodeURIComponent(locator)}`, { key, value, ...extra }, false, idempotencyKey);
-      console.log(`${key} saved (v${d.version})`);
-      break;
-    }
-    const [key, value] = pos;
-    if (!key || value === undefined) { console.error('usage: taboo set <locator> <KEY> <VALUE>  |  taboo set <KEY> <VALUE> [--env dev]'); process.exit(1); }
-    const pid=await projectId();
-    const d = await call('POST', `/api/v1/projects/${pid}/secrets?env=${encodeURIComponent(env)}`, { key, value, ...extra },false,idempotencyKey);
+    const [locator, key, value] = pos;
+    if (!isLocator(locator) || !key || value === undefined) { console.error('usage: taboo set <locator> <KEY> <VALUE>'); process.exit(1); }
+    const d = await call('PUT', `/api/v1/access?locator=${encodeURIComponent(locator)}`, { key, value, ...extra }, false, idempotencyKey);
     console.log(`${key} saved (v${d.version})`);
     break;
   }
   case 'get': {
     const pos = positional();
-    if (isLocator(pos[0])) {
-      const [locator, key] = pos;
-      if (!key) { console.error('usage: taboo get <locator> <KEY>'); process.exit(1); }
-      const d = await call('GET', `/api/v1/access?locator=${encodeURIComponent(locator)}&key=${encodeURIComponent(key)}`);
-      console.log(d.value);
-      break;
-    }
-    const key = pos[0];
-    const d = await call('GET', `/api/v1/projects/${await projectId()}/secrets/${encodeURIComponent(key)}?env=${encodeURIComponent(env)}${resolveQuery}`);
+    const [locator, key] = pos;
+    if (!isLocator(locator) || !key) { console.error('usage: taboo get <locator> <KEY>'); process.exit(1); }
+    const d = await call('GET', `/api/v1/access?locator=${encodeURIComponent(locator)}&key=${encodeURIComponent(key)}${resolveQuery}`);
     console.log(d.value);
     break;
   }
   case 'list': {
-    const pos = positional();
-    if (isLocator(pos[0])) {
-      const d = await call('GET', `/api/v1/access?locator=${encodeURIComponent(pos[0])}`);
-      for (const s of d.secrets) console.log(`${s.key}\tv${s.version}\t${s.updated_at}`);
-      break;
-    }
-    const d = await call('GET', `/api/v1/projects/${await projectId()}/secrets?env=${env}`);
+    const locator = positional()[0];
+    if (!isLocator(locator)) { console.error('usage: taboo list <locator>'); process.exit(1); }
+    const d = await call('GET', `/api/v1/access?locator=${encodeURIComponent(locator)}`);
     for (const s of d.secrets) console.log(`${s.key}\tv${s.version}\t${s.updated_at}`);
     break;
   }
   case 'export': {
-    const pos = positional();
-    const path = isLocator(pos[0])
-      ? `/api/v1/access?locator=${encodeURIComponent(pos[0])}&export=1${resolveQuery}`
-      : `/api/v1/projects/${await projectId()}/export?env=${encodeURIComponent(env)}${resolveQuery}`;
+    const locator = positional()[0];
+    if (!isLocator(locator)) { console.error('usage: taboo export <locator> [--raw]'); process.exit(1); }
+    const path = `/api/v1/access?locator=${encodeURIComponent(locator)}&export=1${resolveQuery}`;
     const res = await call('GET', path, null, true);
     process.stdout.write(await res.text());
     break;
   }
   case 'import': {
     const pos = positional();
-    const located = isLocator(pos[0]);
-    const file = located ? pos[1] : pos[0];
-    if (!file) { console.error('usage: taboo import <locator> <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]'); process.exit(1); }
+    const file = pos[1];
+    if (!isLocator(pos[0]) || !file) { console.error('usage: taboo import <locator> <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]'); process.exit(1); }
     const content = fs.readFileSync(file, 'utf8');
     const strategy = flag('strategy', '');
     const format = flag('format', 'dotenv');
     const preview = args.includes('--preview');
-    const folder = flag('path', '/');
     if (strategy && strategy !== 'skip' && strategy !== 'overwrite') { console.error('--strategy must be skip or overwrite'); process.exit(2); }
     if (!['dotenv', 'doppler', '1password'].includes(format)) { console.error('--format must be dotenv, doppler, or 1password'); process.exit(2); }
     const idempotencyKey = preview ? undefined : flag('idempotency-key', randomUUID());
     if (!preview) console.error(`mutation receipt: ${idempotencyKey}; if the outcome is unknown, repeat the identical command with --idempotency-key ${idempotencyKey}`);
-    const importURL = located
-      ? `/api/v1/access?locator=${encodeURIComponent(pos[0])}`
-      : `/api/v1/projects/${await projectId()}/import?env=${encodeURIComponent(env)}&path=${encodeURIComponent(folder)}`;
+    const importURL = `/api/v1/access?locator=${encodeURIComponent(pos[0])}`;
     const d = await call('POST', importURL,
       { content, format, preview, ...(strategy ? { strategy } : {}) }, false, idempotencyKey);
     const conflicts = d.conflicts?.length ? ` conflicts=${d.conflicts.join(',')}` : '';
@@ -263,11 +224,9 @@ switch (cmd) {
   }
   case 'run': {    // 密钥注入子进程；默认展开引用
     const idx = args.indexOf('--');
-    if (idx < 0 || idx === args.length - 1) { console.error('usage: taboo run [<locator>] [--raw] -- <cmd...>'); process.exit(1); }
-    const located = isLocator(positional()[0]) ? positional()[0] : '';
-    const exportURL = located
-      ? `/api/v1/access?locator=${encodeURIComponent(located)}&export=1${resolveQuery}`
-      : `/api/v1/projects/${await projectId()}/export?env=${encodeURIComponent(env)}${resolveQuery}`;
+    const locator = positional()[0];
+    if (idx < 0 || idx === args.length - 1 || !isLocator(locator)) { console.error('usage: taboo run <locator> [--raw] -- <cmd...>'); process.exit(1); }
+    const exportURL = `/api/v1/access?locator=${encodeURIComponent(locator)}&export=1${resolveQuery}`;
     const res = await call('GET', exportURL, null, true);
     const text = await res.text();
     const childEnv = { ...process.env };
@@ -301,17 +260,11 @@ switch (cmd) {
   taboo login --device                          设备码登录
   taboo login --client-id X --client-secret Y   机器身份登录（token 临期自动重换）
   taboo set <locator> <KEY> <VALUE>            按 归属/项目/目录 写入密钥
-  taboo get <locator> <KEY>                    按定位符读取明文
+  taboo get <locator> <KEY> [--raw]            按定位符读取明文
   taboo list <locator>                         列出该目录的密钥
-  taboo set <KEY> <VALUE> [--env] [--project]   旧写法，仍可用
-  taboo get <KEY> [--env] [--project] [--raw]   旧写法，仍可用
-  taboo list [--env] [--project]                旧写法，仍可用
   taboo export <locator> [--raw]               按定位符导出 .env
   taboo import <locator> <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]
   taboo run <locator> [--raw] -- <cmd...>       注入该目录的密钥后执行命令
-  taboo export [--env] [--project] [--raw]      旧写法，仍可用
-  taboo import <file> [--env] [--project]       旧写法，仍可用
-  taboo run [--raw] -- <cmd...>                 旧写法，仍可用
   taboo scan [--staged|--json|--list-rules]     密钥泄漏扫描（150+ 规则，命中即非零退出）
   taboo scan --upload [--org slug]              上传报告（服务端 HMAC，原文不落库）
   taboo scan --update-baseline                  将现存命中写入 baseline 抑制

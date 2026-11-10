@@ -24,13 +24,6 @@ type Project struct {
 	CreatedAt string `json:"created_at"`
 }
 
-type Environment struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Slug      string `json:"slug"`
-	SortOrder int    `json:"sort_order"`
-}
-
 type Folder struct {
 	ID       string `json:"id"`
 	ParentID string `json:"parent_id"`
@@ -83,14 +76,6 @@ func (c *Client) Projects(ctx context.Context, orgSlug string) ([]Project, error
 	}
 	err := c.do(ctx, "GET", "/api/v1/orgs/"+url.PathEscape(orgSlug)+"/projects", nil, &out)
 	return out.Projects, err
-}
-
-func (c *Client) Environments(ctx context.Context, projectID string) ([]Environment, error) {
-	var out struct {
-		Environments []Environment `json:"environments"`
-	}
-	err := c.do(ctx, "GET", "/api/v1/projects/"+url.PathEscape(projectID)+"/environments", nil, &out)
-	return out.Environments, err
 }
 
 // ---------- 文件夹 ----------

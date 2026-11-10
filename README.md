@@ -81,8 +81,8 @@ npm run dev
 
 # 3. CLI
 npm run cli -- login you@example.com your-password
-npm run cli -- set DB_PASS s3cret --env dev
-npm run cli -- run -- npm run dev
+npm run cli -- set <归属/项目> DB_PASS s3cret
+npm run cli -- run <归属/项目> -- npm run dev
 ```
 
 冒烟测试（14 项端到端检查）：
