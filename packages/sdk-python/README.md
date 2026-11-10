@@ -7,7 +7,7 @@ from taboo import Client
 
 client = Client("https://taboo.example")
 client.with_identity(client_id, client_secret)
-value = client.get_secret(project_id, "dev", "/", "DB_URL", resolve=True)
+value = client.get_secret(project_id, "/", "DB_URL", resolve=True)
 ```
 
 `resolve=True` 展开 `${env:KEY}` 与 `${project:env:KEY}`。`import_env(..., preview=True)` 不写库。`create_scan_report` 提交规则、相对路径、行号和命中原文；服务端计算组织 HMAC 后不保存原文。

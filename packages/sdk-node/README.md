@@ -7,7 +7,7 @@ import { Client } from '@taboo/sdk';
 
 const client = new Client('https://taboo.example');
 client.withIdentity(clientID, clientSecret);
-const value = await client.getSecret(projectID, 'dev', '/', 'DB_URL', { resolve: true });
+const value = await client.getSecret(projectID, '/', 'DB_URL', { resolve: true });
 ```
 
 `resolve: true` 展开 `${env:KEY}` 与 `${project:env:KEY}`。`importEnv` 的 `preview` 为 true 时不写库；已有 key 需要 `skip` 或 `overwrite`。`createScanReport` 提交规则、相对路径、行号和命中原文；服务端计算组织 HMAC 后不保存原文。

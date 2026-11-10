@@ -36,7 +36,7 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 					return
 				}
 				switch parts[2] {
-				case "secrets", "environments", "folders", "export", "import":
+				case "secrets", "folders", "export", "import":
 				default:
 					writeErr(w, apperr.Forbidden)
 					return
@@ -72,7 +72,7 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 
 				err = db.QueryRow(`SELECT id FROM orgs WHERE slug=?`, parts[1]).Scan(&org)
 			case "projects":
-				if parts[2] != "secrets" && parts[2] != "environments" && parts[2] != "folders" && parts[2] != "export" && parts[2] != "import" && parts[2] != "dynamic-engines" && parts[2] != "dynamic-leases" {
+				if parts[2] != "secrets" && parts[2] != "folders" && parts[2] != "export" && parts[2] != "import" && parts[2] != "dynamic-engines" && parts[2] != "dynamic-leases" {
 					writeErr(w, apperr.Forbidden)
 					return
 				}

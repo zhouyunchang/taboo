@@ -200,18 +200,14 @@ func (s *Service) dereference(r *http.Request, orgID, projectID, projectSlug str
 			return "", "", "", "", apperr.New(400, "REFERENCE_CYCLE", "secret reference cycle: "+strings.Join(chain, " -> ")).WithDetails(map[string]any{"chain": chain})
 		}
 	}
-	envID, qerr := s.envOf(ownerID, ref.env)
-	if qerr != nil {
-		return "", "", "", "", missingRef(ref.raw)
-	}
 	var folderID string
-	qerr = s.DB.QueryRow(`SELECT id FROM folders WHERE env_id = ? AND path = ?`, envID, folderPath).Scan(&folderID)
+	qerr := s.DB.QueryRow(`SELECT id FROM folders WHERE project_id = ? AND path = ?`, ownerID, folderPath).Scan(&folderID)
 	if qerr != nil {
 		return "", "", "", "", missingRef(ref.raw)
 	}
 	var secretID string
 	var version int
-	qerr = s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`, envID, folderID, ref.key).Scan(&secretID, &version)
+	qerr = s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE project_id = ? AND folder_id = ? AND key = ?`, ownerID, folderID, ref.key).Scan(&secretID, &version)
 	if qerr == sql.ErrNoRows {
 		return "", "", "", "", missingRef(ref.raw)
 	}
@@ -226,7 +222,7 @@ func (s *Service) dereference(r *http.Request, orgID, projectID, projectSlug str
 	if qerr != nil {
 		return "", "", "", "", apperr.New(500, "INTERNAL", "dek unwrap failed")
 	}
-	plaintext, qerr = tc.Open(dek, ct, tc.SecretContext(orgID, ownerID, envID, secretID, version))
+	plaintext, qerr = tc.Open(dek, ct, tc.SecretContext(orgID, ownerID, secretID, version))
 	if qerr != nil {
 		return "", "", "", "", apperr.New(500, "INTERNAL", "decrypt failed")
 	}

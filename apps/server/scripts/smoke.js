@@ -59,36 +59,33 @@ const orgs = await call('GET', `/api/v1/orgs/${orgSlug}/projects`, { token });
 const projectId = orgs.data?.projects?.[0]?.id;
 check('default project exists', !!projectId);
 
-const envs = await call('GET', `/api/v1/projects/${projectId}/environments`, { token });
-check('dev/staging/prod envs', ['dev', 'staging', 'prod'].every((s) => envs.data?.environments?.some((e) => e.slug === s)));
-
 const s1 = await call('POST', `/api/v1/projects/${projectId}/secrets`, { token, body: { key: KEY, value: 's3cret-v1', comment: 'db password', tags: ['db'] } });
 check('create secret v1', s1.data?.version === 1, JSON.stringify(s1.data));
 const s2 = await call('POST', `/api/v1/projects/${projectId}/secrets`, { token, body: { key: KEY, value: 's3cret-v2' } });
 check('update secret v2', s2.data?.version === 2, JSON.stringify(s2.data));
 
-const list = await call('GET', `/api/v1/projects/${projectId}/secrets?env=dev`, { token });
+const list = await call('GET', `/api/v1/projects/${projectId}/secrets`, { token });
 const listed = list.data?.secrets ?? [];
 check('list has no values', listed.some((x) => x.key === KEY) && listed.every((x) => x.value === undefined) && (loginMode || listed.length === 1));
 
-const reveal = await call('GET', `/api/v1/projects/${projectId}/secrets/${KEY}?env=dev`, { token });
+const reveal = await call('GET', `/api/v1/projects/${projectId}/secrets/${KEY}`, { token });
 check('reveal returns v2 value', reveal.data?.value === 's3cret-v2', JSON.stringify(reveal.data));
 
-const vers = await call('GET', `/api/v1/projects/${projectId}/secrets/${KEY}/versions?env=dev`, { token });
+const vers = await call('GET', `/api/v1/projects/${projectId}/secrets/${KEY}/versions`, { token });
 check('versions has 2 entries', vers.data?.versions?.length === 2);
 
-const rb = await call('POST', `/api/v1/projects/${projectId}/secrets/${KEY}/rollback?env=dev`, { token, body: { version: 1 } });
+const rb = await call('POST', `/api/v1/projects/${projectId}/secrets/${KEY}/rollback`, { token, body: { version: 1 } });
 check('rollback creates v3', rb.data?.version === 3, JSON.stringify(rb.data));
-const reveal2 = await call('GET', `/api/v1/projects/${projectId}/secrets/${KEY}?env=dev`, { token });
+const reveal2 = await call('GET', `/api/v1/projects/${projectId}/secrets/${KEY}`, { token });
 check('reveal after rollback = v1 value', reveal2.data?.value === 's3cret-v1');
 
-const exp = await call('GET', `/api/v1/projects/${projectId}/export?env=dev`, { token, raw: true });
+const exp = await call('GET', `/api/v1/projects/${projectId}/export`, { token, raw: true });
 const expText = await exp.text();
 check('export .env format', expText.includes(`${KEY}=s3cret-v1`), expText);
 
-const imported = await call('POST', `/api/v1/projects/${projectId}/import?env=dev`, { token, body: { format: 'doppler', preview: true, content: '{"SMOKE_DOPPLER":"preview-only","DOPPLER_PROJECT":"demo"}' } });
+const imported = await call('POST', `/api/v1/projects/${projectId}/import`, { token, body: { format: 'doppler', preview: true, content: '{"SMOKE_DOPPLER":"preview-only","DOPPLER_PROJECT":"demo"}' } });
 check('doppler preview does not require strategy', imported.status === 200 && imported.data?.created === 1 && !(imported.data?.entries || []).some((e) => e.key?.startsWith('DOPPLER_')), JSON.stringify(imported.data));
-const rotation = await call('PUT', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation?env=dev`, { token, body: { interval_seconds: 86400 } });
+const rotation = await call('PUT', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation`, { token, body: { interval_seconds: 86400 } });
 check('rotation policy saved', rotation.status === 200 && rotation.data?.enabled === true && !JSON.stringify(rotation.data).includes('s3cret'), JSON.stringify(rotation.data));
 const scan = await call('POST', `/api/v1/orgs/${orgSlug}/scan-reports`, { token, body: { source: 'smoke', findings: [{ rule_id: 'generic-api-key', level: 'warning', file: 'smoke.env', line: 1, match: 'smoke-secret-value' }] } });
 check('scan report hmac', scan.status === 201 && !JSON.stringify(scan.data).includes('smoke-secret-value'), JSON.stringify(scan.data));
@@ -96,7 +93,7 @@ const scanDetail = await call('GET', `/api/v1/orgs/${orgSlug}/scan-reports/${sca
 check('scan detail drops match', scanDetail.status === 200 && scanDetail.data?.findings?.[0]?.alg === 'hmac-sha256' && !JSON.stringify(scanDetail.data).includes('smoke-secret-value'), JSON.stringify(scanDetail.data));
 const scanDel = await call('DELETE', `/api/v1/orgs/${orgSlug}/scan-reports/${scan.data?.id}`, { token });
 check('scan report deleted', scanDel.status === 200, JSON.stringify(scanDel.data));
-const cache = await fetch(BASE + `/api/v1/projects/${projectId}/secrets?env=dev`, { headers: { Authorization: `Bearer ${token}` } });
+const cache = await fetch(BASE + `/api/v1/projects/${projectId}/secrets`, { headers: { Authorization: `Bearer ${token}` } });
 check('cache-control no-store', cache.headers.get('cache-control') === 'no-store');
 await cache.json().catch(() => {});
 
@@ -105,13 +102,13 @@ const actions = new Set(audit.data?.logs?.map((l) => l.action));
 check('audit has create/reveal/rollback/export', ['secrets.create', 'secrets.reveal', 'secrets.rollback', 'secrets.export'].every((a) => actions.has(a)), [...actions].join(','));
 
 // 负向：未认证 / 越权环境
-const noauth = await call('GET', `/api/v1/projects/${projectId}/secrets?env=dev`);
+const noauth = await call('GET', `/api/v1/projects/${projectId}/secrets`);
 check('unauth rejected 401', noauth.status === 401);
 
 // 清理：删除本次创建的密钥；注册模式提示停用一次性账号
 if (projectId && token && process.env.TABOO_SMOKE_KEEP !== '1') {
-  await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation?env=dev`, { token });
-  const del = await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}?env=dev&expectedVersion=3`, { token });
+  await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation`, { token });
+  const del = await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}?expectedVersion=3`, { token });
   check('cleanup: smoke secret deleted', del.status === 200 || del.status === 204, `status=${del.status} ${JSON.stringify(del.data)}`);
 }
 if (!loginMode) {

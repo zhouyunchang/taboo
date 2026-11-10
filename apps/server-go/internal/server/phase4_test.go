@@ -39,32 +39,32 @@ func TestSecretReferencesImportAndVersions(t *testing.T) {
 		t.Helper()
 		checkStatus(t, f.localRequest("POST", path, body, ""), 200)
 	}
-	put("/api/v1/projects/project-a/secrets?env=dev", `{"key":"DEV_BASE","value":"base-value"}`)
-	put("/api/v1/projects/project-a/secrets?env=dev", `{"key":"DEV_REF","value":"${dev:DEV_BASE}"}`)
-	raw := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_REF?env=dev", "", "")
+	put("/api/v1/projects/project-a/secrets", `{"key":"DEV_BASE","value":"base-value"}`)
+	put("/api/v1/projects/project-a/secrets", `{"key":"DEV_REF","value":"${dev:DEV_BASE}"}`)
+	raw := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_REF", "", "")
 	checkStatus(t, raw, 200)
 	if !strings.Contains(raw.Body.String(), `"value":"${dev:DEV_BASE}"`) || strings.Contains(raw.Body.String(), "base-value") {
 		t.Fatalf("unresolved reveal: %s", raw.Body.String())
 	}
-	got := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_REF?env=dev&resolve=true", "", "")
+	got := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_REF?resolve=true", "", "")
 	checkStatus(t, got, 200)
 	if !strings.Contains(got.Body.String(), `"value":"base-value"`) || !strings.Contains(got.Body.String(), `"resolved":true`) {
 		t.Fatalf("resolved reveal: %s", got.Body.String())
 	}
-	exported := f.localRequest("GET", "/api/v1/projects/project-a/export?env=dev&resolve=true", "", "")
+	exported := f.localRequest("GET", "/api/v1/projects/project-a/export?resolve=true", "", "")
 	checkStatus(t, exported, 200)
 	if !strings.Contains(exported.Body.String(), "DEV_REF=base-value\n") || strings.Contains(exported.Body.String(), "${dev:DEV_BASE}") {
 		t.Fatalf("resolved export: %s", exported.Body.String())
 	}
-	put("/api/v1/projects/project-a/secrets?env=dev", `{"key":"CYCLE_A","value":"${dev:CYCLE_B}"}`)
-	put("/api/v1/projects/project-a/secrets?env=dev", `{"key":"CYCLE_B","value":"${dev:CYCLE_A}"}`)
-	cycle := f.localRequest("GET", "/api/v1/projects/project-a/secrets/CYCLE_A?env=dev&resolve=true", "", "")
+	put("/api/v1/projects/project-a/secrets", `{"key":"CYCLE_A","value":"${dev:CYCLE_B}"}`)
+	put("/api/v1/projects/project-a/secrets", `{"key":"CYCLE_B","value":"${dev:CYCLE_A}"}`)
+	cycle := f.localRequest("GET", "/api/v1/projects/project-a/secrets/CYCLE_A?resolve=true", "", "")
 	checkStatus(t, cycle, 400)
 	if !strings.Contains(cycle.Body.String(), "REFERENCE_CYCLE") {
 		t.Fatalf("cycle: %s", cycle.Body.String())
 	}
-	put("/api/v1/projects/project-a/secrets?env=dev", `{"key":"MISS","value":"${dev:NO_SUCH}"}`)
-	missing := f.localRequest("GET", "/api/v1/projects/project-a/secrets/MISS?env=dev&resolve=true", "", "")
+	put("/api/v1/projects/project-a/secrets", `{"key":"MISS","value":"${dev:NO_SUCH}"}`)
+	missing := f.localRequest("GET", "/api/v1/projects/project-a/secrets/MISS?resolve=true", "", "")
 	checkStatus(t, missing, 404)
 	if !strings.Contains(missing.Body.String(), "REFERENCE_NOT_FOUND") || !strings.Contains(missing.Body.String(), "${dev:NO_SUCH}") {
 		t.Fatalf("missing: %s", missing.Body.String())
@@ -79,14 +79,14 @@ func TestSecretReferencesImportAndVersions(t *testing.T) {
 		t.Fatalf("project: %s %v", created.Body.String(), err)
 	}
 	const hidden = "hidden-cross-project-value"
-	put("/api/v1/projects/"+project.ID+"/secrets?env=dev", `{"key":"SECRET","value":"`+hidden+`"}`)
-	put("/api/v1/projects/project-a/secrets?env=dev", `{"key":"XREF","value":"${other:dev:SECRET}"}`)
-	owner := f.localRequest("GET", "/api/v1/projects/project-a/secrets/XREF?env=dev&resolve=true", "", "")
+	put("/api/v1/projects/"+project.ID+"/secrets", `{"key":"SECRET","value":"`+hidden+`"}`)
+	put("/api/v1/projects/project-a/secrets", `{"key":"XREF","value":"${other:dev:SECRET}"}`)
+	owner := f.localRequest("GET", "/api/v1/projects/project-a/secrets/XREF?resolve=true", "", "")
 	checkStatus(t, owner, 200)
 	if !strings.Contains(owner.Body.String(), hidden) {
 		t.Fatalf("owner should resolve cross project: %s", owner.Body.String())
 	}
-	ident := f.localRequest("POST", "/api/v1/orgs/a/identities", `{"name":"limited","token_ttl":900,"scopes":[{"project_id":"project-a","env":"dev","permission":"write"}]}`, "")
+	ident := f.localRequest("POST", "/api/v1/orgs/a/identities", `{"name":"limited","token_ttl":900,"scopes":[{"project_id":"project-a","permission":"write"}]}`, "")
 	checkStatus(t, ident, 201)
 	var creds struct {
 		ID           string `json:"id"`
@@ -104,7 +104,7 @@ func TestSecretReferencesImportAndVersions(t *testing.T) {
 	if err := json.Unmarshal(tokenRes.Body.Bytes(), &tok); err != nil || tok.Access == "" {
 		t.Fatalf("token: %s", tokenRes.Body.String())
 	}
-	denied := f.bearer("GET", "/api/v1/projects/project-a/secrets/XREF?env=dev&resolve=true", "", tok.Access)
+	denied := f.bearer("GET", "/api/v1/projects/project-a/secrets/XREF?resolve=true", "", tok.Access)
 	checkStatus(t, denied, 403)
 	if !strings.Contains(denied.Body.String(), "REFERENCE_FORBIDDEN") || strings.Contains(denied.Body.String(), hidden) {
 		t.Fatalf("identity leaked or wrong code: %s", denied.Body.String())
@@ -119,20 +119,20 @@ func TestSecretReferencesImportAndVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	put("/api/v1/projects/project-a/secrets?env=dev", `{"key":"DEV_BASE","value":"base-value-v2","expectedVersion":1}`)
-	checkStatus(t, f.bearer("GET", "/api/v1/projects/project-a/secrets/DEV_BASE/versions?env=dev", "", viewer), 200)
-	secretBody := f.bearer("GET", "/api/v1/projects/project-a/secrets/DEV_BASE/versions/1?env=dev", "", viewer)
+	put("/api/v1/projects/project-a/secrets", `{"key":"DEV_BASE","value":"base-value-v2","expectedVersion":1}`)
+	checkStatus(t, f.bearer("GET", "/api/v1/projects/project-a/secrets/DEV_BASE/versions", "", viewer), 200)
+	secretBody := f.bearer("GET", "/api/v1/projects/project-a/secrets/DEV_BASE/versions/1", "", viewer)
 	checkStatus(t, secretBody, 403)
 	if strings.Contains(secretBody.Body.String(), "base-value") {
 		t.Fatalf("viewer saw version plaintext: %s", secretBody.Body.String())
 	}
-	v1 := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_BASE/versions/1?env=dev", "", "")
+	v1 := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_BASE/versions/1", "", "")
 	checkStatus(t, v1, 200)
 	if !strings.Contains(v1.Body.String(), `"value":"base-value"`) {
 		t.Fatalf("version 1: %s", v1.Body.String())
 	}
 
-	preview := f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev", `{"content":"NEW_KEY=one\nDEV_BASE=clash\n","preview":true}`, "")
+	preview := f.localRequest("POST", "/api/v1/projects/project-a/import", `{"content":"NEW_KEY=one\nDEV_BASE=clash\n","preview":true}`, "")
 	checkStatus(t, preview, 200)
 	if !strings.Contains(preview.Body.String(), `"action":"conflict"`) || !strings.Contains(preview.Body.String(), "NEW_KEY") {
 		t.Fatalf("preview: %s", preview.Body.String())
@@ -141,23 +141,23 @@ func TestSecretReferencesImportAndVersions(t *testing.T) {
 	if err = f.db.QueryRow(`SELECT COUNT(*) FROM secrets WHERE key='NEW_KEY'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("preview wrote: %d %v", n, err)
 	}
-	clash := f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev", `{"content":"NEW_KEY=one\nDEV_BASE=clash\n"}`, "")
+	clash := f.localRequest("POST", "/api/v1/projects/project-a/import", `{"content":"NEW_KEY=one\nDEV_BASE=clash\n"}`, "")
 	checkStatus(t, clash, 409)
 	if !strings.Contains(clash.Body.String(), "IMPORT_CONFLICT") || !strings.Contains(clash.Body.String(), "DEV_BASE") {
 		t.Fatalf("conflict: %s", clash.Body.String())
 	}
-	skipped := f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev", `{"content":"NEW_KEY=one\nDEV_BASE=clash\n","strategy":"skip"}`, "")
+	skipped := f.localRequest("POST", "/api/v1/projects/project-a/import", `{"content":"NEW_KEY=one\nDEV_BASE=clash\n","strategy":"skip"}`, "")
 	checkStatus(t, skipped, 200)
 	if !strings.Contains(skipped.Body.String(), `"created":1`) || !strings.Contains(skipped.Body.String(), `"skipped":1`) {
 		t.Fatalf("skip: %s", skipped.Body.String())
 	}
-	kept := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_BASE?env=dev", "", "")
+	kept := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_BASE", "", "")
 	if !strings.Contains(kept.Body.String(), "base-value-v2") {
 		t.Fatalf("skip overwrote: %s", kept.Body.String())
 	}
-	over := f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev", `{"content":"DEV_BASE=imported\n","strategy":"overwrite"}`, "")
+	over := f.localRequest("POST", "/api/v1/projects/project-a/import", `{"content":"DEV_BASE=imported\n","strategy":"overwrite"}`, "")
 	checkStatus(t, over, 200)
-	after := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_BASE?env=dev", "", "")
+	after := f.localRequest("GET", "/api/v1/projects/project-a/secrets/DEV_BASE", "", "")
 	if !strings.Contains(after.Body.String(), `"value":"imported"`) {
 		t.Fatalf("overwrite: %s", after.Body.String())
 	}

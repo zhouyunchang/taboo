@@ -16,13 +16,13 @@ import (
 
 func TestPhase5ImportRotationAndScanBoundaries(t *testing.T) {
 	f := phase4Ready(t)
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"KEEP","value":"keep-me","expectedVersion":0}`, "p5-keep"), 200)
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev", `{"content":"KEEP=new\nFRESH=1\n","format":"dotenv"}`, "p5-conflict"), 409)
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"KEEP","value":"keep-me","expectedVersion":0}`, "p5-keep"), 200)
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/import", `{"content":"KEEP=new\nFRESH=1\n","format":"dotenv"}`, "p5-conflict"), 409)
 	var fresh int
 	if err := f.db.QueryRow(`SELECT COUNT(*) FROM secrets WHERE key = 'FRESH'`).Scan(&fresh); err != nil || fresh != 0 {
 		t.Fatalf("conflict wrote a secret: %d %v", fresh, err)
 	}
-	preview := f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev", `{"format":"doppler","preview":true,"content":"{\"API_TOKEN\":\"doppler-value\",\"DOPPLER_PROJECT\":\"demo\"}"}`, "")
+	preview := f.localRequest("POST", "/api/v1/projects/project-a/import", `{"format":"doppler","preview":true,"content":"{\"API_TOKEN\":\"doppler-value\",\"DOPPLER_PROJECT\":\"demo\"}"}`, "")
 	checkStatus(t, preview, 200)
 	if !strings.Contains(preview.Body.String(), `"key":"API_TOKEN"`) || strings.Contains(preview.Body.String(), "doppler-value") {
 		t.Fatalf("doppler preview: %s", preview.Body.String())
@@ -31,15 +31,15 @@ func TestPhase5ImportRotationAndScanBoundaries(t *testing.T) {
 	if err := f.db.QueryRow(`SELECT COUNT(*) FROM secrets WHERE key='API_TOKEN'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("preview wrote %d %v", n, err)
 	}
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev", `{"format":"1password","strategy":"skip","content":"{\"title\":\"API\",\"fields\":[{\"label\":\"api key\",\"value\":\"op-value\"}]}"}`, "p5-op"), 200)
-	got := f.localRequest("GET", "/api/v1/projects/project-a/secrets/API_KEY?env=dev", "", "")
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/import", `{"format":"1password","strategy":"skip","content":"{\"title\":\"API\",\"fields\":[{\"label\":\"api key\",\"value\":\"op-value\"}]}"}`, "p5-op"), 200)
+	got := f.localRequest("GET", "/api/v1/projects/project-a/secrets/API_KEY", "", "")
 	checkStatus(t, got, 200)
 	if !strings.Contains(got.Body.String(), `"value":"op-value"`) {
 		t.Fatalf("1password import: %s", got.Body.String())
 	}
 
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"ROTATE_ME","value":"rotation-plaintext","expectedVersion":0}`, "p5-rot"), 200)
-	checkStatus(t, f.localRequest("PUT", "/api/v1/projects/project-a/secrets/ROTATE_ME/rotation?env=dev", `{"interval_seconds":3600}`, "p5-policy"), 200)
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"ROTATE_ME","value":"rotation-plaintext","expectedVersion":0}`, "p5-rot"), 200)
+	checkStatus(t, f.localRequest("PUT", "/api/v1/projects/project-a/secrets/ROTATE_ME/rotation", `{"interval_seconds":3600}`, "p5-policy"), 200)
 	if _, err := f.db.Exec(`UPDATE rotation_policies SET next_run_at = 1`); err != nil {
 		t.Fatal(err)
 	}
@@ -56,9 +56,9 @@ func TestPhase5ImportRotationAndScanBoundaries(t *testing.T) {
 		t.Fatalf("rotation audits %d %v", audits, err)
 	}
 
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"REF_TARGET","value":"resolved-target","expectedVersion":0}`, "p5-target"), 200)
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"REF_SRC","value":"${dev:REF_TARGET}","expectedVersion":0}`, "p5-src"), 200)
-	ver := f.localRequest("GET", "/api/v1/projects/project-a/secrets/REF_SRC/versions/1?env=dev&resolve=true", "", "")
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"REF_TARGET","value":"resolved-target","expectedVersion":0}`, "p5-target"), 200)
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"REF_SRC","value":"${dev:REF_TARGET}","expectedVersion":0}`, "p5-src"), 200)
+	ver := f.localRequest("GET", "/api/v1/projects/project-a/secrets/REF_SRC/versions/1?resolve=true", "", "")
 	checkStatus(t, ver, 200)
 	if !strings.Contains(ver.Body.String(), `"value":"resolved-target"`) || !strings.Contains(ver.Body.String(), `"resolved":true`) {
 		t.Fatalf("version resolve: %s", ver.Body.String())
@@ -67,7 +67,7 @@ func TestPhase5ImportRotationAndScanBoundaries(t *testing.T) {
 	if err := f.db.QueryRow(`SELECT metadata FROM audit_logs WHERE action='secrets.reveal' AND resource LIKE '%REF_SRC%' ORDER BY rowid DESC LIMIT 1`).Scan(&meta); err != nil || !strings.Contains(meta, `"resolved":true`) {
 		t.Fatalf("version reveal audit: %s %v", meta, err)
 	}
-	plain := f.localRequest("GET", "/api/v1/projects/project-a/secrets/REF_SRC/versions/1?env=dev", "", "")
+	plain := f.localRequest("GET", "/api/v1/projects/project-a/secrets/REF_SRC/versions/1", "", "")
 	checkStatus(t, plain, 200)
 	if err := f.db.QueryRow(`SELECT metadata FROM audit_logs WHERE action='secrets.reveal' AND resource LIKE '%REF_SRC%' ORDER BY rowid DESC LIMIT 1`).Scan(&meta); err != nil || !strings.Contains(meta, `"resolved":false`) || strings.Contains(plain.Body.String(), "resolved-target") {
 		t.Fatalf("unresolved version: body=%s meta=%s err=%v", plain.Body.String(), meta, err)
@@ -93,7 +93,7 @@ func TestPhase5ImportRotationAndScanBoundaries(t *testing.T) {
 
 func TestMachineTokenAllowlistAndScanVisibility(t *testing.T) {
 	f := phase4Ready(t)
-	created := f.localRequest("POST", "/api/v1/orgs/a/identities", `{"name":"ci","token_ttl":900,"allowed_cidrs":["10.0.0.0/8"],"scopes":[{"project_id":"project-a","env":"dev","permission":"read"}]}`, "p5-id")
+	created := f.localRequest("POST", "/api/v1/orgs/a/identities", `{"name":"ci","token_ttl":900,"allowed_cidrs":["10.0.0.0/8"],"scopes":[{"project_id":"project-a","permission":"read"}]}`, "p5-id")
 	checkStatus(t, created, 201)
 	var body struct {
 		ID           string   `json:"id"`
@@ -201,7 +201,7 @@ func tokenFrom(f *federationFixture, id, secret, remote string) *httptest.Respon
 func TestImportFolderRollsBackWithAudit(t *testing.T) {
 	f := phase4Ready(t)
 	testdb.FailAudit(f.t, f.db)
-	checkStatus(f.t, f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev&path=/rolled/", `{"content":"NEW_FOLDER_KEY=value\n","strategy":"skip"}`, "p5-rollback"), 500)
+	checkStatus(f.t, f.localRequest("POST", "/api/v1/projects/project-a/import?path=/rolled/", `{"content":"NEW_FOLDER_KEY=value\n","strategy":"skip"}`, "p5-rollback"), 500)
 	var n int
 	if err := f.db.QueryRow(`SELECT COUNT(*) FROM folders WHERE path='/rolled/'`).Scan(&n); err != nil || n != 0 {
 		f.t.Fatalf("folder survived rollback: %d %v", n, err)

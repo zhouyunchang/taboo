@@ -13,7 +13,6 @@ import (
 
 type Grant struct {
 	ProjectID     string `json:"project_id"`
-	EnvironmentID string `json:"environment_id"`
 	Action        string `json:"action"`
 	RequiredScope string `json:"required_scope"`
 }
@@ -43,20 +42,14 @@ func (s *Service) validateGrants(w http.ResponseWriter, org string, grants []Gra
 			fail(w, 400, "INVALID_GRANTS", "one exact OAuth scope is required for each action")
 			return false
 		}
-		if g.EnvironmentID == "" {
-			if err := s.DB.QueryRow(`SELECT e.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE p.id=? AND p.org_id=? ORDER BY e.sort_order LIMIT 1`, g.ProjectID, org).Scan(&g.EnvironmentID); err != nil {
-				fail(w, 400, "INVALID_GRANTS", "project must belong to this organization")
-				return false
-			}
-		}
-		key := g.ProjectID + "\x00" + g.EnvironmentID + "\x00" + g.Action
+		key := g.ProjectID + "\x00" + g.Action
 		if seen[key] {
 			fail(w, 400, "INVALID_GRANTS", "duplicate resource grant")
 			return false
 		}
 		seen[key] = true
 		var n int
-		if err := s.DB.QueryRow(`SELECT COUNT(*) FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=? AND p.id=? AND p.org_id=?`, g.EnvironmentID, g.ProjectID, org).Scan(&n); err != nil || n != 1 {
+		if err := s.DB.QueryRow(`SELECT COUNT(*) FROM projects WHERE id=? AND org_id=?`, g.ProjectID, org).Scan(&n); err != nil || n != 1 {
 			fail(w, 400, "INVALID_GRANTS", "project must belong to this organization")
 			return false
 		}
@@ -65,7 +58,7 @@ func (s *Service) validateGrants(w http.ResponseWriter, org string, grants []Gra
 }
 func insertGrants(tx *sql.Tx, org, id string, grants []Grant) error {
 	for _, g := range grants {
-		if _, err := tx.Exec(`INSERT INTO workload_grants(binding_id,org_id,project_id,env_id,action,required_scope) VALUES(?,?,?,?,?,?)`, id, org, g.ProjectID, g.EnvironmentID, g.Action, g.RequiredScope); err != nil {
+		if _, err := tx.Exec(`INSERT INTO workload_grants(binding_id,org_id,project_id,action,required_scope) VALUES(?,?,?,?,?)`, id, org, g.ProjectID, g.Action, g.RequiredScope); err != nil {
 			return err
 		}
 	}
@@ -149,14 +142,14 @@ func (s *Service) ListBindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i := range bindings {
-		rows, err := s.DB.Query(`SELECT project_id,env_id,action,required_scope FROM workload_grants WHERE binding_id=? AND org_id=? ORDER BY project_id,env_id,action`, bindings[i].ID, org)
+		rows, err := s.DB.Query(`SELECT project_id,action,required_scope FROM workload_grants WHERE binding_id=? AND org_id=? ORDER BY project_id,action`, bindings[i].ID, org)
 		if err != nil {
 			fail(w, 500, "STORAGE_ERROR", "binding grants unavailable")
 			return
 		}
 		for rows.Next() {
 			var g Grant
-			if err = rows.Scan(&g.ProjectID, &g.EnvironmentID, &g.Action, &g.RequiredScope); err != nil {
+			if err = rows.Scan(&g.ProjectID, &g.Action, &g.RequiredScope); err != nil {
 				rows.Close()
 				fail(w, 500, "STORAGE_ERROR", "binding grants unavailable")
 				return

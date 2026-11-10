@@ -168,12 +168,12 @@ export class Client {
   }
   me() { return this.request('GET', '/api/v1/me'); }
   projects(orgSlug) { return this.request('GET', `/api/v1/orgs/${encodeURIComponent(orgSlug)}/projects`); }
-  listFolders(projectID, env) { return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/folders${query(['env', env])}`); }
-  createFolder(projectID, env, path) { return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/folders${query(['env', env])}`, { body: { path } }); }
-  listSecrets(projectID, env, folderPath = '') { return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets${query(['env', env, 'path', folderPath])}`); }
-  upsertSecret(projectID, env, folderPath, key, value, comment = '', tags = null, options = {}) {
+  listFolders(projectID) { return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/folders`); }
+  createFolder(projectID, path) { return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/folders`, { body: { path } }); }
+  listSecrets(projectID, folderPath = '') { return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets${query(['path', folderPath])}`); }
+  upsertSecret(projectID, folderPath, key, value, comment = '', tags = null, options = {}) {
     const body = { key, value, comment, tags: tags ?? [], ...(options.expectedVersion != null ? { expectedVersion: options.expectedVersion } : {}) };
-    return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets${query(['env', env, 'path', folderPath])}`, { body, idempotencyKey: options.idempotencyKey });
+    return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets${query(['path', folderPath])}`, { body, idempotencyKey: options.idempotencyKey });
   }
   getByLocator(locator, key) {
     return this.request('GET', `/api/v1/access?${new URLSearchParams({ locator, key })}`);
@@ -185,29 +185,29 @@ export class Client {
   listByLocator(locator) {
     return this.request('GET', `/api/v1/access?${new URLSearchParams({ locator })}`);
   }
-  getSecret(projectID, env, folderPath, key, options = {}) {
-    return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}${query(['env', env, 'path', folderPath, 'resolve', options.resolve ? 'true' : ''])}`);
+  getSecret(projectID, folderPath, key, options = {}) {
+    return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}${query(['path', folderPath, 'resolve', options.resolve ? 'true' : ''])}`);
   }
-  revealSecretVersion(projectID, env, folderPath, key, version, options = {}) {
-    return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}/versions/${version}${query(['env', env, 'path', folderPath, 'resolve', options.resolve ? 'true' : ''])}`);
+  revealSecretVersion(projectID, folderPath, key, version, options = {}) {
+    return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}/versions/${version}${query(['path', folderPath, 'resolve', options.resolve ? 'true' : ''])}`);
   }
-  secretVersions(projectID, env, folderPath, key) {
-    return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}/versions${query(['env', env, 'path', folderPath])}`);
+  secretVersions(projectID, folderPath, key) {
+    return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}/versions${query(['path', folderPath])}`);
   }
-  rollbackSecret(projectID, env, folderPath, key, version, options = {}) {
+  rollbackSecret(projectID, folderPath, key, version, options = {}) {
     const body = { version, ...(options.expectedVersion != null ? { expectedVersion: options.expectedVersion } : {}) };
-    return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}/rollback${query(['env', env, 'path', folderPath])}`, { body, idempotencyKey: options.idempotencyKey });
+    return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}/rollback${query(['path', folderPath])}`, { body, idempotencyKey: options.idempotencyKey });
   }
-  exportSecrets(projectID, env, options = {}) {
-    return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/export${query(['env', env, 'resolve', options.resolve ? 'true' : ''])}`, { expectText: true });
+  exportSecrets(projectID, options = {}) {
+    return this.request('GET', `/api/v1/projects/${encodeURIComponent(projectID)}/export${query(['resolve', options.resolve ? 'true' : ''])}`, { expectText: true });
   }
-  importEnv(projectID, env, folderPath, content, strategy = '', preview = false, options = {}) {
-    return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/import${query(['env', env, 'path', folderPath])}`, {
+  importEnv(projectID, folderPath, content, strategy = '', preview = false, options = {}) {
+    return this.request('POST', `/api/v1/projects/${encodeURIComponent(projectID)}/import${query(['path', folderPath])}`, {
       body: { content, preview, ...(strategy ? { strategy } : {}) }, idempotencyKey: options.idempotencyKey,
     });
   }
-  deleteSecret(projectID, env, folderPath, key, options = {}) {
-    const pairs = ['env', env, 'path', folderPath];
+  deleteSecret(projectID, folderPath, key, options = {}) {
+    const pairs = ['path', folderPath];
     if (options.expectedVersion != null) pairs.push('expectedVersion', String(options.expectedVersion));
     return this.request('DELETE', `/api/v1/projects/${encodeURIComponent(projectID)}/secrets/${encodeURIComponent(key)}${query(pairs)}`, { idempotencyKey: options.idempotencyKey });
   }

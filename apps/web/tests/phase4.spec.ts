@@ -15,8 +15,8 @@ test('version diff masks values, escape restores focus, and a viewer cannot read
   const projects = await (await request.get('/api/v1/orgs/phase4-owner/projects', { headers })).json();
   const projectId = projects.projects[0].id;
   const key = `PHASE4_${Date.now()}`;
-  expect((await request.post(`/api/v1/projects/${projectId}/secrets?env=dev`, { headers, data: { key, value: secret } })).ok()).toBeTruthy();
-  expect((await request.post(`/api/v1/projects/${projectId}/secrets?env=dev`, { headers, data: { key, value: revised, expectedVersion: 1 } })).ok()).toBeTruthy();
+  expect((await request.post(`/api/v1/projects/${projectId}/secrets`, { headers, data: { key, value: secret } })).ok()).toBeTruthy();
+  expect((await request.post(`/api/v1/projects/${projectId}/secrets`, { headers, data: { key, value: revised, expectedVersion: 1 } })).ok()).toBeTruthy();
 
   await page.addInitScript((tokens) => {
     const chosen = sessionStorage.getItem('phase4-tokens');

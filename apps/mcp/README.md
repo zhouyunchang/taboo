@@ -5,7 +5,7 @@ AI 编程 Agent（Claude Code、Kimi、Cursor 等）通过标准 **MCP 协议**�
 ## 安全模型
 
 - **仅两个 Tool**：`secrets.list`（元数据，永不含值）/ `secrets.get`（单值，**默认掩码**，显式 `reveal: true` 才返回明文并记 reveal 审计）
-- **认证 = 机器身份**：`client_id + client_secret` 经环境变量注入，scope 显式限定 项目 + 环境 + read；**吊销 identity 立即切断访问**（下一次 tool call 即被拒绝，服务端留审计）
+- **认证 = 机器身份**：`client_id + client_secret` 经配置注入，scope 显式限定项目和 read；**吊销 identity 立即切断访问**（下一次 tool call 即被拒绝，服务端留审计）
 - 每次取值以 `identity:xxx` 落审计日志，可在 Web Dashboard 审计页追溯
 
 ## 构建
@@ -30,8 +30,7 @@ go build -o taboo-mcp .
         "TABOO_SERVER": "http://localhost:7100",
         "TABOO_CLIENT_ID": "mi_xxx",
         "TABOO_CLIENT_SECRET": "只展示一次，妥善保存",
-        "TABOO_PROJECT_ID": "项目 UUID",
-        "TABOO_ENV": "dev"
+        "TABOO_PROJECT_ID": "项目 UUID"
       }
     }
   }
@@ -45,7 +44,7 @@ go build -o taboo-mcp .
   "mcpServers": {
     "taboo": {
       "command": "/abs/path/to/taboo-mcp",
-      "env": { "TABOO_CLIENT_ID": "mi_xxx", "TABOO_CLIENT_SECRET": "...", "TABOO_PROJECT_ID": "...", "TABOO_ENV": "dev" }
+      "env": { "TABOO_CLIENT_ID": "mi_xxx", "TABOO_CLIENT_SECRET": "...", "TABOO_PROJECT_ID": "..." }
     }
   }
 }
@@ -55,8 +54,8 @@ go build -o taboo-mcp .
 
 | Tool | 参数 | 说明 |
 |---|---|---|
-| `secrets.list` | `env?` `path?` | 列出 key / 文件夹 / 版本 / 标签（无值） |
-| `secrets.get` | `key`（必填）`env?` `path?` `reveal?` | 默认返回 `ab••••••••cd` 掩码；`reveal: true` 返回明文（记审计） |
+| `secrets.list` | `path?` | 列出 key / 文件夹 / 版本 / 标签（无值） |
+| `secrets.get` | `key`（必填）`path?` `reveal?` | 默认返回 `ab••••••••cd` 掩码；`reveal: true` 返回明文（记审计） |
 
 ## 验收冒烟
 

@@ -15,7 +15,7 @@ func setupRBAC(t *testing.T) (cleanup func(), can func(who, action, env string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	org, proj, envDev, envProd := tc.NewID(), tc.NewID(), tc.NewID(), tc.NewID()
+	org, proj := tc.NewID(), tc.NewID()
 	must := func(err error) {
 		if err != nil {
 			t.Fatal(err)
@@ -24,8 +24,6 @@ func setupRBAC(t *testing.T) (cleanup func(), can func(who, action, env string) 
 	mustExec := func(q string, args ...any) { _, err := dbConn.Exec(q, args...); must(err) }
 	mustExec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, 'o', 'o', 'x')`, org)
 	mustExec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'p', 'p')`, proj, org)
-	mustExec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, 'dev', 'dev', 0, 0)`, envDev, proj)
-	mustExec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, 'prod', 'prod', 1, 1)`, envProd, proj)
 
 	mkUser := func(role string) *Actor {
 		id := tc.NewID()
@@ -38,8 +36,7 @@ func setupRBAC(t *testing.T) (cleanup func(), can func(who, action, env string) 
 	ident := tc.NewID()
 	mustExec(`INSERT INTO machine_identities (id, org_id, name, auth_type, client_id, secret_hash, token_ttl)
 		VALUES (?, ?, 'ci', 'client_credentials', 'mi_x', 'h', 900)`, ident, org)
-	mustExec(`INSERT INTO identity_scopes (identity_id, project_id, env_id, permission) VALUES (?, ?, ?, 'read')`, ident, proj, envDev)
-	mustExec(`INSERT INTO identity_scopes (identity_id, project_id, env_id, permission) VALUES (?, ?, ?, 'reveal')`, ident, proj, envProd)
+	mustExec(`INSERT INTO identity_scopes (identity_id, project_id, permission) VALUES (?, ?, 'read')`, ident, proj)
 	idActor := &Actor{ID: ident, Kind: KindIdentity, Name: "ci"}
 
 	return func() { _ = dbConn.Close(); _ = os.RemoveAll(dir) }, func(who, action, env string) bool {
@@ -73,8 +70,8 @@ func TestRoleEnvMatrix(t *testing.T) {
 		{"viewer", "audit.read", "", false},
 		{"developer", "reveal", "dev", true},
 		{"developer", "write", "dev", true},
-		{"developer", "reveal", "prod", false},
-		{"developer", "write", "prod", false},
+		{"developer", "reveal", "prod", true},
+		{"developer", "write", "prod", true},
 		{"developer", "admin", "", false},
 		{"admin", "reveal", "prod", true},
 		{"admin", "write", "prod", true},
@@ -84,7 +81,7 @@ func TestRoleEnvMatrix(t *testing.T) {
 		{"owner", "members", "", true},
 		{"identity", "read", "dev", true},
 		{"identity", "reveal", "dev", false},
-		{"identity", "reveal", "prod", true},
+		{"identity", "reveal", "prod", false},
 		{"identity", "write", "prod", false},
 		{"identity", "admin", "", false},
 	}
@@ -103,11 +100,9 @@ func TestRestrictedGrant(t *testing.T) {
 	}
 	defer db.Close()
 	org, p1, p2 := tc.NewID(), tc.NewID(), tc.NewID()
-	e1 := tc.NewID()
 	_, _ = db.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, 'o', 'o', 'x')`, org)
 	_, _ = db.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'a', 'a')`, p1, org)
 	_, _ = db.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'b', 'b')`, p2, org)
-	_, _ = db.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, 'dev', 'dev', 0, 0)`, e1, p1)
 	uid := tc.NewID()
 	_, _ = db.Exec(`INSERT INTO users (id, email, name, password_hash) VALUES (?, 'r@t.test', 'r', 'x')`, uid)
 	_, _ = db.Exec(`INSERT INTO org_members (org_id, user_id, role, restricted) VALUES (?, ?, 'developer', 1)`, org, uid)

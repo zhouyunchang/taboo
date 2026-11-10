@@ -209,21 +209,21 @@ class Client:
     def projects(self, org_slug):
         return self.request("GET", f"/api/v1/orgs/{urllib.parse.quote(org_slug)}/projects")
 
-    def list_folders(self, project_id, env):
-        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/folders{_query(['env', env])}")
+    def list_folders(self, project_id):
+        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/folders")
 
-    def create_folder(self, project_id, env, path):
-        return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/folders{_query(['env', env])}", {"path": path})
+    def create_folder(self, project_id, path):
+        return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/folders", {"path": path})
 
-    def list_secrets(self, project_id, env, folder_path=""):
-        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets{_query(['env', env, 'path', folder_path])}")
+    def list_secrets(self, project_id, folder_path=""):
+        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets{_query(['path', folder_path])}")
 
-    def upsert_secret(self, project_id, env, folder_path, key, value, comment="", tags=None, options=None):
+    def upsert_secret(self, project_id, folder_path, key, value, comment="", tags=None, options=None):
         options = options or {}
         body = {"key": key, "value": value, "comment": comment, "tags": tags or []}
         if options.get("expected_version") is not None:
             body["expectedVersion"] = options["expected_version"]
-        return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets{_query(['env', env, 'path', folder_path])}", body, options.get("idempotency_key"))
+        return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets{_query(['path', folder_path])}", body, options.get("idempotency_key"))
 
     def get_by_locator(self, locator, key):
         return self.request("GET", "/api/v1/access?" + urllib.parse.urlencode({"locator": locator, "key": key}))
@@ -238,35 +238,35 @@ class Client:
     def list_by_locator(self, locator):
         return self.request("GET", "/api/v1/access?" + urllib.parse.urlencode({"locator": locator}))
 
-    def get_secret(self, project_id, env, folder_path, key, resolve=False):
-        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}{_query(['env', env, 'path', folder_path, 'resolve', 'true' if resolve else ''])}")
+    def get_secret(self, project_id, folder_path, key, resolve=False):
+        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}{_query(['path', folder_path, 'resolve', 'true' if resolve else ''])}")
 
-    def reveal_secret_version(self, project_id, env, folder_path, key, version, resolve=False):
-        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}/versions/{version}{_query(['env', env, 'path', folder_path, 'resolve', 'true' if resolve else ''])}")
+    def reveal_secret_version(self, project_id, folder_path, key, version, resolve=False):
+        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}/versions/{version}{_query(['path', folder_path, 'resolve', 'true' if resolve else ''])}")
 
-    def secret_versions(self, project_id, env, folder_path, key):
-        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}/versions{_query(['env', env, 'path', folder_path])}")
+    def secret_versions(self, project_id, folder_path, key):
+        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}/versions{_query(['path', folder_path])}")
 
-    def rollback_secret(self, project_id, env, folder_path, key, version, options=None):
+    def rollback_secret(self, project_id, folder_path, key, version, options=None):
         options = options or {}
         body = {"version": version}
         if options.get("expected_version") is not None:
             body["expectedVersion"] = options["expected_version"]
-        return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}/rollback{_query(['env', env, 'path', folder_path])}", body, options.get("idempotency_key"))
+        return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}/rollback{_query(['path', folder_path])}", body, options.get("idempotency_key"))
 
-    def export_secrets(self, project_id, env, resolve=False):
-        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/export{_query(['env', env, 'resolve', 'true' if resolve else ''])}", text=True)
+    def export_secrets(self, project_id, resolve=False):
+        return self.request("GET", f"/api/v1/projects/{urllib.parse.quote(project_id)}/export{_query(['resolve', 'true' if resolve else ''])}", text=True)
 
-    def import_env(self, project_id, env, folder_path, content, strategy="", preview=False, options=None):
+    def import_env(self, project_id, folder_path, content, strategy="", preview=False, options=None):
         options = options or {}
         body = {"content": content, "preview": preview}
         if strategy:
             body["strategy"] = strategy
-        return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/import{_query(['env', env, 'path', folder_path])}", body, options.get("idempotency_key"))
+        return self.request("POST", f"/api/v1/projects/{urllib.parse.quote(project_id)}/import{_query(['path', folder_path])}", body, options.get("idempotency_key"))
 
-    def delete_secret(self, project_id, env, folder_path, key, options=None):
+    def delete_secret(self, project_id, folder_path, key, options=None):
         options = options or {}
-        pairs = ["env", env, "path", folder_path]
+        pairs = ["path", folder_path]
         if options.get("expected_version") is not None:
             pairs += ["expectedVersion", str(options["expected_version"])]
         return self.request("DELETE", f"/api/v1/projects/{urllib.parse.quote(project_id)}/secrets/{urllib.parse.quote(key)}{_query(pairs)}", idempotency_key=options.get("idempotency_key"))

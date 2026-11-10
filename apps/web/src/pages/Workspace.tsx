@@ -30,7 +30,6 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
   const session = getBrowserSessionInfo();
   const [projects, setProjects] = useState<Project[]>([]);
   const [project, setProject] = useState<Project | null>(null);
-  const env = 'dev';
   const [tab, setTab] = useState<'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings' | 'scans'>('secrets');
   const [menu, setMenu] = useState<'project' | 'account' | null>(null);
   const [draft, setDraft] = useState<'project' | 'org' | null>(null);
@@ -181,7 +180,7 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
 
         <main className="main">
           {tab === 'secrets'
-            ? project && <SecretsPanel key={project.id} projectId={project.id} env={env} projectSlug={project.slug} ownerLabel={ownerLabel} canWrite={org.role === 'developer' || canAdmin} />
+            ? project && <SecretsPanel key={project.id} projectId={project.id} projectSlug={project.slug} ownerLabel={ownerLabel} canWrite={org.role === 'developer' || canAdmin} />
             : tab === 'identities'
               ? <IdentitiesPanel orgSlug={org.slug} project={project} />
               : tab === 'dynamic'
@@ -299,7 +298,7 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SecretsPanel({ projectId, env, projectSlug, ownerLabel, canWrite: legacyCanWrite }: { projectId: string; env: string; projectSlug: string; ownerLabel: string; canWrite: boolean }) {
+function SecretsPanel({ projectId, projectSlug, ownerLabel, canWrite: legacyCanWrite }: { projectId: string; projectSlug: string; ownerLabel: string; canWrite: boolean }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
   const [cur, setCur] = useState('/'); // 当前文件夹路径（物化路径 /a/b/）
@@ -312,19 +311,19 @@ function SecretsPanel({ projectId, env, projectSlug, ownerLabel, canWrite: legac
 
 
   const loadFolders = useCallback(() => {
-    api.get<{ folders: Folder[] }>(`/api/v1/projects/${projectId}/folders?env=${env}`)
+    api.get<{ folders: Folder[] }>(`/api/v1/projects/${projectId}/folders`)
       .then((d) => setFolders(d.folders))
       .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
-  }, [projectId, env]);
+  }, [projectId]);
 
   const listGeneration = useRef(0);
   const selectFolder = (path:string) => { listGeneration.current++; setSecrets([]);setEditing(null);setDetail(null);setCur(path); };
   const load = useCallback(() => {
     const started = ++listGeneration.current;
-    api.get<{ secrets: SecretMeta[]; permissions?: {write:boolean;delete:boolean;rollback:boolean;export:boolean} }>(`/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(cur)}`)
+    api.get<{ secrets: SecretMeta[]; permissions?: {write:boolean;delete:boolean;rollback:boolean;export:boolean} }>(`/api/v1/projects/${projectId}/secrets?path=${encodeURIComponent(cur)}`)
       .then((d) => { if(started !== listGeneration.current)return; setError(''); setSecrets(d.secrets); setPermissions(d.permissions ?? null); if(hasBrowserSession() && !d.permissions?.write)setEditing(null); })
       .catch((e) => { if(started !== listGeneration.current)return; setSecrets([]); setPermissions({write:false,delete:false,rollback:false,export:false}); setEditing(null); setDetail(null); setError(e instanceof ApiError ? e.message : String(e)); });
-  }, [projectId, env, cur]);
+  }, [projectId, cur]);
 
   useEffect(load, [load]);
   useEffect(() => { const refresh = () => {load();}; window.addEventListener('taboo:permissions-refresh',refresh); return () => window.removeEventListener('taboo:permissions-refresh',refresh); },[load]);
@@ -336,7 +335,7 @@ function SecretsPanel({ projectId, env, projectSlug, ownerLabel, canWrite: legac
     const clean = name.trim().replace(/^\/+|\/+$/g, '');
     if (!clean) return;
     try {
-      await api.post(`/api/v1/projects/${projectId}/folders?env=${env}`, { path: cur + clean + '/' });
+      await api.post(`/api/v1/projects/${projectId}/folders`, { path: cur + clean + '/' });
       loadFolders();
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
   }
@@ -345,7 +344,7 @@ function SecretsPanel({ projectId, env, projectSlug, ownerLabel, canWrite: legac
     if (cur === '/') return;
     if (!window.confirm(`删除空文件夹 ${cur}？（仅空文件夹可删除）`)) return;
     try {
-      await api.del(`/api/v1/projects/${projectId}/folders?env=${env}&path=${encodeURIComponent(cur)}`);
+      await api.del(`/api/v1/projects/${projectId}/folders?path=${encodeURIComponent(cur)}`);
       selectFolder(parentOf(cur));
       loadFolders();
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
@@ -382,7 +381,7 @@ function SecretsPanel({ projectId, env, projectSlug, ownerLabel, canWrite: legac
             </thead>
             <tbody>
               {secrets.map((s) => (
-                <SecretRow key={`${s.id}:${s.version}`} s={s} projectId={projectId} env={env} canWrite={canWrite && (s.canWrite !== false)}
+                <SecretRow key={`${s.id}:${s.version}`} s={s} projectId={projectId} canWrite={canWrite && (s.canWrite !== false)}
                   onChanged={load} onEdit={() => setEditing(s.key)} onDetail={() => setDetail(s)} />
               ))}
               {secrets.length === 0 && <tr><td colSpan={6} className="muted center">此文件夹还没有密钥</td></tr>}
@@ -391,14 +390,14 @@ function SecretsPanel({ projectId, env, projectSlug, ownerLabel, canWrite: legac
         </div>
       </div>
       {editing && (
-        <SecretEditor projectId={projectId} env={env} path={cur} secretKey={editing === '__new__' ? '' : editing} expectedVersion={editing === '__new__' ? 0 : secrets.find(s=>s.key===editing)?.version}
+        <SecretEditor projectId={projectId} path={cur} secretKey={editing === '__new__' ? '' : editing} expectedVersion={editing === '__new__' ? 0 : secrets.find(s=>s.key===editing)?.version}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
       )}
       {importing && (
-        <ImportEnv projectId={projectId} env={env} path={cur} onClose={() => setImporting(false)} onImported={load} />
+        <ImportEnv projectId={projectId} path={cur} onClose={() => setImporting(false)} onImported={load} />
       )}
       {detail && (
-        <DetailDrawer projectId={projectId} env={env} meta={detail} onChanged={load}
+        <DetailDrawer projectId={projectId} meta={detail} onChanged={load}
           onClose={() => setDetail(null)} />
       )}
     </div>
@@ -450,8 +449,8 @@ function TreeNode({ f, byParent, cur, onSelect }: {
   );
 }
 
-function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }: {
-  s: SecretMeta; projectId: string; env: string; canWrite: boolean;
+function SecretRow({ s, projectId, canWrite, onChanged, onEdit, onDetail }: {
+  s: SecretMeta; projectId: string; canWrite: boolean;
   onChanged: () => void; onEdit: () => void; onDetail: () => void;
 }) {
   const mutate=useSecretMutation();
@@ -466,7 +465,7 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
     if (value !== null) { setValue(null); return; }
     const started=++revealGeneration.current;
     try {
-      const d = await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`);
+      const d = await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?path=${encodeURIComponent(s.folder)}`);
       if(started===revealGeneration.current && document.hasFocus())setValue(d.value);
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
@@ -474,7 +473,7 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
   async function resolveRef() {
     const started = ++revealGeneration.current;
     try {
-      const d = await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}&resolve=true`);
+      const d = await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?path=${encodeURIComponent(s.folder)}&resolve=true`);
       if (started === revealGeneration.current && document.hasFocus()) { setErr(''); setValue(d.value); }
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
@@ -482,7 +481,7 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
   async function copy() {
     const started=revealGeneration.current;
     try {
-      const d: string = value !== null ? value : (await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}`)).value;
+      const d: string = value !== null ? value : (await api.get<SecretValue>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?path=${encodeURIComponent(s.folder)}`)).value;
       if(started!==revealGeneration.current || !document.hasFocus())return;
       await navigator.clipboard.writeText(d);
       setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 20_000); // 20s 自动清空剪贴板
@@ -492,7 +491,7 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
   async function remove() {
     if (!window.confirm(`删除密钥 ${s.key}？（版本历史一并删除，不可恢复）`)) return;
     try {
-      await mutate('del', `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?env=${env}&path=${encodeURIComponent(s.folder)}&expectedVersion=${s.version}`);
+      await mutate('del', `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(s.key)}?path=${encodeURIComponent(s.folder)}&expectedVersion=${s.version}`);
       onChanged();
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
@@ -518,8 +517,8 @@ function SecretRow({ s, projectId, env, canWrite, onChanged, onEdit, onDetail }:
   );
 }
 
-function SecretEditor({ projectId, env, path, secretKey, expectedVersion, onClose, onSaved }: {
-  projectId: string; env: string; path: string; secretKey: string; expectedVersion?:number; onClose: () => void; onSaved: () => void;
+function SecretEditor({ projectId, path, secretKey, expectedVersion, onClose, onSaved }: {
+  projectId: string; path: string; secretKey: string; expectedVersion?:number; onClose: () => void; onSaved: () => void;
 }) {
   const mutate=useSecretMutation();
   const [key, setKey] = useState(secretKey);
@@ -539,7 +538,7 @@ function SecretEditor({ projectId, env, path, secretKey, expectedVersion, onClos
     setBusy(true);
     setErr('');
     try {
-      const saved = await mutate('post', `/api/v1/projects/${projectId}/secrets?env=${env}&path=${encodeURIComponent(path)}`, {
+      const saved = await mutate('post', `/api/v1/projects/${projectId}/secrets?path=${encodeURIComponent(path)}`, {
         key, value, comment, expectedVersion,
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
       }) as { approval_id?: string };
@@ -571,8 +570,8 @@ function SecretEditor({ projectId, env, path, secretKey, expectedVersion, onClos
   );
 }
 
-function DetailDrawer({ projectId, env, meta, onClose, onChanged }: {
-  projectId: string; env: string; meta: SecretMeta; onClose: () => void; onChanged: () => void;
+function DetailDrawer({ projectId, meta, onClose, onChanged }: {
+  projectId: string; meta: SecretMeta; onClose: () => void; onChanged: () => void;
 }) {
   const secretKey = meta.key;
   const mutate=useSecretMutation();
@@ -584,16 +583,16 @@ function DetailDrawer({ projectId, env, meta, onClose, onChanged }: {
 
   const load = useCallback(() => {
     api.get<{ versions: Version[]; latest: number; canRollback?: boolean }>(
-      `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/versions?env=${env}&path=${encodeURIComponent(folder)}`)
+      `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/versions?path=${encodeURIComponent(folder)}`)
       .then((d) => { setVersions(d.versions); setLatest(d.latest); setCanRollback(d.canRollback ?? (!hasBrowserSession() && meta.canWrite !== false)); })
       .catch((e) => setErr(e instanceof ApiError ? e.message : String(e)));
-  }, [projectId, env, secretKey, folder, meta.canWrite]);
+  }, [projectId, secretKey, folder, meta.canWrite]);
   useEffect(load, [load]);
 
   async function rollback(v: number) {
     if (!window.confirm(`回滚 ${secretKey} 到 v${v}？（将产生新版本）`)) return;
     try {
-      await mutate('post', `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rollback?env=${env}&path=${encodeURIComponent(folder)}`, { version: v, expectedVersion:latest });
+      await mutate('post', `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rollback?path=${encodeURIComponent(folder)}`, { version: v, expectedVersion:latest });
       load(); onChanged();
     } catch (e) { setErr(e instanceof ApiError ? e.message : String(e)); }
   }
@@ -617,9 +616,9 @@ function DetailDrawer({ projectId, env, meta, onClose, onChanged }: {
           </tbody>
         </table>
         {meta.canReveal
-          ? <VersionDiff projectId={projectId} env={env} folder={folder} secretKey={secretKey} versions={versions} />
+          ? <VersionDiff projectId={projectId} folder={folder} secretKey={secretKey} versions={versions} />
           : <p className="muted">需要 reveal 权限才能对比版本内容。</p>}
-        <RotationPolicy projectId={projectId} env={env} folder={folder} secretKey={secretKey} canWrite={meta.canWrite} />
+        <RotationPolicy projectId={projectId} folder={folder} secretKey={secretKey} canWrite={meta.canWrite} />
         <div className="drawer-actions"><button className="ghost" onClick={onClose}>关闭</button></div>
       </div>
     </Modal>
@@ -727,7 +726,7 @@ function IdentitiesPanel({ orgSlug, project }: { orgSlug: string; project: Proje
         <h2>机器身份</h2>
         <button onClick={() => setShowNew(true)}>＋ 创建机器身份</button>
       </div>
-      <p className="muted">为 CI/CD、AI Agent 颁发 client_id + client_secret，作用域显式限定到 项目 + 环境 + 读写，禁止通配。</p>
+      <p className="muted">为 CI/CD、AI Agent 颁发 client_id + client_secret，作用域显式限定到项目和读写权限，禁止通配。</p>
       {error && <div className="error">{error}</div>}
       {once && (
         <div className="card once-secret">
@@ -740,7 +739,7 @@ function IdentitiesPanel({ orgSlug, project }: { orgSlug: string; project: Proje
       )}
       <div className="table-scroll">
       <table className="table secrets-table">
-        <thead><tr><th>名称</th><th>Client ID</th><th>Scope（项目 / 环境 / 权限）</th><th>IP 白名单</th><th>扫描报告</th><th>状态</th><th>TTL</th><th /></tr></thead>
+        <thead><tr><th>名称</th><th>Client ID</th><th>Scope（项目 / 权限）</th><th>IP 白名单</th><th>扫描报告</th><th>状态</th><th>TTL</th><th /></tr></thead>
         <tbody>
           {identities.map((i) => (
             <tr key={i.id}>
@@ -780,7 +779,7 @@ function IdentityCreator({ orgSlug, project, onClose, onCreated }: {
   const [ttl, setTtl] = useState(900);
   const [cidrs, setCidrs] = useState('');
   const [listScans, setListScans] = useState(false);
-  const [scopes, setScopes] = useState<IdentityScope[]>([{ project_id: project.id, project_slug: project.slug, env: 'dev', permission: 'read' }]);
+  const [scopes, setScopes] = useState<IdentityScope[]>([{ project_id: project.id, project_slug: project.slug, permission: 'read' }]);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -792,7 +791,7 @@ function IdentityCreator({ orgSlug, project, onClose, onCreated }: {
       const allowed = cidrs.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
       const d = await api.post<CreatedIdentity>(`/api/v1/orgs/${orgSlug}/identities`, {
         name, token_ttl: ttl, allowed_cidrs: allowed, list_scan_reports: listScans,
-        scopes: scopes.map((s) => ({ project_id: s.project_id, env: s.env, permission: s.permission })),
+        scopes: scopes.map((s) => ({ project_id: s.project_id, permission: s.permission })),
       });
       onCreated(d);
     } catch (e2) { setErr(e2 instanceof ApiError ? e2.message : String(e2)); }
@@ -820,7 +819,7 @@ function IdentityCreator({ orgSlug, project, onClose, onCreated }: {
               <button type="button" className="ghost" disabled={scopes.length === 1} onClick={() => setScopes(scopes.filter((_, i) => i !== idx))}>✕</button>
             </div>
           ))}
-          <button type="button" className="ghost" onClick={() => setScopes([...scopes, { project_id: project.id, project_slug: project.slug, env: 'dev', permission: 'read' }])}>＋ 添加 scope</button>
+          <button type="button" className="ghost" onClick={() => setScopes([...scopes, { project_id: project.id, project_slug: project.slug, permission: 'read' }])}>＋ 添加 scope</button>
         </div>
         {err && <div className="error">{err}</div>}
         <div className="drawer-actions">

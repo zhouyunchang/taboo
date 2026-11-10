@@ -74,8 +74,8 @@ func TestFederationIdentityReplacementPreservesData(t *testing.T) {
 	f.db.QueryRow(`SELECT user_id FROM external_identities WHERE subject='subject-a'`).Scan(&uid)
 	dek, _ := tc.Seal(f.master, hex.EncodeToString(make([]byte, 32)), tc.DEKContext("a"))
 	f.exec(`UPDATE orgs SET dek_encrypted=? WHERE id='a'`, dek)
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"K","value":"unchanged"}`, ""), 200)
-	f.exec(`INSERT INTO member_action_grants(org_id,user_id,project_id,env_id,action) VALUES('a',?,'project-a','env-a','read')`, uid)
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"K","value":"unchanged"}`, ""), 200)
+	f.exec(`INSERT INTO member_action_grants(org_id,user_id,project_id,action) VALUES('a',?,'project-a','read')`, uid)
 	var before string
 	f.db.QueryRow(`SELECT ciphertext FROM secret_versions`).Scan(&before)
 	start := replacementBegin(t, f, c, "")
@@ -95,7 +95,7 @@ func TestFederationIdentityReplacementPreservesData(t *testing.T) {
 		t.Fatal("provider replacement changed secret ciphertext")
 	}
 	checkStatus(t, f.request("GET", "/api/v1/me", c, false), 401)
-	checkStatus(t, f.request("GET", "/api/v1/projects/project-a/secrets?env=dev", next, false), 200)
+	checkStatus(t, f.request("GET", "/api/v1/projects/project-a/secrets", next, false), 200)
 	checkStatus(t, replacementCallback(t, f, op, start, c, nil), 400)
 	f.exec(`UPDATE oidc_providers SET enabled=0 WHERE id='provider-a'`)
 	checkStatus(t, f.request("GET", "/api/v1/me", next, false), 200)

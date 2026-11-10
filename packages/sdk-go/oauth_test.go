@@ -54,7 +54,7 @@ func TestOAuthAcquisitionCacheScopeAndNoFallback(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := c.ListSecrets(context.Background(), "project", "dev", ""); err != nil {
+			if _, err := c.ListSecrets(context.Background(), "project", ""); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -67,11 +67,11 @@ func TestOAuthAcquisitionCacheScopeAndNoFallback(t *testing.T) {
 	c.oauth.expires = time.Now()
 	c.mu.Unlock()
 	fail.Store(true)
-	if _, err = c.ListSecrets(context.Background(), "project", "dev", ""); err == nil {
+	if _, err = c.ListSecrets(context.Background(), "project", ""); err == nil {
 		t.Fatal("used stale token after exchange failure")
 	}
 	fail.Store(false)
-	if _, err = c.ListSecrets(context.Background(), "project", "dev", ""); err != nil {
+	if _, err = c.ListSecrets(context.Background(), "project", ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 3 {
@@ -91,7 +91,7 @@ func TestOAuthRejectsUntrustedMetadataAndRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.ListSecrets(context.Background(), "p", "dev", ""); err == nil {
+	if _, err = c.ListSecrets(context.Background(), "p", ""); err == nil {
 		t.Fatal("cross-origin endpoint trusted")
 	}
 	if stolen.Load() != 0 {

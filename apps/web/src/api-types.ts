@@ -2013,8 +2013,6 @@ export interface components {
         };
         MemberActionGrant: {
             project_id: string;
-            /** @description 可省略。服务端写入项目唯一目录树 */
-            environment_id?: string;
             /** @enum {string} */
             action: "read" | "write" | "reveal" | "export" | "rollback" | "delete";
         };
@@ -2061,8 +2059,6 @@ export interface components {
         };
         WorkloadGrant: {
             project_id: string;
-            /** @description 可省略。服务端写入项目唯一目录树 */
-            environment_id?: string;
             /**
              * @description 六种动作独立，不隐含其他动作
              * @enum {string}
@@ -2110,8 +2106,6 @@ export interface components {
             /** @enum {string} */
             platform?: "github" | "vercel" | "cloudflare";
             project_id?: string;
-            /** @description '*' 为全部环境 */
-            env_slug?: string;
             enabled?: boolean;
             created_at?: string;
             /** @description 已配置键名（不含值） */
@@ -2123,8 +2117,6 @@ export interface components {
             platform: "github" | "vercel" | "cloudflare";
             /** @description 缺省 = 组织内全部项目 */
             project_id?: string;
-            /** @default * */
-            env_slug: string;
             /**
              * @description github: token/owner/repo/environment?(repo 级留空)；
              *     vercel: token/project_id/team_id?/targets?(逗号分隔，默认 production)；
@@ -2228,8 +2220,6 @@ export interface components {
         IdentityScope: {
             project_id?: string;
             project_slug?: string;
-            /** @description 省略时为 dev。项目只有一棵目录树，禁止通配 */
-            env?: string;
             /** @enum {string} */
             permission?: "read" | "reveal" | "write";
         };
@@ -2257,7 +2247,6 @@ export interface components {
             token_ttl: number;
             scopes: {
                 project_id: string;
-                env: string;
                 /** @enum {string} */
                 permission: "read" | "reveal" | "write";
             }[];
@@ -5790,8 +5779,6 @@ export interface operations {
             content: {
                 "application/json": {
                     project_id: string;
-                    /** @description 可省略，使用项目唯一目录树 */
-                    env?: string;
                     /** @enum {string} */
                     action: "reveal" | "export" | "write" | "delete" | "rollback";
                     ttl_seconds?: number;

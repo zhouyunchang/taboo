@@ -242,7 +242,7 @@ func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
 	if v > SchemaVersion {
 		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
 	}
-	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != 18 && v != 19 && v != 20 && v != 21 && v != SchemaVersion {
+	if v != 0 && v != 11 && v != 12 && v != 13 && v != 14 && v != 15 && v != 16 && v != 17 && v != 18 && v != 19 && v != 20 && v != 21 && v != 22 && v != SchemaVersion {
 		return fmt.Errorf("unsupported PostgreSQL schema version: %d", v)
 	}
 	if v == 0 {
@@ -402,9 +402,8 @@ func installPolicies(tx *sql.Tx, owner, role string) error {
 		"org_members":         "org_id=" + org + " OR (" + org + " IS NULL AND user_id=" + user + ")",
 		"orgs":                "id=" + org + " OR (" + org + " IS NULL AND id IN (SELECT org_id FROM org_members WHERE user_id=" + user + "))",
 		"users":               "id=" + user + " OR id IN (SELECT user_id FROM org_members WHERE org_id=" + org + ")",
-		"environments":        "project_id IN (SELECT id FROM projects)",
-		"folders":             "env_id IN (SELECT id FROM environments)",
-		"secrets":             "env_id IN (SELECT id FROM environments)",
+		"folders":             "project_id IN (SELECT id FROM projects)",
+		"secrets":             "project_id IN (SELECT id FROM projects)",
 		"secret_versions":     "secret_id IN (SELECT id FROM secrets)",
 		"identity_scopes":     "identity_id IN (SELECT id FROM machine_identities) AND project_id IN (SELECT id FROM projects)",
 		"dynamic_leases":      "engine_id IN (SELECT id FROM dynamic_engines)",
@@ -437,7 +436,7 @@ func installWorkloads(tx *sql.Tx, owner, role string) error {
 	if _, err := tx.Exec(workloadSchema); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`ALTER TABLE workload_grants ADD CONSTRAINT workloads_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE; ALTER TABLE workload_grants ADD CONSTRAINT workloads_env_project FOREIGN KEY(env_id,project_id) REFERENCES environments(id,project_id) ON DELETE CASCADE; ALTER TABLE machine_identities ADD CONSTRAINT identities_id_org UNIQUE(id,org_id); ALTER TABLE workload_bindings ADD CONSTRAINT workloads_machine_org FOREIGN KEY(id,org_id) REFERENCES machine_identities(id,org_id) ON DELETE CASCADE;`); err != nil {
+	if _, err := tx.Exec(`ALTER TABLE workload_grants ADD CONSTRAINT workloads_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE; ALTER TABLE machine_identities ADD CONSTRAINT identities_id_org UNIQUE(id,org_id); ALTER TABLE workload_bindings ADD CONSTRAINT workloads_machine_org FOREIGN KEY(id,org_id) REFERENCES machine_identities(id,org_id) ON DELETE CASCADE;`); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`CREATE FUNCTION check_workload_identity() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -464,8 +463,7 @@ func installGovernance(tx *sql.Tx, owner, role string) error {
 	if _, err := tx.Exec(governanceSchema); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`ALTER TABLE workload_grants DROP CONSTRAINT workload_grants_action_check; ALTER TABLE workload_grants ADD CONSTRAINT workload_grants_action_check CHECK(action IN ('read','reveal','write','export','rollback','delete')); ALTER TABLE member_action_grants ADD CONSTRAINT member_actions_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE;
- ALTER TABLE member_action_grants ADD CONSTRAINT member_actions_env_project FOREIGN KEY(env_id,project_id) REFERENCES environments(id,project_id) ON DELETE CASCADE;`); err != nil {
+	if _, err := tx.Exec(`ALTER TABLE workload_grants DROP CONSTRAINT workload_grants_action_check; ALTER TABLE workload_grants ADD CONSTRAINT workload_grants_action_check CHECK(action IN ('read','reveal','write','export','rollback','delete')); ALTER TABLE member_action_grants ADD CONSTRAINT member_actions_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE;`); err != nil {
 		return err
 	}
 	for _, table := range []string{"org_security", "member_action_grants"} {
@@ -501,7 +499,6 @@ func installBrowserSecurity(tx *sql.Tx, owner, role string) error {
 
 func installPhase6(tx *sql.Tx, owner, role string) error {
 	for _, stmt := range []string{
-		`ALTER TABLE environments ADD COLUMN IF NOT EXISTS approval_required INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE org_members ADD COLUMN IF NOT EXISTS scim_managed INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE browser_sessions ADD COLUMN IF NOT EXISTS sid TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE browser_sessions ADD COLUMN IF NOT EXISTS subject TEXT NOT NULL DEFAULT ''`,

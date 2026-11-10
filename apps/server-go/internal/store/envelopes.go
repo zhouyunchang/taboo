@@ -87,7 +87,7 @@ func UpgradeEnvelopes(db *sql.DB, master []byte, apply bool) (int, error) {
 	}
 	sources := []source{
 		{"oauth_trusts", "client_secret_enc", `SELECT id,org_id,'','',1,client_secret_enc,id FROM oauth_trusts WHERE client_secret_enc<>''`, "oauth-introspection", false},
-		{"secret_versions", "ciphertext", `SELECT v.id,p.org_id,p.id,e.id,v.version,v.ciphertext,s.id FROM secret_versions v JOIN secrets s ON s.id=v.secret_id JOIN environments e ON e.id=s.env_id JOIN projects p ON p.id=e.project_id`, "secret", true},
+		{"secret_versions", "ciphertext", `SELECT v.id,p.org_id,p.id,'',v.version,v.ciphertext,s.id FROM secret_versions v JOIN secrets s ON s.id=v.secret_id JOIN projects p ON p.id=s.project_id`, "secret", true},
 		{"oidc_providers", "client_secret_enc", `SELECT id,org_id,'','',1,client_secret_enc,id FROM oidc_providers`, "oidc-client", false},
 		{"sync_targets", "config_enc", `SELECT id,org_id,'','',1,config_enc,id FROM sync_targets`, "sync-target", false},
 		{"webhooks", "secret_enc", `SELECT id,org_id,'','',1,secret_enc,id FROM webhooks`, "webhook", false},
@@ -108,8 +108,9 @@ func UpgradeEnvelopes(db *sql.DB, master []byte, apply bool) (int, error) {
 		}
 		for rows.Next() {
 			var x item
+			var ignored string
 			x.c.Purpose = src.purpose
-			if err = rows.Scan(&x.id, &x.c.Org, &x.c.Project, &x.c.Environment, &x.c.Version, &x.value, &x.c.Object); err != nil {
+			if err = rows.Scan(&x.id, &x.c.Org, &x.c.Project, &ignored, &x.c.Version, &x.value, &x.c.Object); err != nil {
 				rows.Close()
 				return 0, err
 			}
@@ -168,7 +169,7 @@ func UpgradeEnvelopes(db *sql.DB, master []byte, apply bool) (int, error) {
 			if e.Ciphertext == "" {
 				continue
 			}
-			e.Ciphertext, err = upgrade(deks[e.OrgID], e.Ciphertext, tc.SecretContext(e.OrgID, e.ProjectID, e.EnvironmentID, e.SecretID, e.Version))
+			e.Ciphertext, err = upgrade(deks[e.OrgID], e.Ciphertext, tc.SecretContext(e.OrgID, e.ProjectID, e.SecretID, e.Version))
 			if err != nil {
 				return 0, err
 			}

@@ -22,7 +22,7 @@
 | `GET/POST /api/v1/projects/{pid}/secrets` | 密钥列表 / upsert（产生新版本） |
 | `GET/DELETE /api/v1/projects/{pid}/secrets/{key}` | reveal（审计）/ 删除 |
 | `GET …/secrets/{key}/versions` `POST …/rollback` | 版本历史 / 回滚 |
-| `GET /api/v1/projects/{pid}/export?env=dev` | 导出 .env（审计） |
+| `GET /api/v1/projects/{pid}/export` | 导出 .env（审计） |
 | `GET/POST/DELETE /api/v1/orgs/{slug}/identities*` | 机器身份 + client_credentials 换 token |
 | `GET/POST /api/v1/projects/{pid}/dynamic-engines*` | 动态密钥引擎（PostgreSQL 短期账号 lease） |
 | `GET/POST/DELETE /api/v1/orgs/{slug}/sync/targets*` | Secret Sync 目标（M5 #11） |

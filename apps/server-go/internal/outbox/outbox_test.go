@@ -21,7 +21,7 @@ func TestDurableFanoutRollbackReplayAndLease(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e := events.SecretEvent{EventID: "event", OrgID: "a", ProjectID: "project", EnvSlug: "dev", Folder: "/a/", Key: "KEY", Version: 1, Action: "created", SecretID: "secret", EnvironmentID: "env", Ciphertext: "encrypted-fixture"}
+	e := events.SecretEvent{EventID: "event", OrgID: "a", ProjectID: "project", Folder: "/a/", Key: "KEY", Version: 1, Action: "created", SecretID: "secret", Ciphertext: "encrypted-fixture"}
 	if err := outbox.Insert(db, e); err != nil {
 		t.Fatal(err)
 	}

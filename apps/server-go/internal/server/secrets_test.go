@@ -31,7 +31,7 @@ func TestSecretEnvelopeMutationAndAuditAtomicity(t *testing.T) {
 	f := fixture(t, "")
 	dek, _ := tc.Seal(f.master, hex.EncodeToString(make([]byte, 32)), tc.DEKContext("a"))
 	f.exec(`UPDATE orgs SET dek_encrypted=? WHERE id='a'`, dek)
-	path := "/api/v1/projects/project-a/secrets?env=dev"
+	path := "/api/v1/projects/project-a/secrets"
 	one := `{"key":"K","value":"one","expectedVersion":0}`
 	checkStatus(t, f.localRequest("POST", path, one, "write-1"), 200)
 	w := f.localRequest("POST", path, one, "write-1")
@@ -42,10 +42,10 @@ func TestSecretEnvelopeMutationAndAuditAtomicity(t *testing.T) {
 	checkStatus(t, f.localRequest("POST", path, `{"key":"K","value":"different","expectedVersion":0}`, "write-1"), 409)
 	checkStatus(t, f.localRequest("POST", path, one, "stale-write"), 409)
 	checkStatus(t, f.localRequest("POST", path, `{"key":"K","value":"two","expectedVersion":1}`, "write-2"), 200)
-	rollback := "/api/v1/projects/project-a/secrets/K/rollback?env=dev"
+	rollback := "/api/v1/projects/project-a/secrets/K/rollback"
 	checkStatus(t, f.localRequest("POST", rollback, `{"version":1,"expectedVersion":2}`, "rollback"), 200)
 	checkStatus(t, f.localRequest("POST", rollback, `{"version":1,"expectedVersion":2}`, "rollback"), 200)
-	w = f.localRequest("GET", "/api/v1/projects/project-a/secrets/K?env=dev", "", "")
+	w = f.localRequest("GET", "/api/v1/projects/project-a/secrets/K", "", "")
 	checkStatus(t, w, 200)
 	if !strings.Contains(w.Body.String(), `"value":"one"`) {
 		t.Fatal("rollback did not re-encrypt original plaintext")
@@ -59,11 +59,11 @@ func TestSecretEnvelopeMutationAndAuditAtomicity(t *testing.T) {
 	}
 	// Context-bound versions cannot be substituted, even for the same object.
 	f.exec(`UPDATE secret_versions SET ciphertext=(SELECT ciphertext FROM secret_versions WHERE version=1) WHERE version=3`)
-	checkStatus(t, f.localRequest("GET", "/api/v1/projects/project-a/secrets/K?env=dev", "", ""), 500)
-	checkStatus(t, f.localRequest("GET", "/api/v1/projects/project-a/export?env=dev", "", ""), 500)
-	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev&expectedVersion=2", "", "stale-delete"), 409)
-	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev&expectedVersion=3", "", "delete"), 200)
-	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev&expectedVersion=3", "", "delete"), 200)
+	checkStatus(t, f.localRequest("GET", "/api/v1/projects/project-a/secrets/K", "", ""), 500)
+	checkStatus(t, f.localRequest("GET", "/api/v1/projects/project-a/export", "", ""), 500)
+	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?expectedVersion=2", "", "stale-delete"), 409)
+	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?expectedVersion=3", "", "delete"), 200)
+	checkStatus(t, f.localRequest("DELETE", "/api/v1/projects/project-a/secrets/K?expectedVersion=3", "", "delete"), 200)
 	testdb.FailAudit(t, f.db)
 	checkStatus(t, f.localRequest("POST", path, `{"key":"NEW","value":"hidden"}`, "failed-write"), 500)
 	if err := f.db.QueryRow(`SELECT COUNT(*) FROM secrets`).Scan(&n); err != nil || n != 0 {

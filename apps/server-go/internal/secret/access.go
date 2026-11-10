@@ -46,7 +46,6 @@ func (s *Service) Access(w http.ResponseWriter, r *http.Request) {
 	}
 	r = r.WithContext(project.With(r.Context(), target.project))
 	query := r.URL.Query()
-	query.Set("env", "dev")
 	query.Set("path", target.folder)
 	r.URL.RawQuery = query.Encode()
 	switch r.Method {
@@ -126,22 +125,16 @@ func orgByCode(db *sql.DB, code string) (string, error) {
 }
 
 func (s *Service) accessList(w http.ResponseWriter, r *http.Request, target located) {
-	envSlug := "dev"
-	if !auth.Require(s.DB, w, r, target.project.OrgID, target.project.ID, "read", envSlug) {
+	if !auth.Require(s.DB, w, r, target.project.OrgID, target.project.ID, "read", "") {
 		return
 	}
-	envID, err := s.envOf(target.project.ID, envSlug)
-	if err != nil {
-		writeErr(w, apperr.EnvNotFound)
-		return
-	}
-	folderID, norm, ferr := s.folderRef(envID, target.folder, false)
+	folderID, norm, ferr := s.folderRef(target.project.ID, target.folder, false)
 	if ferr != nil {
 		writeErr(w, apperr.New(404, "LOCATOR_NOT_FOUND", "locator was not found"))
 		return
 	}
 	folders := []map[string]string{}
-	rows, err := s.DB.Query(`SELECT name, path FROM folders WHERE env_id=? AND parent_id=? ORDER BY name`, envID, folderID)
+	rows, err := s.DB.Query(`SELECT name, path FROM folders WHERE project_id=? AND parent_id=? ORDER BY name`, target.project.ID, folderID)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -162,7 +155,7 @@ func (s *Service) accessList(w http.ResponseWriter, r *http.Request, target loca
 	}
 	rows.Close()
 	secrets := []Meta{}
-	rows, err = s.DB.Query(`SELECT id, folder, key, comment, tags, latest_version, updated_at FROM secrets WHERE env_id=? AND folder_id=? ORDER BY key`, envID, folderID)
+	rows, err = s.DB.Query(`SELECT id, folder, key, comment, tags, latest_version, updated_at FROM secrets WHERE project_id=? AND folder_id=? ORDER BY key`, target.project.ID, folderID)
 	if err != nil {
 		internalErr(w, err)
 		return

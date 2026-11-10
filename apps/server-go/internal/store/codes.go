@@ -27,6 +27,11 @@ func ensurePathCodes(db migrationDB) error {
 }
 
 func addColumn(db migrationDB, stmt string) error {
+	// PostgreSQL 在事务里执行失败的 ALTER 后，后面的语句都会被中止。
+	// 基线脚本已经带上这些列，所以这里先跳过已有列。SQLite 没有 IF NOT EXISTS。
+	if postgresConn(db) {
+		stmt = strings.Replace(stmt, "ADD COLUMN ", "ADD COLUMN IF NOT EXISTS ", 1)
+	}
 	_, err := db.Exec(stmt)
 	if err == nil {
 		return nil
@@ -36,6 +41,12 @@ func addColumn(db migrationDB, stmt string) error {
 		return nil
 	}
 	return err
+}
+
+func postgresConn(db migrationDB) bool {
+	var version string
+	err := db.QueryRow(`SELECT current_setting('server_version', true)`).Scan(&version)
+	return err == nil
 }
 
 func backfillPathCodes(db migrationDB) error {

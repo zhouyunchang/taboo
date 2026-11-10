@@ -30,14 +30,12 @@ type Service struct {
 
 type ScopeIn struct {
 	ProjectID  string `json:"project_id"`
-	EnvSlug    string `json:"env"`
 	Permission string `json:"permission"` // read | reveal | write
 }
 
 type ScopeOut struct {
 	ProjectID   string `json:"project_id"`
 	ProjectSlug string `json:"project_slug"`
-	EnvSlug     string `json:"env"`
 	Permission  string `json:"permission"`
 }
 
@@ -106,9 +104,9 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 	if b.ListScanReports {
 		listScans = 1
 	}
-	// 校验并解析 scope：显式 (project, env, permission)，禁止通配（设计文档 §6）
+	// 校验并解析 scope：显式 (project, permission)，禁止通配。
 	type resolved struct {
-		projectID, envID, permission string
+		projectID, permission string
 	}
 	resolvedScopes := make([]resolved, 0, len(b.Scopes))
 	for _, sc := range b.Scopes {
@@ -116,23 +114,17 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, apperr.New(400, "INVALID", "permission must be read, reveal or write"))
 			return
 		}
-		if sc.EnvSlug == "" {
-			sc.EnvSlug = "dev"
-		}
-		if sc.ProjectID == "" || sc.EnvSlug == "*" || sc.ProjectID == "*" {
+		if sc.ProjectID == "" || sc.ProjectID == "*" {
 			writeErr(w, apperr.New(400, "INVALID", "wildcard scope not allowed"))
 			return
 		}
-		// env 必须属于 project，project 必须属于本组织
-		var envID, orgCheck string
-		err := s.DB.QueryRow(`SELECT e.id, p.org_id FROM environments e
-			JOIN projects p ON p.id = e.project_id
-			WHERE e.project_id = ? AND e.slug = ?`, sc.ProjectID, sc.EnvSlug).Scan(&envID, &orgCheck)
+		var orgCheck string
+		err := s.DB.QueryRow(`SELECT org_id FROM projects WHERE id = ?`, sc.ProjectID).Scan(&orgCheck)
 		if err != nil || orgCheck != orgID {
-			writeErr(w, apperr.New(400, "INVALID", "invalid scope project/env"))
+			writeErr(w, apperr.New(400, "INVALID", "invalid scope project"))
 			return
 		}
-		resolvedScopes = append(resolvedScopes, resolved{sc.ProjectID, envID, sc.Permission})
+		resolvedScopes = append(resolvedScopes, resolved{sc.ProjectID, sc.Permission})
 	}
 
 	id := tc.NewID()
@@ -156,8 +148,8 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, rs := range resolvedScopes {
-		if _, err := tx.Exec(`INSERT INTO identity_scopes (identity_id, project_id, env_id, permission)
-			VALUES (?, ?, ?, ?) ON CONFLICT(identity_id,project_id,env_id) DO UPDATE SET permission=excluded.permission`, id, rs.projectID, rs.envID, rs.permission); err != nil {
+		if _, err := tx.Exec(`INSERT INTO identity_scopes (identity_id, project_id, permission)
+			VALUES (?, ?, ?) ON CONFLICT(identity_id,project_id) DO UPDATE SET permission=excluded.permission`, id, rs.projectID, rs.permission); err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 			return
 		}
@@ -386,12 +378,11 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 }
 
 func scopeOuts(db *sql.DB, identityID string) []ScopeOut {
-	rows, err := db.Query(`SELECT s.project_id, p.slug, e.slug, s.permission
+	rows, err := db.Query(`SELECT s.project_id, p.slug, s.permission
 		FROM identity_scopes s
 		JOIN projects p ON p.id = s.project_id
-		JOIN environments e ON e.id = s.env_id
 		WHERE s.identity_id = ?
-		ORDER BY p.slug, e.sort_order`, identityID)
+		ORDER BY p.slug`, identityID)
 	if err != nil {
 		return nil
 	}
@@ -399,7 +390,7 @@ func scopeOuts(db *sql.DB, identityID string) []ScopeOut {
 	out := []ScopeOut{}
 	for rows.Next() {
 		var sc ScopeOut
-		_ = rows.Scan(&sc.ProjectID, &sc.ProjectSlug, &sc.EnvSlug, &sc.Permission)
+		_ = rows.Scan(&sc.ProjectID, &sc.ProjectSlug, &sc.Permission)
 		out = append(out, sc)
 	}
 	return out

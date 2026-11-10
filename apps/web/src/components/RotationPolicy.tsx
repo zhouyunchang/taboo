@@ -10,10 +10,10 @@ type Policy = {
   last_run_at: number;
 };
 
-export default function RotationPolicy({ projectId, env, folder, secretKey, canWrite }: {
-  projectId: string; env: string; folder: string; secretKey: string; canWrite: boolean;
+export default function RotationPolicy({ projectId, folder, secretKey, canWrite }: {
+  projectId: string; folder: string; secretKey: string; canWrite: boolean;
 }) {
-  const endpoint = `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rotation?env=${encodeURIComponent(env)}&path=${encodeURIComponent(folder)}`;
+  const endpoint = `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rotation?path=${encodeURIComponent(folder)}`;
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [mode, setMode] = useState<'interval' | 'cron'>('interval');
   const [hours, setHours] = useState(24);

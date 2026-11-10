@@ -9,22 +9,20 @@ import (
 
 // SecretEvent 密钥变更事件（负载不含明文，只有元数据 + 资源定位信息）
 type SecretEvent struct {
-	Sequence      int64 // Durable per-organization order; allocated in the mutation transaction.
-	SecretID      string
-	EnvironmentID string
-	Ciphertext    string // Encrypted immutable snapshot for delayed sync; never sent to webhook recipients.
-	EventID       string // 幂等/追踪 ID（投递与同步记录共用）
-	OrgID         string
-	ProjectID     string
-	ProjectSlug   string
-	EnvSlug       string
-	Folder        string
-	Key           string
-	Version       int
-	Action        string // created | updated | rolled_back | deleted
-	ActorID       string
-	ActorName     string
-	ActorKind     string // user | identity
+	Sequence    int64 // Durable per-organization order; allocated in the mutation transaction.
+	SecretID    string
+	Ciphertext  string // Encrypted immutable snapshot for delayed sync; never sent to webhook recipients.
+	EventID     string // 幂等/追踪 ID（投递与同步记录共用）
+	OrgID       string
+	ProjectID   string
+	ProjectSlug string
+	Folder      string
+	Key         string
+	Version     int
+	Action      string // created | updated | rolled_back | deleted
+	ActorID     string
+	ActorName   string
+	ActorKind   string // user | identity
 }
 
 // Bus is the in-process list of durable consumers. Dispatch runs inside the

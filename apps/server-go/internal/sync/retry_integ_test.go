@@ -31,8 +31,8 @@ func TestFirstFailKeepsPendingAndRetries(t *testing.T) {
 	org, tid, run := tc.NewID(), tc.NewID(), tc.NewID()
 	_, _ = db.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, 'o', 'o', 'x')`, org)
 	enc, _ := tc.Encrypt(s.MasterKey, `{"token":"t"}`)
-	if _, err := db.Exec(`INSERT INTO sync_targets (id, org_id, name, platform, env_slug, config_enc, enabled)
-		VALUES (?, ?, 't', 'github', '*', ?, 1)`, tid, org, enc); err != nil {
+	if _, err := db.Exec(`INSERT INTO sync_targets (id, org_id, name, platform, config_enc, enabled)
+		VALUES (?, ?, 't', 'github', ?, 1)`, tid, org, enc); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO sync_runs (id, target_id, org_id, secret_key, action, status, next_attempt_at)
@@ -40,7 +40,7 @@ func TestFirstFailKeepsPendingAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s.execute(run, org, "github", enc, "", "*", "K", 0)
+	s.execute(run, org, "github", enc, "", "K", 0)
 	var status string
 	var attempts int
 	var next int64

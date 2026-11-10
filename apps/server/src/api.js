@@ -2,13 +2,12 @@
 //   POST /api/v1/auth/register | /login | /refresh
 //   GET  /api/v1/orgs
 //   GET/POST /api/v1/orgs/:slug/projects
-//   GET/POST /api/v1/projects/:pid/environments
-//   GET    /api/v1/projects/:pid/secrets?env=dev            列表（无值）
-//   GET    /api/v1/projects/:pid/secrets/:key?env=dev       取单值（reveal，记审计）
+//   GET    /api/v1/projects/:pid/secrets                   列表（无值）
+//   GET    /api/v1/projects/:pid/secrets/:key              取单值（reveal，记审计）
 //   POST   /api/v1/projects/:pid/secrets                    创建/更新（产生新版本）
 //   GET    /api/v1/projects/:pid/secrets/:key/versions      版本历史
 //   POST   /api/v1/projects/:pid/secrets/:key/rollback      回滚到 vN
-//   GET    /api/v1/projects/:pid/export?env=dev             导出 .env（记审计）
+//   GET    /api/v1/projects/:pid/export                    导出 .env（记审计）
 //   GET    /api/v1/orgs/:slug/audit                         审计查询
 import { q, q1, run } from './db.js';
 import { encrypt, decrypt, hashPassword, verifyPassword, getOrgDEK, generateDEK, sha256, randomId } from './crypto.js';
@@ -49,12 +48,9 @@ export function makeApi({ db, masterKey, jwtSecret, requireAuth }) {
       run(db, `INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, ?, ?, ?)`,
         orgId, `${email}'s org`, slug, encrypt(masterKey, generateDEK().toString('hex')));
       run(db, `INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')`, orgId, userId);
-      // 默认项目 + dev/staging/prod 三环境
+      // 默认项目。目录树不再按环境拆分，内部仍保留一行 dev 以挂接密钥。
       const projectId = randomId();
       run(db, `INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'default', 'default')`, projectId, orgId);
-      ['dev', 'staging', 'prod'].forEach((s, i) =>
-        run(db, `INSERT INTO environments (id, project_id, name, slug, sort_order) VALUES (?, ?, ?, ?, ?)`,
-          randomId(), projectId, s, s, i));
       const user = q1(db, `SELECT id, email, name FROM users WHERE id = ?`, userId);
       audit(db, { orgId, actor: user, action: 'auth.register', resource: `user/${email}`, ip: req.socket.remoteAddress });
       return json(res, 201, { user, tokens: issueTokens(db, jwtSecret, user) });
@@ -111,77 +107,52 @@ export function makeApi({ db, masterKey, jwtSecret, requireAuth }) {
         while (q1(db, `SELECT id FROM projects WHERE org_id = ? AND slug = ?`, org.id, slug)) slug += '-' + randomId().slice(0, 4);
         const pid = randomId();
         run(db, `INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, ?, ?)`, pid, org.id, name, slug);
-        ['dev', 'staging', 'prod'].forEach((s, i) =>
-          run(db, `INSERT INTO environments (id, project_id, name, slug, sort_order) VALUES (?, ?, ?, ?, ?)`, randomId(), pid, s, s, i));
         audit(db, { orgId: org.id, actor, action: 'project.create', resource: `project/${slug}`, ip });
         return json(res, 201, { id: pid, name, slug });
       }
     }
 
-    // GET/POST /api/v1/projects/:pid/environments
-    if (seg[2] === 'projects' && seg[4] === 'environments' && !seg[5]) {
-      const project = q1(db, `SELECT * FROM projects WHERE id = ?`, seg[3]);
-      if (!project) return json(res, 404, { code: 'NOT_FOUND', message: 'project not found' });
-      if (!can(db, user.id, project.org_id, 'read')) return json(res, 403, { code: 'FORBIDDEN', message: 'no access' });
-      if (req.method === 'GET') {
-        return json(res, 200, { environments: q(db, `SELECT id, name, slug, sort_order FROM environments WHERE project_id = ? ORDER BY sort_order`, project.id) });
-      }
-      const b = await bodyOf(req);
-      const name = String(b.name || '').trim();
-      if (!name) return json(res, 400, { code: 'INVALID', message: 'name required' });
-      const max = q1(db, `SELECT COALESCE(MAX(sort_order), -1) AS m FROM environments WHERE project_id = ?`, project.id).m;
-      const id = randomId();
-      run(db, `INSERT INTO environments (id, project_id, name, slug, sort_order) VALUES (?, ?, ?, ?, ?)`,
-        id, project.id, name, slugify(name), max + 1);
-      return json(res, 201, { id, name });
-    }
-
     const project = seg[2] === 'projects' ? q1(db, `SELECT * FROM projects WHERE id = ?`, seg[3]) : null;
     if (project) {
       const orgId = project.org_id;
-      const envSlug = String(query.get('env') || 'dev');
-      const env = q1(db, `SELECT * FROM environments WHERE project_id = ? AND slug = ?`, project.id, envSlug);
       const folder = String(query.get('path') || '/');
       const key = decodeURIComponent(seg[5] || '');
-      const resource = (k) => `project/${project.slug}/env/${envSlug}/secret/${k}`;
+      const resource = (k) => `project/${project.slug}/secret/${k}`;
 
-      // GET .../export?env=dev
+      // GET .../export
       if (req.method === 'GET' && seg[4] === 'export' && !seg[5]) {
-        if (!env) return json(res, 404, { code: 'NOT_FOUND', message: 'env not found' });
-        if (!can(db, user.id, orgId, 'reveal', envSlug)) return json(res, 403, { code: 'FORBIDDEN', message: 'reveal not allowed for this role/env' });
+        if (!can(db, user.id, orgId, 'reveal')) return json(res, 403, { code: 'FORBIDDEN', message: 'reveal not allowed' });
         const dek = getOrgDEK(masterKey, q1(db, `SELECT * FROM orgs WHERE id = ?`, orgId));
-        const rows = q(db, `SELECT s.key, v.ciphertext FROM secrets s JOIN secret_versions v ON v.secret_id = s.id AND v.version = s.latest_version WHERE s.env_id = ? ORDER BY s.key`, env.id);
+        const rows = q(db, `SELECT s.key, v.ciphertext FROM secrets s JOIN secret_versions v ON v.secret_id = s.id AND v.version = s.latest_version WHERE s.project_id = ? ORDER BY s.key`, project.id);
         const lines = rows.map((r) => `${r.key}=${decrypt(dek, r.ciphertext)}`);
-        audit(db, { orgId, actor, action: 'secrets.export', resource: `project/${project.slug}/env/${envSlug}`, metadata: { count: rows.length }, ip });
-        res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': `attachment; filename="${project.slug}-${envSlug}.env"`, 'Cache-Control': 'no-store' });
+        audit(db, { orgId, actor, action: 'secrets.export', resource: `project/${project.slug}`, metadata: { count: rows.length }, ip });
+        res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': `attachment; filename="${project.slug}.env"`, 'Cache-Control': 'no-store' });
         return res.end(lines.join('\n') + '\n');
       }
 
       // GET .../secrets  列表（元数据，无值）
       if (req.method === 'GET' && seg[4] === 'secrets' && !seg[5]) {
-        if (!env) return json(res, 404, { code: 'NOT_FOUND', message: 'env not found' });
         if (!can(db, user.id, orgId, 'read')) return json(res, 403, { code: 'FORBIDDEN', message: 'no access' });
-        const rows = q(db, `SELECT id, folder, key, comment, tags, latest_version AS version, updated_at FROM secrets WHERE env_id = ? ORDER BY folder, key`, env.id);
-        const canReveal = can(db, user.id, orgId, 'reveal', envSlug);
-        audit(db, { orgId, actor, action: 'secrets.list', resource: `project/${project.slug}/env/${envSlug}`, metadata: { count: rows.length }, ip });
+        const rows = q(db, `SELECT id, folder, key, comment, tags, latest_version AS version, updated_at FROM secrets WHERE project_id = ? ORDER BY folder, key`, project.id);
+        const canReveal = can(db, user.id, orgId, 'reveal');
+        audit(db, { orgId, actor, action: 'secrets.list', resource: `project/${project.slug}`, metadata: { count: rows.length }, ip });
         return json(res, 200, { secrets: rows.map((r) => ({ ...r, tags: JSON.parse(r.tags || '[]'), value: undefined, canReveal })) });
       }
 
       // POST .../secrets  创建/更新（产生新版本）
       if (req.method === 'POST' && seg[4] === 'secrets' && !seg[5]) {
-        if (!env) return json(res, 404, { code: 'NOT_FOUND', message: 'env not found' });
-        if (!can(db, user.id, orgId, 'write', envSlug)) return json(res, 403, { code: 'FORBIDDEN', message: 'write not allowed for this role/env' });
+        if (!can(db, user.id, orgId, 'write')) return json(res, 403, { code: 'FORBIDDEN', message: 'write not allowed' });
         const b = await bodyOf(req);
         const k = String(b.key || '').trim();
         const value = b.value;
         if (!k || typeof value !== 'string') return json(res, 400, { code: 'INVALID', message: 'key and value required' });
         const dek = getOrgDEK(masterKey, q1(db, `SELECT * FROM orgs WHERE id = ?`, orgId));
-        let secret = q1(db, `SELECT * FROM secrets WHERE env_id = ? AND folder = ? AND key = ?`, env.id, folder, k);
+        let secret = q1(db, `SELECT * FROM secrets WHERE project_id = ? AND folder = ? AND key = ?`, project.id, folder, k);
         const ct = encrypt(dek, value);
         if (!secret) {
           secret = { id: randomId() };
-          run(db, `INSERT INTO secrets (id, env_id, folder, key, comment, tags) VALUES (?, ?, ?, ?, ?, ?)`,
-            secret.id, env.id, folder, k, String(b.comment || ''), JSON.stringify(b.tags || []));
+          run(db, `INSERT INTO secrets (id, project_id, folder, key, comment, tags) VALUES (?, ?, ?, ?, ?, ?)`,
+            secret.id, project.id, folder, k, String(b.comment || ''), JSON.stringify(b.tags || []));
         } else {
           run(db, `UPDATE secrets SET comment = ?, tags = ?, updated_at = datetime('now') WHERE id = ?`,
             String(b.comment ?? secret.comment), JSON.stringify(b.tags ?? JSON.parse(secret.tags || '[]')), secret.id);
@@ -194,12 +165,12 @@ export function makeApi({ db, masterKey, jwtSecret, requireAuth }) {
         return json(res, 200, { key: k, version: nextVersion });
       }
 
-      if (!seg[5] || !env) return json(res, 404, { code: 'NOT_FOUND', message: 'not found' });
+      if (!seg[5]) return json(res, 404, { code: 'NOT_FOUND', message: 'not found' });
 
       // GET .../secrets/:key  取明文（reveal，记审计）
       if (req.method === 'GET' && seg[6] === undefined) {
-        if (!can(db, user.id, orgId, 'reveal', envSlug)) return json(res, 403, { code: 'FORBIDDEN', message: 'reveal not allowed for this role/env' });
-        const secret = q1(db, `SELECT * FROM secrets WHERE env_id = ? AND folder = ? AND key = ?`, env.id, folder, key);
+        if (!can(db, user.id, orgId, 'reveal')) return json(res, 403, { code: 'FORBIDDEN', message: 'reveal not allowed' });
+        const secret = q1(db, `SELECT * FROM secrets WHERE project_id = ? AND folder = ? AND key = ?`, project.id, folder, key);
         if (!secret) return json(res, 404, { code: 'NOT_FOUND', message: 'secret not found' });
         const ver = q1(db, `SELECT * FROM secret_versions WHERE secret_id = ? AND version = ?`, secret.id, secret.latest_version);
         const dek = getOrgDEK(masterKey, q1(db, `SELECT * FROM orgs WHERE id = ?`, orgId));
@@ -210,7 +181,7 @@ export function makeApi({ db, masterKey, jwtSecret, requireAuth }) {
       // GET .../secrets/:key/versions
       if (req.method === 'GET' && seg[6] === 'versions') {
         if (!can(db, user.id, orgId, 'read')) return json(res, 403, { code: 'FORBIDDEN', message: 'no access' });
-        const secret = q1(db, `SELECT * FROM secrets WHERE env_id = ? AND folder = ? AND key = ?`, env.id, folder, key);
+        const secret = q1(db, `SELECT * FROM secrets WHERE project_id = ? AND folder = ? AND key = ?`, project.id, folder, key);
         if (!secret) return json(res, 404, { code: 'NOT_FOUND', message: 'secret not found' });
         const versions = q(db, `SELECT version, created_by, created_at FROM secret_versions WHERE secret_id = ? ORDER BY version DESC`, secret.id);
         return json(res, 200, { key, latest: secret.latest_version, versions });
@@ -218,10 +189,10 @@ export function makeApi({ db, masterKey, jwtSecret, requireAuth }) {
 
       // POST .../secrets/:key/rollback {version}
       if (req.method === 'POST' && seg[6] === 'rollback') {
-        if (!can(db, user.id, orgId, 'write', envSlug)) return json(res, 403, { code: 'FORBIDDEN', message: 'write not allowed' });
+        if (!can(db, user.id, orgId, 'write')) return json(res, 403, { code: 'FORBIDDEN', message: 'write not allowed' });
         const b = await bodyOf(req);
         const target = Number(b.version);
-        const secret = q1(db, `SELECT * FROM secrets WHERE env_id = ? AND folder = ? AND key = ?`, env.id, folder, key);
+        const secret = q1(db, `SELECT * FROM secrets WHERE project_id = ? AND folder = ? AND key = ?`, project.id, folder, key);
         if (!secret) return json(res, 404, { code: 'NOT_FOUND', message: 'secret not found' });
         const ver = q1(db, `SELECT * FROM secret_versions WHERE secret_id = ? AND version = ?`, secret.id, target);
         if (!ver) return json(res, 404, { code: 'NOT_FOUND', message: 'version not found' });

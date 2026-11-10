@@ -39,7 +39,7 @@ func TestExternalWorkloadProfilesAndLocalRevocation(t *testing.T) {
 			if profile == "INTROSPECTION_RFC7662" {
 				machine = "machine-opaque"
 			}
-			grants := []map[string]string{{"project_id": "project-a", "environment_id": "env-a", "action": "read", "required_scope": "read"}, {"project_id": "project-a", "environment_id": "env-a", "action": "write", "required_scope": "write"}}
+			grants := []map[string]string{{"project_id": "project-a", "action": "read", "required_scope": "read"}, {"project_id": "project-a", "action": "write", "required_scope": "write"}}
 			b, _ = json.Marshal(map[string]any{"name": "automation", "trust_id": trust, "subject": "service:" + machine, "client_id": machine, "grants": grants})
 			w = f.localRequest("POST", "/api/v1/orgs/a/workloads", string(b), "")
 			checkStatus(t, w, 201)
@@ -78,36 +78,36 @@ func TestExternalWorkloadProfilesAndLocalRevocation(t *testing.T) {
 				return w
 			}
 			token := getToken("read write reveal export")
-			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", token, "a"), 200)
-			checkStatus(t, request("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"KEY","value":"fixture"}`, token, "a"), 200)
+			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets", "", token, "a"), 200)
+			checkStatus(t, request("POST", "/api/v1/projects/project-a/secrets", `{"key":"KEY","value":"fixture"}`, token, "a"), 200)
 			// A write binding never implies reveal/export, even if the token has those scopes.
-			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets/KEY?env=dev", "", token, "a"), 403)
-			checkStatus(t, request("GET", "/api/v1/projects/project-a/export?env=dev", "", token, "a"), 403)
-			checkStatus(t, request("GET", "/api/v1/projects/project-b/secrets?env=dev", "", token, "a"), 403)
-			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", token, "b"), 401)
-			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", getToken("write"), "a"), 403)
-			grants = append(grants, map[string]string{"project_id": "project-a", "environment_id": "env-a", "action": "reveal", "required_scope": "reveal"})
+			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets/KEY", "", token, "a"), 403)
+			checkStatus(t, request("GET", "/api/v1/projects/project-a/export", "", token, "a"), 403)
+			checkStatus(t, request("GET", "/api/v1/projects/project-b/secrets", "", token, "a"), 403)
+			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets", "", token, "b"), 401)
+			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets", "", getToken("write"), "a"), 403)
+			grants = append(grants, map[string]string{"project_id": "project-a", "action": "reveal", "required_scope": "reveal"})
 			b, _ = json.Marshal(map[string]any{"grants": grants})
 			checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/workloads/"+binding+"/grants", string(b), ""), 200)
-			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets/KEY?env=dev", "", token, "a"), 200)
+			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets/KEY", "", token, "a"), 200)
 			checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/workloads/"+binding+"/grants", `{"grants":[]}`, ""), 200)
-			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", token, "a"), 403)
+			checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets", "", token, "a"), 403)
 			checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/workloads/"+binding+"/grants", string(b), ""), 200)
 			// Provider changes cannot silently reinterpret bound subjects from a new issuer.
 			checkStatus(t, f.localRequest("PATCH", "/api/v1/orgs/a/oauth-trusts/"+trust, `{"issuer":"https://different.example"}`, ""), 409)
 			if profile == "INTROSPECTION_RFC7662" {
 				op.Disable()
-				checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", token, "a"), 401)
+				checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets", "", token, "a"), 401)
 				op.Outage()
-				checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", token, "a"), 503)
+				checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets", "", token, "a"), 503)
 			} else {
 				op.Disable()
-				checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", token, "a"), 200)
+				checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets", "", token, "a"), 200)
 			}
 			// Local binding revocation rejects already-issued offline JWTs immediately.
 			checkStatus(t, f.localRequest("POST", "/api/v1/orgs/a/workloads/"+binding+"/revoke", "", ""), 200)
 			if profile == "JWT_RFC9068" {
-				checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets?env=dev", "", token, "a"), 401)
+				checkStatus(t, request("GET", "/api/v1/projects/project-a/secrets", "", token, "a"), 401)
 			}
 			testdb.FailAudit(t, f.db)
 			checkStatus(t, f.localRequest("PATCH", "/api/v1/orgs/a/oauth-trusts/"+trust, `{"enabled":false}`, ""), 503)

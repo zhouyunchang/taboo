@@ -5,7 +5,6 @@ import ValidatedForm from "./ValidatedForm";
 
 export type Grant = {
   project_id: string;
-  environment_id: string;
   action: string;
   required_scope?: string;
 };
@@ -130,7 +129,6 @@ export function GrantEditor({
                                   ...g,
                                   {
                                     project_id: choice.project,
-                                    environment_id: "",
                                     action,
                                     ...(machine
                                       ? { required_scope: `secrets:${action}` }

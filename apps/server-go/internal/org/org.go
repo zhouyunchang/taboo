@@ -204,9 +204,9 @@ func randomBytes(n int) []byte {
 // ensureRootFolder 为环境补建根文件夹（幂等，已存在则忽略冲突）
 func ensureRootFolder(db interface {
 	Exec(string, ...any) (sql.Result, error)
-}, envID string) error {
-	_, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/') ON CONFLICT(env_id,path) DO NOTHING`,
-		tc.NewID(), envID)
+}, projectID string) error {
+	_, err := db.Exec(`INSERT INTO folders (id, project_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/') ON CONFLICT(project_id,path) DO NOTHING`,
+		tc.NewID(), projectID)
 	return err
 }
 
@@ -581,13 +581,7 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	envID := tc.NewID()
-	if _, err := tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, 'dev', 'dev', 0, 0, 0)`,
-		envID, pid); err != nil {
-		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
-		return
-	}
-	if err := ensureRootFolder(tx, envID); err != nil {
+	if err := ensureRootFolder(tx, pid); err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
 		return
 	}
@@ -612,15 +606,6 @@ func (s *Service) projectOf(w http.ResponseWriter, r *http.Request) (secret.Proj
 		return p, false
 	}
 	return p, true
-}
-
-// soleEnvID 是项目里唯一保留的环境。对外接口不再暴露环境，授权仍落到这一行。
-func soleEnvID(q interface {
-	QueryRow(query string, args ...any) *sql.Row
-}, orgID, projectID string) (string, error) {
-	var id string
-	err := q.QueryRow(`SELECT e.id FROM environments e JOIN projects p ON p.id = e.project_id WHERE p.org_id = ? AND p.id = ? ORDER BY e.sort_order LIMIT 1`, orgID, projectID).Scan(&id)
-	return id, err
 }
 
 func (s *Service) PatchProject(w http.ResponseWriter, r *http.Request) {
@@ -648,10 +633,6 @@ func (s *Service) PatchProject(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`UPDATE projects SET approval_required=? WHERE id=?`, flag, p.ID); err != nil {
-		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
-		return
-	}
-	if _, err := tx.Exec(`UPDATE environments SET approval_required=? WHERE project_id=?`, flag, p.ID); err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}

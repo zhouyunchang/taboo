@@ -28,46 +28,46 @@ func TestConsumerAPI(t *testing.T) {
 	ctx := context.Background()
 	expected := 0
 	options := MutationOptions{IdempotencyKey: "sdk-consumer-create", ExpectedVersion: &expected}
-	version, err := c.UpsertSecret(ctx, "project-a", "dev", "/", "CONSUMER_SECRET", "consumer-fixture-value", "", nil, options)
+	version, err := c.UpsertSecret(ctx, "project-a", "/", "CONSUMER_SECRET", "consumer-fixture-value", "", nil, options)
 	if err != nil || version < 1 {
 		t.Fatalf("write: %v", err)
 	}
-	replay, err := c.UpsertSecret(ctx, "project-a", "dev", "/", "CONSUMER_SECRET", "consumer-fixture-value", "", nil, options)
+	replay, err := c.UpsertSecret(ctx, "project-a", "/", "CONSUMER_SECRET", "consumer-fixture-value", "", nil, options)
 	if err != nil || replay != version {
 		t.Fatalf("receipt replay: %v", err)
 	}
-	items, err := c.ListSecrets(ctx, "project-a", "dev", "/")
+	items, err := c.ListSecrets(ctx, "project-a", "/")
 	if err != nil || len(items) != 1 {
 		t.Fatalf("list: %v", err)
 	}
-	value, err := c.GetSecret(ctx, "project-a", "dev", "/", "CONSUMER_SECRET")
+	value, err := c.GetSecret(ctx, "project-a", "/", "CONSUMER_SECRET")
 	if err != nil || value.Value != "consumer-fixture-value" {
 		t.Fatalf("reveal: %v", err)
 	}
-	exported, err := c.ExportSecrets(ctx, "project-a", "dev")
+	exported, err := c.ExportSecrets(ctx, "project-a")
 	if err != nil || !strings.Contains(exported, "CONSUMER_SECRET=consumer-fixture-value") {
 		t.Fatalf("export: %v", err)
 	}
 	refVersion := 0
-	if _, err = c.UpsertSecret(ctx, "project-a", "dev", "/", "REF_TARGET", "resolved-target", "", nil, MutationOptions{IdempotencyKey: "sdk-ref-target", ExpectedVersion: &refVersion}); err != nil {
+	if _, err = c.UpsertSecret(ctx, "project-a", "/", "REF_TARGET", "resolved-target", "", nil, MutationOptions{IdempotencyKey: "sdk-ref-target", ExpectedVersion: &refVersion}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.UpsertSecret(ctx, "project-a", "dev", "/", "REF_SRC", "${dev:REF_TARGET}", "", nil, MutationOptions{IdempotencyKey: "sdk-ref-src", ExpectedVersion: &refVersion}); err != nil {
+	if _, err = c.UpsertSecret(ctx, "project-a", "/", "REF_SRC", "${dev:REF_TARGET}", "", nil, MutationOptions{IdempotencyKey: "sdk-ref-src", ExpectedVersion: &refVersion}); err != nil {
 		t.Fatal(err)
 	}
-	literal, err := c.GetSecret(ctx, "project-a", "dev", "/", "REF_SRC")
+	literal, err := c.GetSecret(ctx, "project-a", "/", "REF_SRC")
 	if err != nil || literal.Value != "${dev:REF_TARGET}" {
 		t.Fatalf("raw ref: %v", err)
 	}
-	resolved, err := c.GetSecret(ctx, "project-a", "dev", "/", "REF_SRC", GetOptions{Resolve: true})
+	resolved, err := c.GetSecret(ctx, "project-a", "/", "REF_SRC", GetOptions{Resolve: true})
 	if err != nil || resolved.Value != "resolved-target" {
 		t.Fatalf("resolved ref: %+v %v", resolved, err)
 	}
-	preview, err := c.ImportEnv(ctx, "project-a", "dev", "/", "FROM_ENV=imported-value\nREF_TARGET=clash\n", "", true)
+	preview, err := c.ImportEnv(ctx, "project-a", "/", "FROM_ENV=imported-value\nREF_TARGET=clash\n", "", true)
 	if err != nil || preview.Created != 1 || len(preview.Conflicts) != 1 {
 		t.Fatalf("import preview: %+v %v", preview, err)
 	}
-	imported, err := c.ImportEnv(ctx, "project-a", "dev", "/", "FROM_ENV=imported-value\n", "skip", false, MutationOptions{IdempotencyKey: "sdk-import"})
+	imported, err := c.ImportEnv(ctx, "project-a", "/", "FROM_ENV=imported-value\n", "skip", false, MutationOptions{IdempotencyKey: "sdk-import"})
 	if err != nil || imported.Created != 1 {
 		t.Fatalf("import: %+v %v", imported, err)
 	}
@@ -86,7 +86,7 @@ func TestConsumerAPI(t *testing.T) {
 	if err != nil || len(reports) < 1 {
 		t.Fatalf("scan list: %v", err)
 	}
-	_, err = c.ListSecrets(ctx, "project-b", "dev", "/")
+	_, err = c.ListSecrets(ctx, "project-b", "/")
 	var denied *ApiError
 	if !errors.As(err, &denied) || denied.Status != 403 {
 		t.Fatalf("cross organization accepted: %v", err)
@@ -97,7 +97,7 @@ func TestConsumerAPI(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = limited.GetSecret(ctx, "project-a", "dev", "/", "CONSUMER_SECRET")
+		_, err = limited.GetSecret(ctx, "project-a", "/", "CONSUMER_SECRET")
 		if !errors.As(err, &denied) || denied.Status != 403 {
 			t.Fatalf("missing scope accepted: %v", err)
 		}
@@ -106,7 +106,7 @@ func TestConsumerAPI(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = wrong.ListSecrets(ctx, "project-a", "dev", "/")
+		_, err = wrong.ListSecrets(ctx, "project-a", "/")
 		if !errors.As(err, &denied) || denied.Status != 401 {
 			t.Fatalf("wrong target accepted: %v", err)
 		}

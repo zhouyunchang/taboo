@@ -40,7 +40,6 @@ func fixture(t *testing.T, issuer string) *federationFixture {
 	for _, org := range []string{"a", "b"} {
 		f.exec(`INSERT INTO orgs(id,name,slug,dek_encrypted) VALUES(?,?,?,'unused')`, org, org, org)
 		f.exec(`INSERT INTO projects(id,org_id,name,slug) VALUES(?,?,?,?)`, "project-"+org, org, "default", "default")
-		f.exec(`INSERT INTO environments(id,project_id,name,slug) VALUES(?,?,?,?)`, "env-"+org, "project-"+org, "dev", "dev")
 		enc, e := tc.Encrypt(f.master, "fixture-secret")
 		if e != nil {
 			t.Fatal(e)
@@ -130,8 +129,8 @@ func TestFederationBoundedSession(t *testing.T) {
 	}
 	checkStatus(t, f.request("GET", "/api/v1/orgs/a/projects", c, false), 200)
 	checkStatus(t, f.request("GET", "/api/v1/orgs/b/projects", c, false), 403)
-	checkStatus(t, f.request("GET", "/api/v1/projects/project-b/secrets?env=dev", c, false), 403)
-	checkStatus(t, f.request("GET", "/api/v1/projects/project-a/export?env=dev", c, false), 403)
+	checkStatus(t, f.request("GET", "/api/v1/projects/project-b/secrets", c, false), 403)
+	checkStatus(t, f.request("GET", "/api/v1/projects/project-a/export", c, false), 403)
 	checkStatus(t, f.request("POST", "/api/v1/auth/logout", c, false), 403)
 	r := httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
 	r.AddCookie(c)

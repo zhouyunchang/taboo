@@ -32,9 +32,8 @@ func TestLegacyEnvelopeUpgradeBackupAndPostgresTransfer(t *testing.T) {
 	}{
 		{`INSERT INTO orgs(id,name,slug,dek_encrypted) VALUES('a','a','a',?)`, []any{dek}},
 		{`INSERT INTO projects(id,org_id,name,slug) VALUES('p','a','p','p')`, nil},
-		{`INSERT INTO environments(id,project_id,name,slug) VALUES('e','p','dev','dev')`, nil},
-		{`INSERT INTO folders(id,env_id,name,path) VALUES('f','e','/','/')`, nil},
-		{`INSERT INTO secrets(id,env_id,folder_id,key,latest_version) VALUES('s','e','f','K',1)`, nil},
+		{`INSERT INTO folders(id,project_id,name,path) VALUES('f','p','/','/')`, nil},
+		{`INSERT INTO secrets(id,project_id,folder_id,key,latest_version) VALUES('s','p','f','K',1)`, nil},
 		{`INSERT INTO secret_versions(id,secret_id,version,ciphertext,created_by) VALUES('v','s',1,?,'fixture')`, []any{value}},
 	}
 	for _, q := range queries {
@@ -76,7 +75,7 @@ func TestLegacyEnvelopeUpgradeBackupAndPostgresTransfer(t *testing.T) {
 	if err = db.QueryRow(`SELECT ciphertext FROM secret_versions`).Scan(&unchanged); err != nil || !strings.HasPrefix(unchanged, "taboo:v1:") {
 		t.Fatal("new envelope missing")
 	}
-	if plaintext, err := tc.Open(key, unchanged, tc.SecretContext("a", "p", "e", "s", 1)); err != nil || plaintext != "fixture secret" {
+	if plaintext, err := tc.Open(key, unchanged, tc.SecretContext("a", "p", "s", 1)); err != nil || plaintext != "fixture secret" {
 		t.Fatal("migration changed plaintext")
 	}
 	// Recover a stopped SQLite instance from the pre-migration backup and key.

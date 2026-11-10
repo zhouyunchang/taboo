@@ -80,17 +80,17 @@ func (c *Client) Projects(ctx context.Context, orgSlug string) ([]Project, error
 
 // ---------- 文件夹 ----------
 
-func (c *Client) ListFolders(ctx context.Context, projectID, env string) ([]Folder, error) {
+func (c *Client) ListFolders(ctx context.Context, projectID string) ([]Folder, error) {
 	var out struct {
 		Folders []Folder `json:"folders"`
 	}
-	err := c.do(ctx, "GET", "/api/v1/projects/"+url.PathEscape(projectID)+"/folders"+q(vset("env", env)), nil, &out)
+	err := c.do(ctx, "GET", "/api/v1/projects/"+url.PathEscape(projectID)+"/folders", nil, &out)
 	return out.Folders, err
 }
 
-func (c *Client) CreateFolder(ctx context.Context, projectID, env, path string) (*Folder, error) {
+func (c *Client) CreateFolder(ctx context.Context, projectID, path string) (*Folder, error) {
 	var out Folder
-	err := c.do(ctx, "POST", "/api/v1/projects/"+url.PathEscape(projectID)+"/folders"+q(vset("env", env)),
+	err := c.do(ctx, "POST", "/api/v1/projects/"+url.PathEscape(projectID)+"/folders",
 		map[string]string{"path": path}, &out)
 	return &out, err
 }
@@ -98,21 +98,21 @@ func (c *Client) CreateFolder(ctx context.Context, projectID, env, path string) 
 // ---------- 密钥 ----------
 
 // ListSecrets ?path= 过滤（空 = 整个环境）
-func (c *Client) ListSecrets(ctx context.Context, projectID, env, folderPath string) ([]SecretMeta, error) {
+func (c *Client) ListSecrets(ctx context.Context, projectID, folderPath string) ([]SecretMeta, error) {
 	var out struct {
 		Secrets []SecretMeta `json:"secrets"`
 	}
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets" + q(vset("env", env, "path", folderPath))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets" + q(vset("path", folderPath))
 	err := c.do(ctx, "GET", p, nil, &out)
 	return out.Secrets, err
 }
 
 // UpsertSecret 创建/更新（产生新版本）；同 key 不同 folderPath 互不冲突
-func (c *Client) UpsertSecret(ctx context.Context, projectID, env, folderPath, key, value, comment string, tags []string, options ...MutationOptions) (int, error) {
+func (c *Client) UpsertSecret(ctx context.Context, projectID, folderPath, key, value, comment string, tags []string, options ...MutationOptions) (int, error) {
 	var out struct {
 		Version int `json:"version"`
 	}
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets" + q(vset("env", env, "path", folderPath))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets" + q(vset("path", folderPath))
 	opt := firstMutationOption(options)
 	body := map[string]any{"key": key, "value": value, "comment": comment, "tags": tags}
 	if opt.ExpectedVersion != nil {
@@ -165,37 +165,37 @@ func (c *Client) ListByLocator(ctx context.Context, locator string) ([]SecretMet
 }
 
 // GetSecret 读取明文（reveal 权限，记审计）。Resolve 为 true 时展开引用。
-func (c *Client) GetSecret(ctx context.Context, projectID, env, folderPath, key string, options ...GetOptions) (*SecretValue, error) {
+func (c *Client) GetSecret(ctx context.Context, projectID, folderPath, key string, options ...GetOptions) (*SecretValue, error) {
 	var out SecretValue
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + q(vset("env", env, "path", folderPath, "resolve", resolvePair(options)))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + q(vset("path", folderPath, "resolve", resolvePair(options)))
 	err := c.do(ctx, "GET", p, nil, &out)
 	return &out, err
 }
 
 // RevealSecretVersion 读取指定历史版本的明文。
-func (c *Client) RevealSecretVersion(ctx context.Context, projectID, env, folderPath, key string, version int, options ...GetOptions) (*SecretValue, error) {
+func (c *Client) RevealSecretVersion(ctx context.Context, projectID, folderPath, key string, version int, options ...GetOptions) (*SecretValue, error) {
 	var out SecretValue
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + "/versions/" + strconv.Itoa(version) + q(vset("env", env, "path", folderPath, "resolve", resolvePair(options)))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + "/versions/" + strconv.Itoa(version) + q(vset("path", folderPath, "resolve", resolvePair(options)))
 	err := c.do(ctx, "GET", p, nil, &out)
 	return &out, err
 }
 
-func (c *Client) SecretVersions(ctx context.Context, projectID, env, folderPath, key string) ([]SecretVersion, int, error) {
+func (c *Client) SecretVersions(ctx context.Context, projectID, folderPath, key string) ([]SecretVersion, int, error) {
 	var out struct {
 		Versions []SecretVersion `json:"versions"`
 		Latest   int             `json:"latest"`
 	}
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + "/versions" + q(vset("env", env, "path", folderPath))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + "/versions" + q(vset("path", folderPath))
 	err := c.do(ctx, "GET", p, nil, &out)
 	return out.Versions, out.Latest, err
 }
 
 // RollbackSecret 回滚到历史版本（以旧值产生新版本）
-func (c *Client) RollbackSecret(ctx context.Context, projectID, env, folderPath, key string, version int, options ...MutationOptions) (int, error) {
+func (c *Client) RollbackSecret(ctx context.Context, projectID, folderPath, key string, version int, options ...MutationOptions) (int, error) {
 	var out struct {
 		Version int `json:"version"`
 	}
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + "/rollback" + q(vset("env", env, "path", folderPath))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/secrets/" + url.PathEscape(key) + "/rollback" + q(vset("path", folderPath))
 	opt := firstMutationOption(options)
 	body := map[string]int{"version": version}
 	if opt.ExpectedVersion != nil {
@@ -206,9 +206,9 @@ func (c *Client) RollbackSecret(ctx context.Context, projectID, env, folderPath,
 }
 
 // ExportSecrets 导出 .env 格式文本。Resolve 为 true 时展开引用。
-func (c *Client) ExportSecrets(ctx context.Context, projectID, env string, options ...GetOptions) (string, error) {
+func (c *Client) ExportSecrets(ctx context.Context, projectID string, options ...GetOptions) (string, error) {
 	var out string
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/export" + q(vset("env", env, "resolve", resolvePair(options)))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/export" + q(vset("resolve", resolvePair(options)))
 	err := c.do(ctx, "GET", p, nil, &out)
 	return out, err
 }
@@ -230,9 +230,9 @@ type ImportResult struct {
 }
 
 // ImportEnv 导入 .env。preview 不写入；已有 key 需要 strategy 为 skip 或 overwrite。
-func (c *Client) ImportEnv(ctx context.Context, projectID, env, folderPath, content, strategy string, preview bool, options ...MutationOptions) (*ImportResult, error) {
+func (c *Client) ImportEnv(ctx context.Context, projectID, folderPath, content, strategy string, preview bool, options ...MutationOptions) (*ImportResult, error) {
 	var out ImportResult
-	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/import" + q(vset("env", env, "path", folderPath))
+	p := "/api/v1/projects/" + url.PathEscape(projectID) + "/import" + q(vset("path", folderPath))
 	body := map[string]any{"content": content, "preview": preview}
 	if strategy != "" {
 		body["strategy"] = strategy
@@ -309,9 +309,9 @@ func firstMutationOption(options []MutationOptions) MutationOptions {
 	return MutationOptions{}
 }
 
-func (c *Client) DeleteSecret(ctx context.Context, projectID, env, folderPath, key string, options ...MutationOptions) error {
+func (c *Client) DeleteSecret(ctx context.Context, projectID, folderPath, key string, options ...MutationOptions) error {
 	opt := firstMutationOption(options)
-	query := vset("env", env, "path", folderPath)
+	query := vset("path", folderPath)
 	if opt.ExpectedVersion != nil {
 		query.Set("expectedVersion", strconv.Itoa(*opt.ExpectedVersion))
 	}

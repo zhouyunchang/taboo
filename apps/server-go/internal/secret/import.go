@@ -31,8 +31,8 @@ type queryRower interface {
 	QueryRow(string, ...any) *sql.Row
 }
 
-func existingSecret(q queryRower, envID, folderID, key string) (id string, version int, ok bool, err error) {
-	err = q.QueryRow(`SELECT id, latest_version FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`, envID, folderID, key).Scan(&id, &version)
+func existingSecret(q queryRower, projectID, folderID, key string) (id string, version int, ok bool, err error) {
+	err = q.QueryRow(`SELECT id, latest_version FROM secrets WHERE project_id = ? AND folder_id = ? AND key = ?`, projectID, folderID, key).Scan(&id, &version)
 	if err == sql.ErrNoRows {
 		return "", 0, false, nil
 	}
@@ -73,17 +73,11 @@ func summarize(preview bool, strategy string, entries []importEntry) importResul
 	return out
 }
 
-// POST /import?env=&path=  导入 .env。preview 只返回计划；冲突必须显式 skip 或 overwrite。
+// POST /import?path=  导入 .env。preview 只返回计划；冲突必须显式 skip 或 overwrite。
 func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 	u := auth.From(r)
 	p := projectOf(r)
-	envSlug := q(r, "env", "dev")
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "write", envSlug) {
-		return
-	}
-	envID, err := s.envOf(p.ID, envSlug)
-	if err != nil {
-		writeErr(w, apperr.EnvNotFound)
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "write", "") {
 		return
 	}
 	var b struct {
@@ -112,7 +106,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 	}
 	var folderID string
 	if b.Preview {
-		folderID, err = folder.ResolveID(s.DB, envID, normPath, false)
+		folderID, err = folder.ResolveID(s.DB, p.ID, normPath, false)
 		if err != nil {
 			if isNotFound(err) {
 				planned := make([]importEntry, len(entries))
@@ -127,7 +121,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		}
 		planned := make([]importEntry, len(entries))
 		for i, e := range entries {
-			_, version, exists, err := existingSecret(s.DB, envID, folderID, e.Key)
+			_, version, exists, err := existingSecret(s.DB, p.ID, folderID, e.Key)
 			if err != nil {
 				internalErr(w, err)
 				return
@@ -137,7 +131,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, summarize(true, b.Strategy, planned))
 		return
 	}
-	required, err := s.needsApproval(envID)
+	required, err := s.needsApproval(p.ID)
 	if err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
@@ -163,7 +157,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 	if s.replayMutation(tx, w, r, p.OrgID, b) {
 		return
 	}
-	folderID, err = folder.ResolveID(tx, envID, normPath, true)
+	folderID, err = folder.ResolveID(tx, p.ID, normPath, true)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -178,7 +172,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 	state := make([]current, len(entries))
 	var conflicts []string
 	for i, e := range entries {
-		secretID, version, exists, err := existingSecret(tx, envID, folderID, e.Key)
+		secretID, version, exists, err := existingSecret(tx, p.ID, folderID, e.Key)
 		if err != nil {
 			internalErr(w, err)
 			return
@@ -205,8 +199,8 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 		eventAction := "created"
 		if !cur.exists {
 			secretID = tc.NewID()
-			if _, err = tx.Exec(`INSERT INTO secrets (id, env_id, project_id, folder, folder_id, key, comment, tags) VALUES (?, ?, (SELECT project_id FROM environments WHERE id=?), ?, ?, ?, '', '[]')`,
-				secretID, envID, envID, normPath, folderID, cur.item.Key); err != nil {
+			if _, err = tx.Exec(`INSERT INTO secrets (id, project_id, folder, folder_id, key, comment, tags) VALUES (?, ?, ?, ?, ?, '', '[]')`,
+				secretID, p.ID, normPath, folderID, cur.item.Key); err != nil {
 				internalErr(w, err)
 				return
 			}
@@ -214,7 +208,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 			next = version + 1
 			eventAction = "updated"
 		}
-		ct, err := tc.Seal(dek, cur.value, tc.SecretContext(p.OrgID, p.ID, envID, secretID, next))
+		ct, err := tc.Seal(dek, cur.value, tc.SecretContext(p.OrgID, p.ID, secretID, next))
 		if err != nil {
 			writeErr(w, apperr.New(500, "INTERNAL", "encrypt failed"))
 			return
@@ -228,7 +222,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 			internalErr(w, err)
 			return
 		}
-		if _, err = s.enqueue(tx, r, p, envSlug, normPath, cur.item.Key, next, eventAction, secretID, envID); err != nil {
+		if _, err = s.enqueue(tx, r, p, normPath, cur.item.Key, next, eventAction, secretID); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -238,7 +232,7 @@ func (s *Service) Import(w http.ResponseWriter, r *http.Request) {
 	for i, e := range planned {
 		keys[i] = e.Key
 	}
-	if err := auth.AuditReq(tx, r, p.OrgID, u, "secrets.import", "project/"+p.Slug+"/env/"+envSlug,
+	if err := auth.AuditReq(tx, r, p.OrgID, u, "secrets.import", "project/"+p.Slug,
 		map[string]any{"strategy": b.Strategy, "created": result.Created, "updated": result.Updated, "skipped": result.Skipped, "keys": keys}); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return

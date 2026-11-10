@@ -55,48 +55,39 @@ type policy struct {
 	LastEvent string `json:"last_event_id"`
 }
 
-func (s *Service) locate(w http.ResponseWriter, r *http.Request, action string) (project.Ctx, string, string, string, string, bool) {
+func (s *Service) locate(w http.ResponseWriter, r *http.Request, action string) (project.Ctx, string, string, bool) {
 	p := project.Of(r)
-	envSlug := r.URL.Query().Get("env")
-	if envSlug == "" {
-		envSlug = "dev"
-	}
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, action, envSlug) {
-		return p, "", "", "", "", false
-	}
-	var envID string
-	if err := s.DB.QueryRow(`SELECT id FROM environments WHERE project_id = ? AND slug = ?`, p.ID, envSlug).Scan(&envID); err != nil {
-		writeErr(w, apperr.New(404, "NOT_FOUND", "env not found"))
-		return p, "", "", "", "", false
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, action, "") {
+		return p, "", "", false
 	}
 	norm, err := folder.NormalizePath(r.URL.Query().Get("path"))
 	if err != nil {
 		writeErr(w, apperr.New(400, "INVALID", "invalid folder path"))
-		return p, "", "", "", "", false
+		return p, "", "", false
 	}
 	if norm == "" {
 		norm = "/"
 	}
-	folderID, err := folder.ResolveID(s.DB, envID, norm, false)
+	folderID, err := folder.ResolveID(s.DB, p.ID, norm, false)
 	if err != nil {
 		writeErr(w, apperr.New(404, "NOT_FOUND", "secret not found"))
-		return p, "", "", "", "", false
+		return p, "", "", false
 	}
-	return p, envSlug, envID, folderID, norm, true
+	return p, folderID, norm, true
 }
 
-func (s *Service) secretOf(envID, folderID, key string) (id string, version int, err error) {
-	err = s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE env_id = ? AND folder_id = ? AND key = ?`, envID, folderID, key).Scan(&id, &version)
+func (s *Service) secretOf(projectID, folderID, key string) (id string, version int, err error) {
+	err = s.DB.QueryRow(`SELECT id, latest_version FROM secrets WHERE project_id = ? AND folder_id = ? AND key = ?`, projectID, folderID, key).Scan(&id, &version)
 	return
 }
 
 func (s *Service) Get(w http.ResponseWriter, r *http.Request) {
-	_, _, envID, folderID, _, ok := s.locate(w, r, "read")
+	p, folderID, _, ok := s.locate(w, r, "read")
 	if !ok {
 		return
 	}
 	key := chi.URLParam(r, "key")
-	secretID, _, err := s.secretOf(envID, folderID, key)
+	secretID, _, err := s.secretOf(p.ID, folderID, key)
 	if err != nil {
 		writeErr(w, apperr.New(404, "NOT_FOUND", "secret not found"))
 		return
@@ -125,7 +116,7 @@ func (s *Service) load(secretID, key string) (policy, error) {
 }
 
 func (s *Service) Put(w http.ResponseWriter, r *http.Request) {
-	p, envSlug, envID, folderID, norm, ok := s.locate(w, r, "write")
+	p, folderID, norm, ok := s.locate(w, r, "write")
 	if !ok {
 		return
 	}
@@ -148,7 +139,7 @@ func (s *Service) Put(w http.ResponseWriter, r *http.Request) {
 	if b.Enabled != nil {
 		enabled = *b.Enabled
 	}
-	secretID, version, err := s.secretOf(envID, folderID, key)
+	secretID, version, err := s.secretOf(p.ID, folderID, key)
 	if err != nil {
 		writeErr(w, apperr.New(404, "NOT_FOUND", "secret not found"))
 		return
@@ -177,7 +168,7 @@ func (s *Service) Put(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", "internal error"))
 		return
 	}
-	if err = auth.AuditReq(tx, r, p.OrgID, u, "secrets.rotation.update", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key,
+	if err = auth.AuditReq(tx, r, p.OrgID, u, "secrets.rotation.update", "project/"+p.Slug+"/secret/"+key,
 		map[string]any{"interval_seconds": b.Interval, "cron": b.Cron, "enabled": enabled, "version": version, "folder": norm, "next_run_at": next.Unix()}); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
@@ -196,12 +187,12 @@ func (s *Service) Put(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
-	p, envSlug, envID, folderID, _, ok := s.locate(w, r, "write")
+	p, folderID, _, ok := s.locate(w, r, "write")
 	if !ok {
 		return
 	}
 	key := chi.URLParam(r, "key")
-	secretID, _, err := s.secretOf(envID, folderID, key)
+	secretID, _, err := s.secretOf(p.ID, folderID, key)
 	if err != nil {
 		writeErr(w, apperr.New(404, "NOT_FOUND", "secret not found"))
 		return
@@ -223,7 +214,7 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(404, "NOT_FOUND", "rotation policy not found"))
 		return
 	}
-	if err = auth.AuditReq(tx, r, p.OrgID, u, "secrets.rotation.delete", "project/"+p.Slug+"/env/"+envSlug+"/secret/"+key, nil); err != nil {
+	if err = auth.AuditReq(tx, r, p.OrgID, u, "secrets.rotation.delete", "project/"+p.Slug+"/secret/"+key, nil); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}
@@ -293,18 +284,17 @@ func (s *Service) fire(id string) error {
 	if n != 1 {
 		return nil
 	}
-	var orgID, projectID, slug, envSlug, path, key, cron string
-	var secretID, envID string
+	var orgID, projectID, slug, path, key, cron string
+	var secretID string
 	var version, interval int
 	var enabled int
-	err = tx.QueryRow(`SELECT p.org_id, p.project_id, pr.slug, e.slug, e.id, f.path, s.key, s.latest_version, s.id, p.interval_seconds, p.cron, p.enabled
+	err = tx.QueryRow(`SELECT p.org_id, p.project_id, pr.slug, f.path, s.key, s.latest_version, s.id, p.interval_seconds, p.cron, p.enabled
 		FROM rotation_policies p
 		JOIN secrets s ON s.id = p.secret_id
-		JOIN environments e ON e.id = s.env_id
 		JOIN projects pr ON pr.id = p.project_id
 		JOIN folders f ON f.id = s.folder_id
 		WHERE p.id = ? AND p.lease_token = ?`, id, claim).
-		Scan(&orgID, &projectID, &slug, &envSlug, &envID, &path, &key, &version, &secretID, &interval, &cron, &enabled)
+		Scan(&orgID, &projectID, &slug, &path, &key, &version, &secretID, &interval, &cron, &enabled)
 	if err != nil {
 		return err
 	}
@@ -315,14 +305,14 @@ func (s *Service) fire(id string) error {
 	eventID := tc.NewID()
 	event := events.SecretEvent{
 		EventID: eventID, OrgID: orgID, ProjectID: projectID, ProjectSlug: slug,
-		EnvSlug: envSlug, Folder: path, Key: key, Version: version, Action: "rotation_due",
+		Folder: path, Key: key, Version: version, Action: "rotation_due",
 		ActorID: "system", ActorName: "rotation", ActorKind: "system",
-		SecretID: secretID, EnvironmentID: envID,
+		SecretID: secretID,
 	}
 	if err = outbox.Insert(tx, event); err != nil {
 		return err
 	}
-	if err = auth.Audit(tx, orgID, &auth.Actor{ID: "system", Name: "rotation", Kind: "system"}, "secrets.rotation.due", "project/"+slug+"/env/"+envSlug+"/secret/"+key,
+	if err = auth.Audit(tx, orgID, &auth.Actor{ID: "system", Name: "rotation", Kind: "system"}, "secrets.rotation.due", "project/"+slug+"/secret/"+key,
 		map[string]any{"version": version, "interval_seconds": interval, "cron": cron, "event_id": eventID}, ""); err != nil {
 		return err
 	}

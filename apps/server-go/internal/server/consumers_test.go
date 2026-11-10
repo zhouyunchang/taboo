@@ -66,7 +66,7 @@ func TestConsumerProcesses(t *testing.T) {
 			}
 			if profile == "local" {
 				mode = "local"
-				created := create("/api/v1/orgs/a/identities", map[string]any{"name": "local compatibility", "scopes": []map[string]string{{"project_id": "project-a", "env": "dev", "permission": "write"}}})
+				created := create("/api/v1/orgs/a/identities", map[string]any{"name": "local compatibility", "scopes": []map[string]string{{"project_id": "project-a", "permission": "write"}}})
 				machine, secret = created["client_id"], created["client_secret"]
 				revoke = "/api/v1/orgs/a/identities/" + created["id"] + "/revoke"
 			} else {
@@ -74,7 +74,7 @@ func TestConsumerProcesses(t *testing.T) {
 				trust = created["id"]
 				grants := []map[string]string{}
 				for _, action := range []string{"read", "write", "reveal", "export"} {
-					grants = append(grants, map[string]string{"project_id": "project-a", "environment_id": "env-a", "action": action, "required_scope": action})
+					grants = append(grants, map[string]string{"project_id": "project-a", "action": action, "required_scope": action})
 				}
 				created = create("/api/v1/orgs/a/workloads", map[string]any{"name": "public consumer", "trust_id": trust, "subject": "service:" + machine, "client_id": machine, "grants": grants})
 				revoke = "/api/v1/orgs/a/workloads/" + created["id"] + "/revoke"

@@ -56,6 +56,9 @@ func migrate(db *sql.DB) error {
 	return relaxDynamicEngineCheck(db)
 }
 func migrateSchema(db migrationDB, fromVersion int) error {
+	if err := discardEnvironmentModel(db); err != nil {
+		return err
+	}
 	_, err := db.Exec(`
 CREATE TABLE IF NOT EXISTS users (
   id               TEXT PRIMARY KEY,
@@ -96,23 +99,25 @@ CREATE TABLE IF NOT EXISTS projects (
   org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
   slug       TEXT NOT NULL,
+  approval_required INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (org_id, slug)
 );
 
-CREATE TABLE IF NOT EXISTS environments (
+-- 多级文件夹：物化路径 /a/b/
+CREATE TABLE IF NOT EXISTS folders (
   id         TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  parent_id  TEXT REFERENCES folders(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
-  slug       TEXT NOT NULL,
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  protected  INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (project_id, slug)
+  path       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (project_id, path)
 );
 
 CREATE TABLE IF NOT EXISTS secrets (
   id             TEXT PRIMARY KEY,
-  env_id         TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   folder         TEXT NOT NULL DEFAULT '/',
   folder_id      TEXT REFERENCES folders(id),
   key            TEXT NOT NULL,
@@ -121,18 +126,7 @@ CREATE TABLE IF NOT EXISTS secrets (
   latest_version INTEGER NOT NULL DEFAULT 0,
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (env_id, folder, key)
-);
-
--- 多级文件夹（M2 #5）：物化路径 /a/b/
-CREATE TABLE IF NOT EXISTS folders (
-  id         TEXT PRIMARY KEY,
-  env_id     TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
-  parent_id  TEXT REFERENCES folders(id) ON DELETE CASCADE,
-  name       TEXT NOT NULL,
-  path       TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (env_id, path)
+  UNIQUE (project_id, folder, key)
 );
 
 CREATE TABLE IF NOT EXISTS secret_versions (
@@ -218,13 +212,12 @@ CREATE TABLE IF NOT EXISTS machine_identities (
   created_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- 作用域：显式 (项目, 环境, 权限) 三元组，禁止通配（设计文档 §6）
+-- 作用域：显式 (项目, 权限)，禁止通配
 CREATE TABLE IF NOT EXISTS identity_scopes (
   identity_id TEXT NOT NULL REFERENCES machine_identities(id) ON DELETE CASCADE,
   project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  env_id      TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
   permission  TEXT NOT NULL CHECK (permission IN ('read','reveal','write')),
-  PRIMARY KEY (identity_id, project_id, env_id)
+  PRIMARY KEY (identity_id, project_id)
 );
 
 -- TOTP 2FA（M2 #4）：恢复码仅存 sha256 哈希，用后即废
@@ -243,7 +236,6 @@ CREATE TABLE IF NOT EXISTS sync_targets (
   name         TEXT NOT NULL,
   platform     TEXT NOT NULL CHECK (platform IN ('github','vercel','cloudflare')),
   project_id   TEXT REFERENCES projects(id) ON DELETE CASCADE,
-  env_slug     TEXT NOT NULL DEFAULT '*',
   config_enc   TEXT NOT NULL,
   enabled      INTEGER NOT NULL DEFAULT 1,
   created_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -415,7 +407,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 	if _, err := db.Exec(`ALTER TABLE secrets ADD COLUMN folder_id TEXT REFERENCES folders(id)`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		return err
 	}
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_folder_key ON secrets(env_id, folder_id, key)`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_project_folder_key ON secrets(project_id, folder_id, key)`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		return err
 	}
 	// TOTP 2FA（M2 #4）：users 补列 + recovery_codes 表
@@ -450,12 +442,6 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 		return err
 	}
 	if _, err := db.Exec(`ALTER TABLE oidc_providers ADD COLUMN sync_role INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-		return err
-	}
-	if _, err := db.Exec(`ALTER TABLE environments ADD COLUMN protected INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-		return err
-	}
-	if _, err := db.Exec(`UPDATE environments SET protected = 1 WHERE slug = 'prod'`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 		return err
 	}
 	if _, err := db.Exec(`ALTER TABLE org_members ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -536,11 +522,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_cp_org ON audit_checkpoints(org_id, created
 }
 
 // SchemaVersion 当前 schema 版本（每次 migrate 结构变更 +1）
-const SchemaVersion = 22
+const SchemaVersion = 23
 
 func migratePhase6(db migrationDB) error {
 	for _, stmt := range []string{
-		`ALTER TABLE environments ADD COLUMN approval_required INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE org_members ADD COLUMN scim_managed INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE browser_sessions ADD COLUMN sid TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE browser_sessions ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
@@ -636,31 +621,36 @@ func relaxDynamicEngineCheck(db *sql.DB) error {
 	return tx.Commit()
 }
 
-// migrateFolders 幂等迁移：为每个环境创建根文件夹 '/'
-// 并将 secrets.folder（物化路径字符串）映射到 folders 记录
+// migrateFolders 把还没挂上目录记录的密钥补到项目根目录。
 func migrateFolders(db migrationDB) error {
-	// 1. 根文件夹
-	if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path)
-		SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6))),
-		       e.id, NULL, '/', '/'
-		FROM environments e
-		WHERE NOT EXISTS (SELECT 1 FROM folders f WHERE f.env_id = e.id AND f.path = '/')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO folders (id, project_id, parent_id, name, path)
+		SELECT lower(hex(randomblob(16))), p.id, NULL, '/', '/'
+		FROM projects p
+		WHERE NOT EXISTS (SELECT 1 FROM folders f WHERE f.project_id = p.id AND f.path = '/')`); err != nil {
 		return err
 	}
-	// 2. 非根 folder 字符串补建记录（挂到根下）
-	if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path)
-		SELECT lower(hex(randomblob(16))), s.env_id,
-		       (SELECT id FROM folders f WHERE f.env_id = s.env_id AND f.path = '/'),
-		       trim(s.folder, '/'), s.folder
-		FROM (SELECT DISTINCT env_id, folder FROM secrets WHERE folder <> '/') s
-		WHERE NOT EXISTS (SELECT 1 FROM folders f WHERE f.env_id = s.env_id AND f.path = s.folder)`); err != nil {
-		return err
-	}
-	// 3. 回填 secrets.folder_id
 	_, err := db.Exec(`UPDATE secrets SET folder_id =
-		(SELECT id FROM folders f WHERE f.env_id = secrets.env_id AND f.path = secrets.folder)
+		(SELECT id FROM folders f WHERE f.project_id = secrets.project_id AND f.path = secrets.folder)
 		WHERE folder_id IS NULL`)
 	return err
+}
+
+// discardEnvironmentModel 丢掉尚未上线时留下的环境表。已有密钥和目录不保留。
+func discardEnvironmentModel(db migrationDB) error {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='environments'`).Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer db.Exec(`PRAGMA foreign_keys=ON`)
+	for _, table := range []string{"secret_versions", "secrets", "folders", "identity_scopes", "member_action_grants", "workload_grants", "approval_requests", "access_requests", "environments"} {
+		if _, err := db.Exec(`DROP TABLE IF EXISTS ` + table); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateIdentityScopes 重建 CHECK，并把存量 read 升为 reveal（避免 CI 突然 403）。
@@ -676,14 +666,13 @@ func migrateIdentityScopes(db migrationDB) error {
 	if _, err := tx.Exec(`CREATE TABLE identity_scopes_new (
   identity_id TEXT NOT NULL REFERENCES machine_identities(id) ON DELETE CASCADE,
   project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  env_id      TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
   permission  TEXT NOT NULL CHECK (permission IN ('read','reveal','write')),
-  PRIMARY KEY (identity_id, project_id, env_id)
+  PRIMARY KEY (identity_id, project_id)
 )`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO identity_scopes_new (identity_id, project_id, env_id, permission)
-		SELECT identity_id, project_id, env_id,
+	if _, err := tx.Exec(`INSERT INTO identity_scopes_new (identity_id, project_id, permission)
+		SELECT identity_id, project_id,
 			CASE WHEN permission = 'read' THEN 'reveal' ELSE permission END
 		FROM identity_scopes`); err != nil {
 		return err

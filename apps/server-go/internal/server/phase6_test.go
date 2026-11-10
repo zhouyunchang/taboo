@@ -18,7 +18,7 @@ import (
 func TestPhase6ApprovalAccessAndSCIM(t *testing.T) {
 	f := phase4Ready(t)
 	checkStatus(t, f.localRequest("PATCH", "/api/v1/projects/project-a", `{"approval_required":true}`, ""), 200)
-	queued := f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"LOCKED","value":"phase6-secret","reason":"rotate"}`, "p6-queue")
+	queued := f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"LOCKED","value":"phase6-secret","reason":"rotate"}`, "p6-queue")
 	checkStatus(t, queued, 202)
 	if strings.Contains(queued.Body.String(), "phase6-secret") || !strings.Contains(queued.Body.String(), `"status":"pending"`) {
 		t.Fatalf("approval response: %s", queued.Body.String())
@@ -38,13 +38,13 @@ func TestPhase6ApprovalAccessAndSCIM(t *testing.T) {
 		t.Fatalf("audit leaked plaintext: %s %v", meta, err)
 	}
 	checkStatus(t, f.localRequest("POST", "/api/v1/orgs/a/approvals/"+created.ID+"/approve", `{}`, ""), 403)
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/import?env=dev", `{"content":"LOCKED=x\n"}`, ""), 409)
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/import", `{"content":"LOCKED=x\n"}`, ""), 409)
 
 	f.exec(`INSERT INTO users(id,email,name,password_hash) VALUES('admin2','admin2@example.test','Admin','!')`)
 	f.exec(`INSERT INTO org_members(org_id,user_id,role) VALUES('a','admin2','admin')`)
 	admin := mustToken(t, "admin2", "admin2@example.test")
 	checkStatus(t, f.bearer("POST", "/api/v1/orgs/a/approvals/"+created.ID+"/approve", `{}`, admin), 200)
-	got := f.localRequest("GET", "/api/v1/projects/project-a/secrets/LOCKED?env=dev", "", "")
+	got := f.localRequest("GET", "/api/v1/projects/project-a/secrets/LOCKED", "", "")
 	checkStatus(t, got, 200)
 	if !strings.Contains(got.Body.String(), `"value":"phase6-secret"`) {
 		t.Fatalf("approved value: %s", got.Body.String())
@@ -53,8 +53,8 @@ func TestPhase6ApprovalAccessAndSCIM(t *testing.T) {
 	f.exec(`INSERT INTO users(id,email,name,password_hash) VALUES('viewer2','viewer2@example.test','Viewer','!')`)
 	f.exec(`INSERT INTO org_members(org_id,user_id,role) VALUES('a','viewer2','viewer')`)
 	viewer := mustToken(t, "viewer2", "viewer2@example.test")
-	checkStatus(t, f.bearer("GET", "/api/v1/projects/project-a/secrets/LOCKED?env=dev", "", viewer), 403)
-	req := f.bearer("POST", "/api/v1/orgs/a/access-requests", `{"project_id":"project-a","env":"dev","action":"reveal","ttl_seconds":120,"reason":"incident"}`, viewer)
+	checkStatus(t, f.bearer("GET", "/api/v1/projects/project-a/secrets/LOCKED", "", viewer), 403)
+	req := f.bearer("POST", "/api/v1/orgs/a/access-requests", `{"project_id":"project-a","action":"reveal","ttl_seconds":120,"reason":"incident"}`, viewer)
 	checkStatus(t, req, 201)
 	var access struct {
 		ID string `json:"id"`
@@ -64,11 +64,11 @@ func TestPhase6ApprovalAccessAndSCIM(t *testing.T) {
 	}
 	checkStatus(t, f.bearer("POST", "/api/v1/orgs/a/access-requests/"+access.ID+"/approve", `{}`, viewer), 403)
 	checkStatus(t, f.bearer("POST", "/api/v1/orgs/a/access-requests/"+access.ID+"/approve", `{}`, admin), 200)
-	checkStatus(t, f.bearer("GET", "/api/v1/projects/project-a/secrets/LOCKED?env=dev", "", viewer), 200)
+	checkStatus(t, f.bearer("GET", "/api/v1/projects/project-a/secrets/LOCKED", "", viewer), 200)
 	if _, err := f.db.Exec(`UPDATE access_requests SET expires_at=1 WHERE id=?`, access.ID); err != nil {
 		t.Fatal(err)
 	}
-	checkStatus(t, f.bearer("GET", "/api/v1/projects/project-a/secrets/LOCKED?env=dev", "", viewer), 403)
+	checkStatus(t, f.bearer("GET", "/api/v1/projects/project-a/secrets/LOCKED", "", viewer), 403)
 	govern.Sweep(f.db)
 	var status string
 	if err := f.db.QueryRow(`SELECT status FROM access_requests WHERE id=?`, access.ID).Scan(&status); err != nil || status != "expired" {

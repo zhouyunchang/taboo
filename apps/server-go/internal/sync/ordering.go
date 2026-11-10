@@ -7,7 +7,7 @@ import (
 )
 
 // Targets have one ordered stream. This is deliberately stricter than per-key
-// ordering: targets can flatten several projects/environments into the same key.
+// ordering: targets can flatten several projects into the same key.
 func (s *Service) claimOrdered(id string) (string, error) {
 	tx, err := s.DB.Begin()
 	if err != nil {

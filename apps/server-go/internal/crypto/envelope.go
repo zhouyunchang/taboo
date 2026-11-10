@@ -17,12 +17,11 @@ const envelopePrefix = "taboo:v1:"
 // Context uses immutable IDs, never mutable display names or folder paths.
 // Version identifies the immutable secret version (1 for singleton credentials).
 type Context struct {
-	Purpose     string
-	Org         string
-	Project     string
-	Environment string
-	Object      string
-	Version     int
+	Purpose string
+	Org     string
+	Project string
+	Object  string
+	Version int
 }
 
 func (c Context) aad() ([]byte, error) {
@@ -91,8 +90,8 @@ func Open(key []byte, payload string, c Context) (string, error) {
 	return string(pt), nil
 }
 
-func SecretContext(org, project, env, secret string, version int) Context {
-	return Context{Purpose: "secret", Org: org, Project: project, Environment: env, Object: secret, Version: version}
+func SecretContext(org, project, secret string, version int) Context {
+	return Context{Purpose: "secret", Org: org, Project: project, Object: secret, Version: version}
 }
 func DEKContext(org string) Context {
 	return Context{Purpose: "org-dek", Org: org, Object: org, Version: 1}

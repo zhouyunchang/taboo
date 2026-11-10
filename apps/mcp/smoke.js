@@ -59,7 +59,7 @@ const me = await api('GET', '/api/v1/me', { token });
 const orgSlug = me.data.orgs[0].slug;
 const projects = await api('GET', `/api/v1/orgs/${orgSlug}/projects`, { token });
 const pid = projects.data.projects[0].id;
-await api('POST', `/api/v1/projects/${pid}/secrets?env=dev`, { token, body: { key: 'MCP_DEMO', value: 'mcp-secret-value', tags: ['mcp'] } });
+await api('POST', `/api/v1/projects/${pid}/secrets`, { token, body: { key: 'MCP_DEMO', value: 'mcp-secret-value', tags: ['mcp'] } });
 
 // 机器身份：read scope，限 dev
 const ident = await api('POST', `/api/v1/orgs/${orgSlug}/identities`, {
@@ -72,7 +72,6 @@ const mcpEnv = {
   TABOO_CLIENT_ID: ident.data.client_id,
   TABOO_CLIENT_SECRET: ident.data.client_secret,
   TABOO_PROJECT_ID: pid,
-  TABOO_ENV: 'dev',
 };
 const mcp = startMcp(mcpEnv);
 
@@ -98,12 +97,7 @@ check('get masked by default', !getMasked.result?.isError && getMasked.result?.c
 const getReveal = await mcp.call('tools/call', { name: 'secrets.get', arguments: { key: 'MCP_DEMO', reveal: true } });
 check('get reveal returns plaintext', !getReveal.result?.isError && getReveal.result?.content?.[0]?.text?.includes('mcp-secret-value'));
 
-// 5. 越权探测：身份 scope 限定 dev → 访问 prod 必须拒绝
-const prodDenied = await mcp.call('tools/call', { name: 'secrets.list', arguments: { env: 'prod' } });
-check('dev-scoped identity prod denied 403', prodDenied.result?.isError === true
-  && prodDenied.result?.content?.[0]?.text?.includes('access denied'), prodDenied.result?.content?.[0]?.text);
-
-// 6. 吊销 identity → 下一次调用必须失败，且服务端留审计
+// 5. 吊销 identity → 下一次调用必须失败，且服务端留审计
 const revoke = await api('POST', `/api/v1/orgs/${orgSlug}/identities/${ident.data.id}/revoke`, { token });
 check('identity revoked', revoke.status === 200);
 const afterRevoke = await mcp.call('tools/call', { name: 'secrets.list', arguments: {} });

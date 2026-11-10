@@ -11,13 +11,13 @@ import (
 // by the approval, and terminal approvals must drop the sealed payload.
 func TestPhase6ApprovalPinsVersionAndDropsPayload(t *testing.T) {
 	f := phase4Ready(t)
-	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"RACE","value":"v1"}`, ""), 200)
+	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"RACE","value":"v1"}`, ""), 200)
 	checkStatus(t, f.localRequest("PATCH", "/api/v1/projects/project-a", `{"approval_required":true}`, ""), 200)
 	f.exec(`INSERT INTO users(id,email,name,password_hash) VALUES('admin2','admin2@example.test','Admin','!')`)
 	f.exec(`INSERT INTO org_members(org_id,user_id,role) VALUES('a','admin2','admin')`)
 	admin := mustToken(t, "admin2", "admin2@example.test")
 
-	queued := f.localRequest("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"RACE","value":"from-request"}`, "")
+	queued := f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"RACE","value":"from-request"}`, "")
 	checkStatus(t, queued, 202)
 	var a struct {
 		ID string `json:"approval_id"`
@@ -26,7 +26,7 @@ func TestPhase6ApprovalPinsVersionAndDropsPayload(t *testing.T) {
 		t.Fatal(queued.Body.String())
 	}
 	// A concurrent change approved first moves the secret to v2.
-	other := f.bearer("POST", "/api/v1/projects/project-a/secrets?env=dev", `{"key":"RACE","value":"concurrent"}`, admin)
+	other := f.bearer("POST", "/api/v1/projects/project-a/secrets", `{"key":"RACE","value":"concurrent"}`, admin)
 	checkStatus(t, other, 202)
 	var b struct {
 		ID string `json:"approval_id"`
@@ -38,7 +38,7 @@ func TestPhase6ApprovalPinsVersionAndDropsPayload(t *testing.T) {
 	if stale.Code != http.StatusConflict {
 		t.Fatalf("stale approval applied: %d %s", stale.Code, stale.Body.String())
 	}
-	got := f.localRequest("GET", "/api/v1/projects/project-a/secrets/RACE?env=dev", "", "")
+	got := f.localRequest("GET", "/api/v1/projects/project-a/secrets/RACE", "", "")
 	if !strings.Contains(got.Body.String(), `"value":"concurrent"`) {
 		t.Fatalf("concurrent change lost: %s", got.Body.String())
 	}

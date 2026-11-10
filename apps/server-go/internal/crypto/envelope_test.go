@@ -8,7 +8,7 @@ import (
 
 func TestEnvelopeContextAndLegacy(t *testing.T) {
 	key := make([]byte, 32)
-	c := SecretContext("o", "p", "e", "s", 1)
+	c := SecretContext("o", "p", "s", 1)
 	ct, err := Seal(key, "value", c)
 	if err != nil {
 		t.Fatal(err)
@@ -16,7 +16,7 @@ func TestEnvelopeContextAndLegacy(t *testing.T) {
 	if value, err := Open(key, ct, c); err != nil || value != "value" {
 		t.Fatalf("roundtrip: %s %v", value, err)
 	}
-	for _, other := range []Context{SecretContext("other", "p", "e", "s", 1), SecretContext("o", "other", "e", "s", 1), SecretContext("o", "p", "other", "s", 1), SecretContext("o", "p", "e", "other", 1), SecretContext("o", "p", "e", "s", 2), {Purpose: "credential", Org: "o", Project: "p", Environment: "e", Object: "s", Version: 1}} {
+	for _, other := range []Context{SecretContext("other", "p", "s", 1), SecretContext("o", "other", "s", 1), SecretContext("o", "p", "other", 1), SecretContext("o", "p", "s", 2), {Purpose: "credential", Org: "o", Project: "p", Object: "s", Version: 1}} {
 		if _, err := Open(key, ct, other); err == nil {
 			t.Fatalf("accepted swapped context: %+v", other)
 		}

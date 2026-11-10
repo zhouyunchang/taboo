@@ -62,7 +62,7 @@ func personalLabel(name, email string) string {
 }
 
 // provisionTenant creates a key tenant, its owner membership, and the default
-// project environments. Personal spaces set owner_user_id; organizations do not.
+// project. Personal spaces set owner_user_id; organizations do not.
 func provisionTenant(tx *sql.Tx, masterKey []byte, name, slug, kind, ownerUserID string) (string, string, *apperr.Error) {
 	if kind != KindPersonal && kind != KindOrganization {
 		return "", "", apperr.InvalidInput
@@ -112,12 +112,7 @@ func provisionTenant(tx *sql.Tx, masterKey []byte, name, slug, kind, ownerUserID
 	if _, err = tx.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'default', 'default')`, projectID, orgID); err != nil {
 		return "", "", apperr.New(500, "INTERNAL", err.Error())
 	}
-	envID := tc.NewID()
-	if _, err = tx.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected, approval_required) VALUES (?, ?, 'dev', 'dev', 0, 0, 0)`,
-		envID, projectID); err != nil {
-		return "", "", apperr.New(500, "INTERNAL", err.Error())
-	}
-	if err = ensureRootFolder(tx, envID); err != nil {
+	if err = ensureRootFolder(tx, projectID); err != nil {
 		return "", "", apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed")
 	}
 	return orgID, slug, nil

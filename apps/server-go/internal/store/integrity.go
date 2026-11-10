@@ -9,13 +9,13 @@ func migrateIntegrity(db migrationDB) error {
 	checks := map[string]string{
 		"provider_security":    `EXISTS(SELECT 1 FROM oidc_providers p WHERE p.id=NEW.provider_id AND p.org_id=NEW.org_id)`,
 		"browser_credentials":  `EXISTS(SELECT 1 FROM browser_sessions s WHERE s.token_hash=NEW.token_hash AND s.org_id=NEW.org_id)`,
-		"member_action_grants": `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND e.id=NEW.env_id)`,
+		"member_action_grants": `EXISTS(SELECT 1 FROM projects p WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id)`,
 		"workload_bindings":    `EXISTS(SELECT 1 FROM machine_identities m WHERE m.id=NEW.id AND m.org_id=NEW.org_id AND m.auth_type='external_oauth')`,
-		"workload_grants":      `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND e.id=NEW.env_id)`,
-		"secrets":              `EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.folder_id AND f.env_id=NEW.env_id)`,
-		"folders":              `NEW.parent_id IS NULL OR EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.parent_id AND f.env_id=NEW.env_id)`,
+		"workload_grants":      `EXISTS(SELECT 1 FROM projects p WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id)`,
+		"secrets":              `EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.folder_id AND f.project_id=NEW.project_id)`,
+		"folders":              `NEW.parent_id IS NULL OR EXISTS(SELECT 1 FROM folders f WHERE f.id=NEW.parent_id AND f.project_id=NEW.project_id)`,
 		"project_grants":       `EXISTS(SELECT 1 FROM projects p JOIN org_members m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id AND m.user_id=NEW.user_id)`,
-		"identity_scopes":      `EXISTS(SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id JOIN machine_identities m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND e.id=NEW.env_id AND m.id=NEW.identity_id)`,
+		"identity_scopes":      `EXISTS(SELECT 1 FROM projects p JOIN machine_identities m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND m.id=NEW.identity_id)`,
 		"dynamic_engines":      `EXISTS(SELECT 1 FROM projects p WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id)`,
 		"sync_targets":         `NEW.project_id IS NULL OR EXISTS(SELECT 1 FROM projects p WHERE p.id=NEW.project_id AND p.org_id=NEW.org_id)`,
 		"sync_runs":            `EXISTS(SELECT 1 FROM sync_targets t WHERE t.id=NEW.target_id AND t.org_id=NEW.org_id)`,
@@ -35,7 +35,7 @@ func migrateIntegrity(db migrationDB) error {
 			}
 		}
 	}
-	for table, column := range map[string]string{"projects": "org_id", "environments": "project_id", "folders": "env_id", "secrets": "env_id", "machine_identities": "org_id", "sync_targets": "org_id", "webhooks": "org_id", "dynamic_engines": "org_id", "oauth_trusts": "org_id", "workload_bindings": "org_id"} {
+	for table, column := range map[string]string{"projects": "org_id", "folders": "project_id", "secrets": "project_id", "machine_identities": "org_id", "sync_targets": "org_id", "webhooks": "org_id", "dynamic_engines": "org_id", "oauth_trusts": "org_id", "workload_bindings": "org_id"} {
 		if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS immutable_` + table + ` BEFORE UPDATE ON ` + table + ` WHEN NEW.id<>OLD.id OR NEW.` + column + `<>OLD.` + column + ` BEGIN SELECT RAISE(ABORT,'resource ownership is immutable'); END`); err != nil {
 			return err
 		}

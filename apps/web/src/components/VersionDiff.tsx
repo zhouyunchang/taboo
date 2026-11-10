@@ -33,8 +33,8 @@ export function lineDiff(left: string, right: string): { kind: 'same' | 'add' | 
   return out;
 }
 
-export default function VersionDiff({ projectId, env, folder, secretKey, versions }: {
-  projectId: string; env: string; folder: string; secretKey: string; versions: Version[];
+export default function VersionDiff({ projectId, folder, secretKey, versions }: {
+  projectId: string; folder: string; secretKey: string; versions: Version[];
 }) {
   const ordered = [...versions].sort((a, b) => a.version - b.version);
   const signature = ordered.map((v) => v.version).join(',');
@@ -62,7 +62,7 @@ export default function VersionDiff({ projectId, env, folder, secretKey, version
     setShown(false);
     try {
       const base = `/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/versions`;
-      const query = `?env=${encodeURIComponent(env)}&path=${encodeURIComponent(folder)}`;
+      const query = `?path=${encodeURIComponent(folder)}`;
       const [a, b] = await Promise.all([
         api.get<SecretVersionValue>(`${base}/${left}${query}`),
         api.get<SecretVersionValue>(`${base}/${right}${query}`),

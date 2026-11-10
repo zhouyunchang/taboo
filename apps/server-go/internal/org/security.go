@@ -10,9 +10,8 @@ import (
 )
 
 type actionGrant struct {
-	ProjectID     string `json:"project_id"`
-	EnvironmentID string `json:"environment_id"`
-	Action        string `json:"action"`
+	ProjectID string `json:"project_id"`
+	Action    string `json:"action"`
 }
 
 func (s *Service) Security(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +71,7 @@ func (s *Service) ListActionGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid := chi.URLParam(r, "userId")
-	rows, err := s.DB.Query(`SELECT project_id,env_id,action FROM member_action_grants WHERE org_id=? AND user_id=? ORDER BY project_id,env_id,action`, org, uid)
+	rows, err := s.DB.Query(`SELECT project_id,action FROM member_action_grants WHERE org_id=? AND user_id=? ORDER BY project_id,action`, org, uid)
 	if err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "request could not be completed"))
 		return
@@ -81,7 +80,7 @@ func (s *Service) ListActionGrants(w http.ResponseWriter, r *http.Request) {
 	grants := []actionGrant{}
 	for rows.Next() {
 		var g actionGrant
-		if rows.Scan(&g.ProjectID, &g.EnvironmentID, &g.Action) != nil {
+		if rows.Scan(&g.ProjectID, &g.Action) != nil {
 			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "request could not be completed"))
 			return
 		}
@@ -131,25 +130,18 @@ func (s *Service) PutActionGrants(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, apperr.InvalidInput)
 			return
 		}
-		if g.EnvironmentID == "" {
-			g.EnvironmentID, err = soleEnvID(tx, org, g.ProjectID)
-			if err != nil {
-				writeErr(w, apperr.InvalidInput)
-				return
-			}
-		}
-		key := g.ProjectID + "\x00" + g.EnvironmentID + "\x00" + g.Action
+		key := g.ProjectID + "\x00" + g.Action
 		if seen[key] {
 			writeErr(w, apperr.InvalidInput)
 			return
 		}
 		seen[key] = true
 		var n int
-		if err = tx.QueryRow(`SELECT COUNT(*) FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.org_id=? AND p.id=? AND e.id=?`, org, g.ProjectID, g.EnvironmentID).Scan(&n); err != nil || n != 1 {
+		if err = tx.QueryRow(`SELECT COUNT(*) FROM projects WHERE org_id=? AND id=?`, org, g.ProjectID).Scan(&n); err != nil || n != 1 {
 			writeErr(w, apperr.InvalidInput)
 			return
 		}
-		if _, err = tx.Exec(`INSERT INTO member_action_grants(org_id,user_id,project_id,env_id,action) VALUES(?,?,?,?,?)`, org, uid, g.ProjectID, g.EnvironmentID, g.Action); err != nil {
+		if _, err = tx.Exec(`INSERT INTO member_action_grants(org_id,user_id,project_id,action) VALUES(?,?,?,?)`, org, uid, g.ProjectID, g.Action); err != nil {
 			writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "request could not be completed"))
 			return
 		}

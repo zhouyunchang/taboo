@@ -5,8 +5,8 @@ import Modal from './Modal';
 import ValidatedForm from './ValidatedForm';
 import useSecretMutation from './useSecretMutation';
 
-export default function ImportEnv({ projectId, env, path, onClose, onImported }: {
-  projectId: string; env: string; path: string; onClose: () => void; onImported: () => void;
+export default function ImportEnv({ projectId, path, onClose, onImported }: {
+  projectId: string; path: string; onClose: () => void; onImported: () => void;
 }) {
   const mutate = useSecretMutation();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -16,7 +16,7 @@ export default function ImportEnv({ projectId, env, path, onClose, onImported }:
   const [plan, setPlan] = useState<ImportResult | null>(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
-  const endpoint = `/api/v1/projects/${projectId}/import?env=${encodeURIComponent(env)}&path=${encodeURIComponent(path)}`;
+  const endpoint = `/api/v1/projects/${projectId}/import?path=${encodeURIComponent(path)}`;
 
   async function readFile(file: File) {
     setErr('');

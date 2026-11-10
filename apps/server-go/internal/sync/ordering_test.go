@@ -36,13 +36,12 @@ func orderedFixture(t *testing.T) (*Service, string, []string, *orderedAdapter) 
 	wrapped, _ := tc.Seal(s.MasterKey, hex.EncodeToString(dek), tc.DEKContext("a"))
 	db.Exec(`INSERT INTO orgs(id,name,slug,dek_encrypted) VALUES('a','a','a',?)`, wrapped)
 	db.Exec(`INSERT INTO projects(id,org_id,name,slug) VALUES('p','a','p','p')`)
-	db.Exec(`INSERT INTO environments(id,project_id,name,slug) VALUES('e','p','dev','dev')`)
 	enc, _ := tc.Seal(s.MasterKey, `{"token":"fixture"}`, tc.Context{Purpose: "sync-target", Org: "a", Object: "target", Version: 1})
 	db.Exec(`INSERT INTO sync_targets(id,org_id,name,platform,config_enc) VALUES('target','a','target','github',?)`, enc)
 	ids := []string{}
 	for version := 1; version <= 2; version++ {
-		cipher, _ := tc.Seal(dek, fmt.Sprint("fixture-v", version), tc.SecretContext("a", "p", "e", "secret", version))
-		e := events.SecretEvent{Sequence: int64(version), EventID: fmt.Sprint(version), OrgID: "a", ProjectID: "p", EnvironmentID: "e", EnvSlug: "dev", SecretID: "secret", Folder: "/", Key: "K", Version: version, Ciphertext: cipher, Action: "updated"}
+		cipher, _ := tc.Seal(dek, fmt.Sprint("fixture-v", version), tc.SecretContext("a", "p", "secret", version))
+		e := events.SecretEvent{Sequence: int64(version), EventID: fmt.Sprint(version), OrgID: "a", ProjectID: "p", SecretID: "secret", Folder: "/", Key: "K", Version: version, Ciphertext: cipher, Action: "updated"}
 		tx, err := db.Begin()
 		if err != nil {
 			t.Fatal(err)
@@ -65,7 +64,7 @@ func orderedFixture(t *testing.T) (*Service, string, []string, *orderedAdapter) 
 }
 func TestOrderedSyncRetryCannotOverwriteNewerValue(t *testing.T) {
 	s, enc, ids, a := orderedFixture(t)
-	execute := func(i int) { s.execute(ids[i], "a", "github", enc, "p", "dev", "K", 0) }
+	execute := func(i int) { s.execute(ids[i], "a", "github", enc, "p", "K", 0) }
 	execute(1)
 	if len(a.values) != 0 {
 		t.Fatal("later version skipped earlier pending event")
@@ -126,13 +125,13 @@ func TestOrderedSyncWaitsForEarlierOutboxAndConcurrentClaim(t *testing.T) {
 func TestOrderedSyncAuditFailureRetainsOldJob(t *testing.T) {
 	s, enc, ids, a := orderedFixture(t)
 	testdb.FailAudit(t, s.DB)
-	s.execute(ids[0], "a", "github", enc, "p", "dev", "K", 0)
+	s.execute(ids[0], "a", "github", enc, "p", "K", 0)
 	var status string
 	s.DB.QueryRow(`SELECT status FROM sync_runs WHERE id=?`, ids[0]).Scan(&status)
 	if status != "pending" {
 		t.Fatal("unaudited success")
 	}
-	s.execute(ids[1], "a", "github", enc, "p", "dev", "K", 0)
+	s.execute(ids[1], "a", "github", enc, "p", "K", 0)
 	if len(a.values) != 1 {
 		t.Fatal("later version bypassed unconfirmed completion")
 	}

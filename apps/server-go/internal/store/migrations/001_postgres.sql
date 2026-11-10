@@ -41,35 +41,26 @@ CREATE TABLE IF NOT EXISTS projects (
   org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
   slug       TEXT NOT NULL,
+  approval_required INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (to_char(timezone('UTC', clock_timestamp()), 'YYYY-MM-DD HH24:MI:SS')),
   UNIQUE (org_id, slug)
 );
 
-CREATE TABLE IF NOT EXISTS environments (
-  id         TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name       TEXT NOT NULL,
-  slug       TEXT NOT NULL,
-  sort_order BIGINT NOT NULL DEFAULT 0,
-  protected  BIGINT NOT NULL DEFAULT 0,
-  UNIQUE (project_id, slug)
-);
-
--- 多级文件夹（M2 #5）：物化路径 /a/b/
+-- 多级文件夹：物化路径 /a/b/
 CREATE TABLE IF NOT EXISTS folders (
   id         TEXT PRIMARY KEY,
-  env_id     TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   parent_id  TEXT REFERENCES folders(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
   path       TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (to_char(timezone('UTC', clock_timestamp()), 'YYYY-MM-DD HH24:MI:SS')),
-  UNIQUE (env_id, path)
+  UNIQUE (project_id, path)
 );
 
 
 CREATE TABLE IF NOT EXISTS secrets (
   id             TEXT PRIMARY KEY,
-  env_id         TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   folder         TEXT NOT NULL DEFAULT '/',
   folder_id      TEXT REFERENCES folders(id),
   key            TEXT NOT NULL,
@@ -78,7 +69,7 @@ CREATE TABLE IF NOT EXISTS secrets (
   latest_version BIGINT NOT NULL DEFAULT 0,
   created_at     TEXT NOT NULL DEFAULT (to_char(timezone('UTC', clock_timestamp()), 'YYYY-MM-DD HH24:MI:SS')),
   updated_at     TEXT NOT NULL DEFAULT (to_char(timezone('UTC', clock_timestamp()), 'YYYY-MM-DD HH24:MI:SS')),
-  UNIQUE (env_id, folder, key)
+  UNIQUE (project_id, folder, key)
 );
 
 CREATE TABLE IF NOT EXISTS secret_versions (
@@ -130,13 +121,12 @@ CREATE TABLE IF NOT EXISTS machine_identities (
   created_at  TEXT NOT NULL DEFAULT (to_char(timezone('UTC', clock_timestamp()), 'YYYY-MM-DD HH24:MI:SS'))
 );
 
--- 作用域：显式 (项目, 环境, 权限) 三元组，禁止通配（设计文档 §6）
+-- 作用域：显式 (项目, 权限)，禁止通配
 CREATE TABLE IF NOT EXISTS identity_scopes (
   identity_id TEXT NOT NULL REFERENCES machine_identities(id) ON DELETE CASCADE,
   project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  env_id      TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
   permission  TEXT NOT NULL CHECK (permission IN ('read','reveal','write')),
-  PRIMARY KEY (identity_id, project_id, env_id)
+  PRIMARY KEY (identity_id, project_id)
 );
 
 -- TOTP 2FA（M2 #4）：恢复码仅存 sha256 哈希，用后即废
@@ -155,7 +145,6 @@ CREATE TABLE IF NOT EXISTS sync_targets (
   name         TEXT NOT NULL,
   platform     TEXT NOT NULL CHECK (platform IN ('github','vercel','cloudflare')),
   project_id   TEXT REFERENCES projects(id) ON DELETE CASCADE,
-  env_slug     TEXT NOT NULL DEFAULT '*',
   config_enc   TEXT NOT NULL,
   enabled      BIGINT NOT NULL DEFAULT 1,
   created_at   TEXT NOT NULL DEFAULT (to_char(timezone('UTC', clock_timestamp()), 'YYYY-MM-DD HH24:MI:SS'))
@@ -346,18 +335,16 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_browser_session_exp ON browser_sessions(expires_at);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_folder_key ON secrets(env_id, folder_id, key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_project_folder_key ON secrets(project_id, folder_id, key);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external ON users(auth_source,external_sub) WHERE external_sub <> '';
 CREATE TABLE IF NOT EXISTS schema_version (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton), version BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit_heads (org_id TEXT PRIMARY KEY, revision BIGINT NOT NULL DEFAULT 0);
 ALTER TABLE projects ADD CONSTRAINT projects_id_org UNIQUE(id,org_id);
-ALTER TABLE environments ADD CONSTRAINT environments_id_project UNIQUE(id,project_id);
-ALTER TABLE folders ADD CONSTRAINT folders_id_env UNIQUE(id,env_id);
-ALTER TABLE folders ADD CONSTRAINT folders_parent_env FOREIGN KEY(parent_id,env_id) REFERENCES folders(id,env_id);
-ALTER TABLE secrets ADD CONSTRAINT secrets_folder_env FOREIGN KEY(folder_id,env_id) REFERENCES folders(id,env_id);
+ALTER TABLE folders ADD CONSTRAINT folders_id_project UNIQUE(id,project_id);
+ALTER TABLE folders ADD CONSTRAINT folders_parent_project FOREIGN KEY(parent_id,project_id) REFERENCES folders(id,project_id);
+ALTER TABLE secrets ADD CONSTRAINT secrets_folder_project FOREIGN KEY(folder_id,project_id) REFERENCES folders(id,project_id);
 ALTER TABLE project_grants ADD CONSTRAINT grants_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE;
 ALTER TABLE project_grants ADD CONSTRAINT grants_member_org FOREIGN KEY(org_id,user_id) REFERENCES org_members(org_id,user_id) ON DELETE CASCADE;
-ALTER TABLE identity_scopes ADD CONSTRAINT scopes_env_project FOREIGN KEY(env_id,project_id) REFERENCES environments(id,project_id) ON DELETE CASCADE;
 ALTER TABLE dynamic_engines ADD CONSTRAINT engines_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE;
 ALTER TABLE sync_targets ADD CONSTRAINT targets_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE;
 ALTER TABLE sync_targets ADD CONSTRAINT targets_id_org UNIQUE(id,org_id);
@@ -367,7 +354,7 @@ ALTER TABLE webhook_deliveries ADD CONSTRAINT deliveries_webhook_org FOREIGN KEY
 
 CREATE FUNCTION check_identity_scope() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- IF NOT EXISTS (SELECT 1 FROM projects p JOIN environments e ON e.project_id=p.id JOIN machine_identities m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND e.id=NEW.env_id AND m.id=NEW.identity_id) THEN
+ IF NOT EXISTS (SELECT 1 FROM projects p JOIN machine_identities m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND m.id=NEW.identity_id) THEN
   RAISE EXCEPTION 'invalid resource ownership' USING ERRCODE='23503';
  END IF;
  RETURN NEW;
@@ -382,9 +369,8 @@ BEGIN
  RETURN NEW;
 END; $$;
 CREATE TRIGGER immutable_projects BEFORE UPDATE ON projects FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
-CREATE TRIGGER immutable_environments BEFORE UPDATE ON environments FOR EACH ROW EXECUTE FUNCTION immutable_ownership('project_id');
-CREATE TRIGGER immutable_folders BEFORE UPDATE ON folders FOR EACH ROW EXECUTE FUNCTION immutable_ownership('env_id');
-CREATE TRIGGER immutable_secrets BEFORE UPDATE ON secrets FOR EACH ROW EXECUTE FUNCTION immutable_ownership('env_id');
+CREATE TRIGGER immutable_folders BEFORE UPDATE ON folders FOR EACH ROW EXECUTE FUNCTION immutable_ownership('project_id');
+CREATE TRIGGER immutable_secrets BEFORE UPDATE ON secrets FOR EACH ROW EXECUTE FUNCTION immutable_ownership('project_id');
 CREATE TRIGGER immutable_machine_identities BEFORE UPDATE ON machine_identities FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
 CREATE TRIGGER immutable_sync_targets BEFORE UPDATE ON sync_targets FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
 CREATE TRIGGER immutable_webhooks BEFORE UPDATE ON webhooks FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');

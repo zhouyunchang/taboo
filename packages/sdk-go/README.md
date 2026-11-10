@@ -7,7 +7,7 @@
 ```go
 client := taboo.New("https://taboo.example")
 client.WithIdentity(clientID, clientSecret)
-value, err := client.GetSecret(ctx, projectID, "dev", "/", "DB_URL", taboo.GetOptions{Resolve: true})
+value, err := client.GetSecret(ctx, projectID, "/", "DB_URL", taboo.GetOptions{Resolve: true})
 ```
 
 `Resolve: true` 才展开 `${env:KEY}` 和 `${project:env:KEY}`。缺省返回库里的原文。导入用 `ImportEnv`，`preview=true` 不写库。扫描报告只用 `ScanFinding` 的规则、相对路径、行号和 64 位 sha256 指纹。

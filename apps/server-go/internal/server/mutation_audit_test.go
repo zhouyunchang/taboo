@@ -15,8 +15,8 @@ import (
 func TestGovernanceMutationsRollbackWithAudit(t *testing.T) {
 	for _, c := range []struct{ name, method, path, body, table string }{
 		{"project", "POST", "/api/v1/orgs/a/projects", `{"name":"atomic"}`, "projects"},
-		{"folder", "POST", "/api/v1/projects/project-a/folders?env=dev", `{"path":"/parent/child/"}`, "folders"},
-		{"identity", "POST", "/api/v1/orgs/a/identities", `{"name":"atomic","scopes":[{"project_id":"project-a","env":"dev","permission":"read"}]}`, "machine_identities"},
+		{"folder", "POST", "/api/v1/projects/project-a/folders", `{"path":"/parent/child/"}`, "folders"},
+		{"identity", "POST", "/api/v1/orgs/a/identities", `{"name":"atomic","scopes":[{"project_id":"project-a","permission":"read"}]}`, "machine_identities"},
 		{"sync", "POST", "/api/v1/orgs/a/sync/targets", `{"name":"atomic","platform":"github","config":{"token":"public-fixture","owner":"fixture","repo":"fixture"}}`, "sync_targets"},
 		{"webhook", "POST", "/api/v1/orgs/a/webhooks", `{"url":"https://fixture.example/hook","events":["*"]}`, "webhooks"},
 		{"dynamic", "POST", "/api/v1/projects/project-a/dynamic-engines", `{"name":"atomic","connection_string":"postgres://fixture@127.0.0.1:1/fixture"}`, "dynamic_engines"},
@@ -67,7 +67,7 @@ func TestGovernanceDeletionAndRevocationRollback(t *testing.T) {
 			switch kind {
 			case "identity":
 				create = "/api/v1/orgs/a/identities"
-				body = `{"name":"fixture","scopes":[{"project_id":"project-a","env":"dev","permission":"read"}]}`
+				body = `{"name":"fixture","scopes":[{"project_id":"project-a","permission":"read"}]}`
 				remove = "/api/v1/orgs/a/identities/%s/revoke"
 				table = "machine_identities"
 			case "sync":
@@ -81,9 +81,9 @@ func TestGovernanceDeletionAndRevocationRollback(t *testing.T) {
 				remove = "/api/v1/orgs/a/webhooks/%s"
 				table = "webhooks"
 			case "folder":
-				create = "/api/v1/projects/project-a/folders?env=dev"
+				create = "/api/v1/projects/project-a/folders"
 				body = `{"path":"/empty/"}`
-				remove = "/api/v1/projects/project-a/folders?env=dev&path=/empty/"
+				remove = "/api/v1/projects/project-a/folders?path=/empty/"
 				table = "folders"
 			}
 			w := f.localRequest("POST", create, body, "")
@@ -124,7 +124,7 @@ func TestFolderMoveUsesLiteralUnicodePrefixAndAudit(t *testing.T) {
 			f.exec(`UPDATE orgs SET dek_encrypted=? WHERE id='a'`, dek)
 			for _, path := range []string{"/汉_%/nested/", "/汉X/"} {
 				raw, _ := json.Marshal(map[string]string{"path": path})
-				checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/folders?env=dev", string(raw), ""), 201)
+				checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/folders", string(raw), ""), 201)
 			}
 			if fail {
 				testdb.FailAudit(t, f.db)
@@ -133,7 +133,7 @@ func TestFolderMoveUsesLiteralUnicodePrefixAndAudit(t *testing.T) {
 			if fail {
 				expected = 503
 			}
-			checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/folders/move?env=dev", `{"from":"/汉_%/","to":"/新/目标/"}`, ""), expected)
+			checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/folders/move", `{"from":"/汉_%/","to":"/新/目标/"}`, ""), expected)
 			var n int
 			f.db.QueryRow(`SELECT COUNT(*) FROM folders WHERE path='/汉X/'`).Scan(&n)
 			if n != 1 {

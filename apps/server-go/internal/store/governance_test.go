@@ -26,7 +26,6 @@ func TestSchema12GovernanceUpgradePreservesWorkloads(t *testing.T) {
 		`INSERT INTO orgs(id,name,slug,dek_encrypted) VALUES('a','a','a','fixture')`,
 		`INSERT INTO org_members(org_id,user_id,role) VALUES('a','u','owner')`,
 		`INSERT INTO projects(id,org_id,name,slug) VALUES('p','a','p','p')`,
-		`INSERT INTO environments(id,project_id,name,slug) VALUES('e','p','dev','dev')`,
 		`INSERT INTO oauth_trusts(id,org_id,name,issuer,audience,metadata_mode,token_profile) VALUES('t','a','fixture','https://op.example','api','oauth','JWT_RFC9068')`,
 		`INSERT INTO machine_identities(id,org_id,name,auth_type,client_id,secret_hash) VALUES('w','a','fixture','external_oauth','external:w','!')`,
 		`INSERT INTO workload_bindings(id,org_id,trust_id,subject,client_id) VALUES('w','a','t','subject','client')`,
@@ -65,7 +64,7 @@ func TestSchema12GovernanceUpgradePreservesWorkloads(t *testing.T) {
 		}
 		reopen = func() (*sql.DB, error) { return store.Open(filepath.Dir(path)) }
 	}
-	exec(`INSERT INTO workload_grants(binding_id,org_id,project_id,env_id,action,required_scope) VALUES('w','a','p','e','write','write')`)
+	exec(`INSERT INTO workload_grants(binding_id,org_id,project_id,action,required_scope) VALUES('w','a','p','write','write')`)
 	upgraded, err := reopen()
 	if err != nil {
 		t.Fatal(err)
@@ -78,10 +77,10 @@ func TestSchema12GovernanceUpgradePreservesWorkloads(t *testing.T) {
 	if upgraded.QueryRow(`SELECT required_scope FROM workload_grants WHERE action='write'`).Scan(&scope) != nil || scope != "write" {
 		t.Fatal("existing workload lost")
 	}
-	if _, err = upgraded.Exec(`INSERT INTO workload_grants(binding_id,org_id,project_id,env_id,action,required_scope) VALUES('w','a','p','e','rollback','rollback')`); err != nil {
+	if _, err = upgraded.Exec(`INSERT INTO workload_grants(binding_id,org_id,project_id,action,required_scope) VALUES('w','a','p','rollback','rollback')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = upgraded.Exec(`INSERT INTO member_action_grants(org_id,user_id,project_id,env_id,action) VALUES('a','u','p','e','reveal')`); err != nil {
+	if _, err = upgraded.Exec(`INSERT INTO member_action_grants(org_id,user_id,project_id,action) VALUES('a','u','p','reveal')`); err != nil {
 		t.Fatal(err)
 	}
 	second, err := reopen()

@@ -22,9 +22,8 @@ func TestPostgresTenantIsolation(t *testing.T) {
 			`INSERT INTO orgs(id,name,slug,dek_encrypted) VALUES('%[1]s','%[1]s','%[1]s','fixture')`,
 			`INSERT INTO org_members(org_id,user_id,role) VALUES('%[1]s','%[1]s','owner')`,
 			`INSERT INTO projects(id,org_id,name,slug) VALUES('%[1]s','%[1]s','%[1]s','%[1]s')`,
-			`INSERT INTO environments(id,project_id,name,slug) VALUES('%[1]s','%[1]s','dev','dev')`,
-			`INSERT INTO folders(id,env_id,name,path) VALUES('%[1]s','%[1]s','/','/')`,
-			`INSERT INTO secrets(id,env_id,folder_id,key) VALUES('%[1]s','%[1]s','%[1]s','key')`,
+			`INSERT INTO folders(id,project_id,name,path) VALUES('%[1]s','%[1]s','/','/')`,
+			`INSERT INTO secrets(id,project_id,folder_id,key) VALUES('%[1]s','%[1]s','%[1]s','key')`,
 		} {
 			if _, err := db.Exec(fmt.Sprintf(q, id)); err != nil {
 				t.Fatal(err)
@@ -44,7 +43,7 @@ func TestPostgresTenantIsolation(t *testing.T) {
 		if err = scope.QueryRow(`SELECT current_user`).Scan(&role); err != nil || role != "taboo_runtime" {
 			t.Fatalf("runtime role: %s %v", role, err)
 		}
-		if _, err = scope.Exec(`INSERT INTO secrets(id,env_id,folder_id,key) VALUES('bad',? ,?,'bad')`, []string{"b", "a"}[i%2], []string{"b", "a"}[i%2]); err == nil {
+		if _, err = scope.Exec(`INSERT INTO secrets(id,project_id,folder_id,key) VALUES('bad',? ,?,'bad')`, []string{"b", "a"}[i%2], []string{"b", "a"}[i%2]); err == nil {
 			t.Fatal("cross tenant insert succeeded")
 		}
 		res, err := scope.Exec(`DELETE FROM secrets WHERE id<>?`, org)
@@ -81,8 +80,8 @@ func TestPostgresTenantIsolation(t *testing.T) {
 		t.Fatalf("control pool changed: %d %v", n, err)
 	}
 	// Composite constraints also protect trusted jobs and import tools.
-	if _, err = db.Exec(`INSERT INTO secrets(id,env_id,folder_id,key) VALUES('bad','a','b','bad')`); err == nil {
-		t.Fatal("cross environment folder accepted")
+	if _, err = db.Exec(`INSERT INTO secrets(id,project_id,folder_id,key) VALUES('bad','a','b','bad')`); err == nil {
+		t.Fatal("cross project folder accepted")
 	}
 	if _, err = db.Exec(`INSERT INTO project_grants(org_id,project_id,user_id,role) VALUES('a','b','a','viewer')`); err == nil {
 		t.Fatal("cross organization grant accepted")

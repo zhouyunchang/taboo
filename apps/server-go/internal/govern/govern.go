@@ -63,7 +63,7 @@ func (s *Service) listApprovals(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	q := `SELECT id, project_id, env_id, folder, secret_key, action, status, requester_id, requester_kind, approver_id, reason, decision_note, expires_at, created_at FROM approval_requests WHERE org_id=?`
+	q := `SELECT id, project_id, folder, secret_key, action, status, requester_id, requester_kind, approver_id, reason, decision_note, expires_at, created_at FROM approval_requests WHERE org_id=?`
 	args := []any{org}
 	if !s.privileged(actor, org) {
 		q += ` AND requester_id=?`
@@ -76,7 +76,7 @@ func (s *Service) listApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	writeJSON(w, 200, map[string]any{"approvals": scanMaps(rows, []string{"id", "project_id", "env_id", "folder", "key", "action", "status", "requester_id", "requester_kind", "approver_id", "reason", "decision_note", "expires_at", "created_at"})})
+	writeJSON(w, 200, map[string]any{"approvals": scanMaps(rows, []string{"id", "project_id", "folder", "key", "action", "status", "requester_id", "requester_kind", "approver_id", "reason", "decision_note", "expires_at", "created_at"})})
 }
 
 func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +156,7 @@ func (s *Service) listAccess(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	q := `SELECT id, project_id, env_id, action, status, requester_id, approver_id, reason, decision_note, ttl_seconds, expires_at, created_at FROM access_requests WHERE org_id=?`
+	q := `SELECT id, project_id, action, status, requester_id, approver_id, reason, decision_note, ttl_seconds, expires_at, created_at FROM access_requests WHERE org_id=?`
 	args := []any{org}
 	if !s.privileged(actor, org) {
 		q += ` AND requester_id=?`
@@ -169,7 +169,7 @@ func (s *Service) listAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	writeJSON(w, 200, map[string]any{"requests": scanMaps(rows, []string{"id", "project_id", "env_id", "action", "status", "requester_id", "approver_id", "reason", "decision_note", "ttl_seconds", "expires_at", "created_at"})})
+	writeJSON(w, 200, map[string]any{"requests": scanMaps(rows, []string{"id", "project_id", "action", "status", "requester_id", "approver_id", "reason", "decision_note", "ttl_seconds", "expires_at", "created_at"})})
 }
 
 func (s *Service) createAccess(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +179,6 @@ func (s *Service) createAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	var b struct {
 		ProjectID  string `json:"project_id"`
-		Env        string `json:"env"`
 		Action     string `json:"action"`
 		TTLSeconds int    `json:"ttl_seconds"`
 		Reason     string `json:"reason"`
@@ -201,17 +200,8 @@ func (s *Service) createAccess(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.InvalidInput)
 		return
 	}
-	var projectOrg, envID string
+	var projectOrg string
 	if s.DB.QueryRow(`SELECT org_id FROM projects WHERE id=?`, b.ProjectID).Scan(&projectOrg) != nil || projectOrg != org {
-		writeErr(w, apperr.NotFound)
-		return
-	}
-	if b.Env == "" {
-		if s.DB.QueryRow(`SELECT id FROM environments WHERE project_id=? ORDER BY sort_order LIMIT 1`, b.ProjectID).Scan(&envID) != nil {
-			writeErr(w, apperr.NotFound)
-			return
-		}
-	} else if s.DB.QueryRow(`SELECT id FROM environments WHERE project_id=? AND slug=?`, b.ProjectID, b.Env).Scan(&envID) != nil {
 		writeErr(w, apperr.NotFound)
 		return
 	}
@@ -231,8 +221,8 @@ func (s *Service) createAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO access_requests(id,org_id,project_id,env_id,action,requester_id,reason,status,ttl_seconds,expires_at) VALUES(?,?,?,?,?,?,?,'pending',?,?)`,
-		id, org, b.ProjectID, envID, b.Action, actor.ID, b.Reason, b.TTLSeconds, time.Now().Add(24*time.Hour).Unix()); err != nil {
+	if _, err = tx.Exec(`INSERT INTO access_requests(id,org_id,project_id,action,requester_id,reason,status,ttl_seconds,expires_at) VALUES(?,?,?,?,?,?,'pending',?,?)`,
+		id, org, b.ProjectID, b.Action, actor.ID, b.Reason, b.TTLSeconds, time.Now().Add(24*time.Hour).Unix()); err != nil {
 		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}

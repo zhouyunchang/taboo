@@ -20,7 +20,7 @@ func TestFederationCredentialDelegationRequiresLocalOwner(t *testing.T) {
 			c := f.login("a", nil)
 			f.exec(`UPDATE org_members SET role=? WHERE user_id<>'local'`, role)
 			for _, x := range []struct{ path, body string }{
-				{"/api/v1/orgs/a/identities", `{"name":"fixture","scopes":[{"project_id":"project-a","env":"dev","permission":"write"}]}`},
+				{"/api/v1/orgs/a/identities", `{"name":"fixture","scopes":[{"project_id":"project-a","permission":"write"}]}`},
 				{"/api/v1/orgs/a/sync/targets", `{"name":"fixture","platform":"github","config":{"token":"fixture","owner":"fixture","repo":"fixture"}}`},
 				{"/api/v1/projects/project-a/dynamic-engines", `{"name":"fixture","connection_string":"postgres://fixture@127.0.0.1:1/db"}`},
 				{"/api/v1/orgs/a/webhooks", `{"url":"https://fixture.example/hook","events":["*"]}`},
@@ -32,7 +32,7 @@ func TestFederationCredentialDelegationRequiresLocalOwner(t *testing.T) {
 				checkStatus(t, f.browserRequest("POST", x.path, x.body, c), want)
 			}
 			checkStatus(t, f.request("GET", "/api/v1/orgs/a/projects", c, false), 200)
-			checkStatus(t, f.request("GET", "/api/v1/projects/project-a/secrets?env=dev", c, false), 403)
+			checkStatus(t, f.request("GET", "/api/v1/projects/project-a/secrets", c, false), 403)
 		})
 	}
 }

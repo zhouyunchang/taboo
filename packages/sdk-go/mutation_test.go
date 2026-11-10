@@ -33,14 +33,14 @@ func TestMutationOptionsPreserveReceiptAndVersion(t *testing.T) {
 	expected := 7
 	options := MutationOptions{IdempotencyKey: "retained-receipt", ExpectedVersion: &expected}
 	for i := 0; i < 2; i++ {
-		if _, err := c.UpsertSecret(context.Background(), "p", "dev", "/", "KEY", "value", "", nil, options); err != nil {
+		if _, err := c.UpsertSecret(context.Background(), "p", "/", "KEY", "value", "", nil, options); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := c.RollbackSecret(context.Background(), "p", "dev", "/", "KEY", 3, options); err != nil {
+	if _, err := c.RollbackSecret(context.Background(), "p", "/", "KEY", 3, options); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.DeleteSecret(context.Background(), "p", "dev", "/", "KEY", options); err != nil {
+	if err := c.DeleteSecret(context.Background(), "p", "/", "KEY", options); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 4 {

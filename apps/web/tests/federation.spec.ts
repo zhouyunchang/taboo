@@ -135,7 +135,7 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
   const rolledBack = await page.evaluate(async () => {
     const session = await (await fetch('/api/v1/auth/session')).json();
     const projects = await (await fetch('/api/v1/orgs/a/projects')).json();
-    const res = await fetch(`/api/v1/projects/${projects.projects[0].id}/secrets/PUBLIC_FIXTURE/rollback?env=dev`, {
+    const res = await fetch(`/api/v1/projects/${projects.projects[0].id}/secrets/PUBLIC_FIXTURE/rollback`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrf_token }, body: JSON.stringify({ version: 1 }),
     });
     return { status: res.status, data: await res.json() };

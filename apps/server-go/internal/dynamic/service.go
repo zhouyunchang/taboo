@@ -375,9 +375,7 @@ func (s *Service) RequestLease(w http.ResponseWriter, r *http.Request) {
 
 func identityHasProjectScope(db *sql.DB, identityID, projectID string) bool {
 	var n int
-	_ = db.QueryRow(`SELECT COUNT(*) FROM identity_scopes s
-		JOIN environments e ON e.id = s.env_id
-		WHERE s.identity_id = ? AND e.project_id = ?`, identityID, projectID).Scan(&n)
+	_ = db.QueryRow(`SELECT COUNT(*) FROM identity_scopes WHERE identity_id = ? AND project_id = ?`, identityID, projectID).Scan(&n)
 	return n > 0
 }
 

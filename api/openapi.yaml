@@ -1984,7 +1984,6 @@ paths:
               required: [project_id, action]
               properties:
                 project_id: { type: string }
-                env: { type: string, description: 可省略，使用项目唯一目录树 }
                 action: { type: string, enum: [reveal, export, write, delete, rollback] }
                 ttl_seconds: { type: integer, minimum: 60, maximum: 14400 }
                 reason: { type: string }
@@ -2385,7 +2384,6 @@ components:
       required: [project_id, action]
       properties:
         project_id: { type: string }
-        environment_id: { type: string, description: 可省略。服务端写入项目唯一目录树 }
         action: { type: string, enum: [read, write, reveal, export, rollback, delete] }
     MemberActions:
       type: object
@@ -2426,7 +2424,6 @@ components:
       required: [project_id, action, required_scope]
       properties:
         project_id: { type: string }
-        environment_id: { type: string, description: 可省略。服务端写入项目唯一目录树 }
         action: { type: string, enum: [read, reveal, write, export, rollback, delete], description: 六种动作独立，不隐含其他动作 }
         required_scope: { type: string, description: 该动作必须在已验证 Token 中出现的精确 scope }
     WorkloadGrantsInput:
@@ -2478,7 +2475,6 @@ components:
         name: { type: string }
         platform: { type: string, enum: [github, vercel, cloudflare] }
         project_id: { type: string }
-        env_slug: { type: string, description: "'*' 为全部环境" }
         enabled: { type: boolean }
         created_at: { type: string }
         config_keys: { type: array, items: { type: string }, description: 已配置键名（不含值） }
@@ -2489,7 +2485,6 @@ components:
         name: { type: string }
         platform: { type: string, enum: [github, vercel, cloudflare] }
         project_id: { type: string, description: 缺省 = 组织内全部项目 }
-        env_slug: { type: string, default: '*' }
         config:
           type: object
           additionalProperties: { type: string }
@@ -2570,7 +2565,6 @@ components:
       properties:
         project_id: { type: string }
         project_slug: { type: string }
-        env: { type: string, description: 省略时为 dev。项目只有一棵目录树，禁止通配 }
         permission: { type: string, enum: [read, reveal, write] }
     Identity:
       type: object
@@ -2601,10 +2595,9 @@ components:
           minItems: 1
           items:
             type: object
-            required: [project_id, env, permission]
+            required: [project_id, permission]
             properties:
               project_id: { type: string }
-              env: { type: string }
               permission: { type: string, enum: [read, reveal, write] }
         allowed_cidrs: { type: array, items: { type: string }, description: 可选来源 IP 或 CIDR；省略或空数组表示不限制 }
         list_scan_reports: { type: boolean, default: false }

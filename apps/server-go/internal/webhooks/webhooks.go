@@ -125,7 +125,6 @@ func enqueue(tx *sql.Tx, webhookID string, e events.SecretEvent, eventName strin
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"org":       e.OrgID,
 		"project":   e.ProjectSlug,
-		"env":       e.EnvSlug,
 		"folder":    e.Folder,
 		"key":       e.Key,
 		"version":   e.Version,

@@ -129,12 +129,12 @@ func TestKeycloakMachineInterop(t *testing.T) {
 	}
 	json.Unmarshal(w.Body.Bytes(), &id)
 	trust := id.ID
-	body, _ = json.Marshal(map[string]any{"name": "Keycloak machine", "trust_id": trust, "subject": verified.Subject, "client_id": verified.ClientID, "grants": []map[string]string{{"project_id": "project-a", "environment_id": "env-a", "action": "read", "required_scope": "taboo.read"}}})
+	body, _ = json.Marshal(map[string]any{"name": "Keycloak machine", "trust_id": trust, "subject": verified.Subject, "client_id": verified.ClientID, "grants": []map[string]string{{"project_id": "project-a", "action": "read", "required_scope": "taboo.read"}}})
 	w = f.localRequest("POST", "/api/v1/orgs/a/workloads", string(body), "")
 	checkStatus(t, w, 201)
 	json.Unmarshal(w.Body.Bytes(), &id)
 	call := func() *httptest.ResponseRecorder {
-		r := httptest.NewRequest("GET", "/api/v1/projects/project-a/secrets?env=dev", nil)
+		r := httptest.NewRequest("GET", "/api/v1/projects/project-a/secrets", nil)
 		r.Header.Set("Authorization", "Bearer "+response.Access)
 		r.Header.Set("X-Taboo-Trust", trust)
 		r.Header.Set("X-Taboo-Organization", "a")

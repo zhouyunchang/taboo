@@ -38,30 +38,30 @@ func TestFederationExplicitActionsAndRequiredLogin(t *testing.T) {
 	}
 	f.exec(`UPDATE orgs SET dek_encrypted=? WHERE id='a'`, dek)
 	checkStatus(t, f.localRequest("PATCH", "/api/v1/orgs/a/members/"+uid, `{"role":"developer"}`, ""), 200)
-	path := "/api/v1/projects/project-a/secrets?env=dev"
+	path := "/api/v1/projects/project-a/secrets"
 	checkStatus(t, f.browserRequest("POST", path, `{"key":"K","value":"private"}`, c), 403)
 	grants := []map[string]string{}
 	grant := func(action string) {
 		t.Helper()
-		grants = append(grants, map[string]string{"project_id": "project-a", "environment_id": "env-a", "action": action})
+		grants = append(grants, map[string]string{"project_id": "project-a", "action": action})
 		b, _ := json.Marshal(map[string]any{"grants": grants})
 		checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/members/"+uid+"/actions", string(b), ""), 200)
 	}
 	grant("read")
 	grant("write")
 	checkStatus(t, f.browserRequest("POST", path, `{"key":"K","value":"private"}`, c), 200)
-	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/secrets/K?env=dev", "", c), 403)
-	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/export?env=dev", "", c), 403)
-	checkStatus(t, f.browserRequest("POST", "/api/v1/projects/project-a/secrets/K/rollback?env=dev", `{"version":1}`, c), 403)
-	checkStatus(t, f.browserRequest("DELETE", "/api/v1/projects/project-a/secrets/K?env=dev", "", c), 403)
+	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/secrets/K", "", c), 403)
+	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/export", "", c), 403)
+	checkStatus(t, f.browserRequest("POST", "/api/v1/projects/project-a/secrets/K/rollback", `{"version":1}`, c), 403)
+	checkStatus(t, f.browserRequest("DELETE", "/api/v1/projects/project-a/secrets/K", "", c), 403)
 	grant("reveal")
-	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/secrets/K?env=dev", "", c), 200)
-	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/export?env=dev", "", c), 403)
+	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/secrets/K", "", c), 200)
+	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/export", "", c), 403)
 	grant("export")
-	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/export?env=dev", "", c), 200)
+	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/export", "", c), 200)
 	checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/members/"+uid+"/actions", `{"grants":[]}`, ""), 200)
-	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/secrets/K?env=dev", "", c), 403)
-	checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/members/"+uid+"/actions", `{"grants":[{"project_id":"project-b","environment_id":"env-b","action":"reveal"}]}`, ""), 400)
+	checkStatus(t, f.browserRequest("GET", "/api/v1/projects/project-a/secrets/K", "", c), 403)
+	checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/members/"+uid+"/actions", `{"grants":[{"project_id":"project-b","action":"reveal"}]}`, ""), 400)
 	// Enabling external-only access requires proof from an existing external owner.
 	checkStatus(t, f.localRequest("PUT", "/api/v1/orgs/a/security", `{"login_policy":"EXTERNAL_REQUIRED"}`, ""), 409)
 	checkStatus(t, f.browserRequest("PUT", "/api/v1/orgs/a/security", `{"login_policy":"EXTERNAL_REQUIRED"}`, c), 403)
@@ -104,7 +104,7 @@ func TestMemberMutationsRollbackWithAudit(t *testing.T) {
 			case "remove":
 				w = f.localRequest("DELETE", "/api/v1/orgs/a/members/other", "", "")
 			case "actions":
-				w = f.localRequest("PUT", "/api/v1/orgs/a/members/other/actions", `{"grants":[{"project_id":"project-a","environment_id":"env-a","action":"write"}]}`, "")
+				w = f.localRequest("PUT", "/api/v1/orgs/a/members/other/actions", `{"grants":[{"project_id":"project-a","action":"write"}]}`, "")
 			}
 			if w.Code < 500 {
 				t.Fatalf("mutation should fail closed: %d", w.Code)

@@ -58,17 +58,7 @@ func MemberInfo(db *sql.DB, orgID, userID string) (role string, restricted bool,
 }
 
 func EnvProtected(db *sql.DB, projectID, envSlug string) bool {
-	if envSlug == "" {
-		return false
-	}
-	var p int
-	err := db.QueryRow(`SELECT COALESCE(protected, 0) FROM environments WHERE project_id = ? AND slug = ?`,
-		projectID, envSlug).Scan(&p)
-	if err != nil {
-		// 未找到环境时按 slug==prod 兜底，避免新建环境漏标时误开
-		return envSlug == "prod"
-	}
-	return p == 1
+	return false
 }
 
 func projectGrant(db *sql.DB, projectID, userID string) (role string, ok bool) {
@@ -115,13 +105,7 @@ func Can(db *sql.DB, actor *Actor, orgID, projectID, action, envSlug string) boo
 			// Explicit grants are the authority for secret actions of federated
 			// people. A mapped developer/admin role cannot imply plaintext access.
 			var n int
-			query := `SELECT COUNT(*) FROM member_action_grants g JOIN environments e ON e.id=g.env_id AND e.project_id=g.project_id WHERE g.org_id=? AND g.user_id=? AND g.project_id=? AND g.action=?`
-			args := []any{orgID, actor.ID, projectID, action}
-			if envSlug != "" {
-				query += ` AND e.slug=?`
-				args = append(args, envSlug)
-			}
-			err := db.QueryRow(query, args...).Scan(&n)
+			err := db.QueryRow(`SELECT COUNT(*) FROM member_action_grants WHERE org_id=? AND user_id=? AND project_id=? AND action=?`, orgID, actor.ID, projectID, action).Scan(&n)
 			return err == nil && n > 0 && rbac.UserAllows(eff, rbac.Read, false)
 		}
 	}
@@ -134,13 +118,7 @@ func identityCan(db *sql.DB, identityID, orgID, projectID, action, envSlug strin
 	if err != nil || status != "active" {
 		return false
 	}
-	envCond, args := `AND e.slug = ?`, []any{identityID, projectID, envSlug}
-	if envSlug == "" {
-		envCond, args = ``, []any{identityID, projectID}
-	}
-	rows, err := db.Query(`SELECT s.permission FROM identity_scopes s
-		JOIN environments e ON e.id = s.env_id
-		WHERE s.identity_id = ? AND s.project_id = ? `+envCond, args...)
+	rows, err := db.Query(`SELECT permission FROM identity_scopes WHERE identity_id = ? AND project_id = ?`, identityID, projectID)
 	if err != nil {
 		return false
 	}
@@ -398,13 +376,7 @@ func writeErr(w http.ResponseWriter, e *apperr.Error) {
 }
 
 func workloadCan(db *sql.DB, a *Actor, org, project, action, env string) bool {
-	query := `SELECT g.required_scope FROM workload_grants g JOIN workload_bindings b ON b.id=g.binding_id AND b.org_id=g.org_id JOIN oauth_trusts t ON t.id=b.trust_id AND t.org_id=b.org_id JOIN machine_identities m ON m.id=b.id AND m.org_id=b.org_id JOIN environments e ON e.id=g.env_id AND e.project_id=g.project_id WHERE b.id=? AND b.org_id=? AND b.enabled=1 AND t.enabled=1 AND m.status='active' AND m.auth_type='external_oauth' AND g.project_id=? AND g.action=?`
-	args := []any{a.WorkloadBinding, org, project, rbac.Normalize(action)}
-	if env != "" {
-		query += ` AND e.slug=?`
-		args = append(args, env)
-	}
-	rows, err := db.Query(query, args...)
+	rows, err := db.Query(`SELECT g.required_scope FROM workload_grants g JOIN workload_bindings b ON b.id=g.binding_id AND b.org_id=g.org_id JOIN oauth_trusts t ON t.id=b.trust_id AND t.org_id=b.org_id JOIN machine_identities m ON m.id=b.id AND m.org_id=b.org_id WHERE b.id=? AND b.org_id=? AND b.enabled=1 AND t.enabled=1 AND m.status='active' AND m.auth_type='external_oauth' AND g.project_id=? AND g.action=?`, a.WorkloadBinding, org, project, rbac.Normalize(action))
 	if err != nil {
 		return false
 	}

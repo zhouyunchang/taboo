@@ -113,8 +113,8 @@ ssh dev122-root $D/taboo-ctl.sh user status|enable|disable <email>
 ### Phase 4 接口线上核对
 
 线上手工核对（smoke 账号临时启用，用假值，结束后删除）：
-- 引用：`GET .../secrets/{key}?env=dev` 返回原文与 `references`；加 `resolve=true` 才展开；缺失目标 `404 REFERENCE_NOT_FOUND`。
-- 导出：`GET /projects/{pid}/export?env=dev&resolve=true`。**任一引用坏掉则整次导出失败**（404 REFERENCE_NOT_FOUND，fail-closed），修好或删掉坏引用后再导出。
+- 引用：`GET .../secrets/{key}` 返回原文与 `references`；加 `resolve=true` 才展开；缺失目标 `404 REFERENCE_NOT_FOUND`。
+- 导出：`GET /projects/{pid}/export?resolve=true`。**任一引用坏掉则整次导出失败**（404 REFERENCE_NOT_FOUND，fail-closed），修好或删掉坏引用后再导出。
 - 导入：`POST /projects/{pid}/import`，先 `preview:true`；已有 key 未给 `strategy` 时 409 IMPORT_CONFLICT 且不写库；`skip` / `overwrite`。
 - 版本：`GET .../secrets/{key}/versions/{n}`（需 reveal 权限，界面版本对比默认遮罩）。
 - 扫描报告：`POST/GET /orgs/{slug}/scan-reports`，只收规则、相对路径、行号、sha256 指纹；带 `match` 字段 400。目前**没有删除接口**，测试报告会留在 smoke 组织里。
