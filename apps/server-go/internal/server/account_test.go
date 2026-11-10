@@ -2,10 +2,39 @@ package server
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	orgsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/org"
 )
+
+func TestLocatorReadsAndWritesASecret(t *testing.T) {
+	f := fixture(t, "")
+	if _, err := orgsvc.AdminCreateUser(f.db, f.master, "person@example.test", "Person", "person-pass-123", "active"); err != nil {
+		t.Fatal(err)
+	}
+	login := f.plain("POST", "/api/v1/auth/login", `{"email":"person@example.test","password":"person-pass-123"}`, "")
+	checkStatus(t, login, 200)
+	var session struct {
+		Tokens struct{ Access string } `json:"tokens"`
+	}
+	if json.Unmarshal(login.Body.Bytes(), &session) != nil || session.Tokens.Access == "" {
+		t.Fatal(login.Body.String())
+	}
+	token := session.Tokens.Access
+	wrote := f.plain("PUT", "/api/v1/access?locator=person/default", `{"key":"TOKEN","value":"s3cret"}`, token)
+	checkStatus(t, wrote, 200)
+	got := f.plain("GET", "/api/v1/access?locator=person/default&key=TOKEN", "", token)
+	checkStatus(t, got, 200)
+	if !strings.Contains(got.Body.String(), `"value":"s3cret"`) {
+		t.Fatal(got.Body.String())
+	}
+	listed := f.plain("GET", "/api/v1/access?locator=person/default", "", token)
+	checkStatus(t, listed, 200)
+	if !strings.Contains(listed.Body.String(), `"key":"TOKEN"`) {
+		t.Fatal(listed.Body.String())
+	}
+}
 
 func TestPersonalSpaceAndCreatedOrganization(t *testing.T) {
 	f := fixture(t, "")

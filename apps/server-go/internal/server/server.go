@@ -278,6 +278,9 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	dyn := d.Dynamic.WithDB(d.DB)
 	oidcSvc := &oidc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, PublicOrigin: d.PublicOrigin, SessionProfile: d.SessionProfile, IssuerAllowlist: d.IssuerAllowlist, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
 	orgs.Routes(r)
+	r.Get("/access", secrets.Access)
+	r.Put("/access", secrets.Access)
+	r.Delete("/access", secrets.Access)
 	d.Workloads.WithDB(d.DB).Routes(r)
 	totps.Routes(r)
 	// 机器身份管理（组织级，需 owner）

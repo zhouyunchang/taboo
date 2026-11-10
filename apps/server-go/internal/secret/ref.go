@@ -10,6 +10,7 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/locator"
 )
 
 const (
@@ -22,7 +23,9 @@ type reference struct {
 	raw     string
 	project string // 空表示“当前这条值所属的项目”
 	env     string
+	folder  string
 	key     string
+	locator string // 归属/项目/目录，设置后不再使用 env
 	start   int
 	end     int
 }
@@ -53,8 +56,15 @@ func scanReferences(value string) ([]reference, *apperr.Error) {
 			continue
 		}
 		parts := strings.Split(body, ":")
+		if len(parts) == 2 && strings.Contains(parts[0], "/") {
+			if !validKey(parts[1]) {
+				return nil, apperr.New(400, "REFERENCE_INVALID", "secret reference has an invalid segment: "+value[start:end+1])
+			}
+			out = append(out, reference{raw: value[start : end+1], locator: parts[0], key: parts[1], start: start, end: end + 1})
+			continue
+		}
 		if len(parts) != 2 && len(parts) != 3 {
-			return nil, apperr.New(400, "REFERENCE_INVALID", "secret reference must be ${env:KEY} or ${project:env:KEY}: "+value[start:end+1])
+			return nil, apperr.New(400, "REFERENCE_INVALID", "secret reference must be ${env:KEY}, ${project:env:KEY}, or ${owner/project/folder:KEY}: "+value[start:end+1])
 		}
 		for _, p := range parts {
 			if !validKey(p) {
@@ -142,7 +152,26 @@ func (s *Service) resolveStored(r *http.Request, orgID string, project ProjectCt
 
 func (s *Service) dereference(r *http.Request, orgID, projectID, projectSlug string, ref reference, stack []refFrame) (ownerID, ownerSlug, identity, plaintext string, err *apperr.Error) {
 	ownerID, ownerSlug = projectID, projectSlug
-	if ref.project != "" {
+	folderPath := "/"
+	if ref.locator != "" {
+		loc, perr := locator.Parse(ref.locator)
+		if perr != nil {
+			return "", "", "", "", apperr.New(400, "REFERENCE_INVALID", "secret reference must be ${env:KEY}, ${project:env:KEY}, or ${owner/project/folder:KEY}: "+ref.raw)
+		}
+		target, aerr := s.locate(r, loc)
+		if aerr != nil {
+			if aerr.Code == "LOCATOR_NOT_FOUND" {
+				return "", "", "", "", missingRef(ref.raw)
+			}
+			return "", "", "", "", aerr
+		}
+		orgID = target.project.OrgID
+		ownerID, ownerSlug = target.project.ID, target.project.Slug
+		folderPath = target.folder
+		ref.env = "dev"
+		ref.project = target.project.Slug
+	}
+	if ref.project != "" && ref.locator == "" {
 		var id, slug string
 		qerr := s.DB.QueryRow(`SELECT id, slug FROM projects WHERE org_id = ? AND slug = ?`, orgID, ref.project).Scan(&id, &slug)
 		if qerr == sql.ErrNoRows {
@@ -176,7 +205,7 @@ func (s *Service) dereference(r *http.Request, orgID, projectID, projectSlug str
 		return "", "", "", "", missingRef(ref.raw)
 	}
 	var folderID string
-	qerr = s.DB.QueryRow(`SELECT id FROM folders WHERE env_id = ? AND path = '/'`, envID).Scan(&folderID)
+	qerr = s.DB.QueryRow(`SELECT id FROM folders WHERE env_id = ? AND path = ?`, envID, folderPath).Scan(&folderID)
 	if qerr != nil {
 		return "", "", "", "", missingRef(ref.raw)
 	}

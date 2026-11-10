@@ -2,15 +2,38 @@ package server
 
 import (
 	"context"
-	"github.com/go-chi/chi/v5"
+	"database/sql"
 	"net/http"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 )
+
+func orgIDForLocator(db *sql.DB, raw string) (string, error) {
+	raw = strings.Trim(strings.TrimSpace(raw), "/")
+	owner, _, _ := strings.Cut(raw, "/")
+	if owner == "" {
+		return "", sql.ErrNoRows
+	}
+	var kind, ref string
+	err := db.QueryRow(`SELECT kind, ref_id FROM path_codes WHERE code=?`, owner).Scan(&kind, &ref)
+	if err == nil {
+		if kind == "organization" {
+			return ref, nil
+		}
+		var id string
+		err = db.QueryRow(`SELECT id FROM orgs WHERE kind='personal' AND owner_user_id=?`, ref).Scan(&id)
+		return id, err
+	}
+	var id string
+	err = db.QueryRow(`SELECT id FROM orgs WHERE slug=?`, owner).Scan(&id)
+	return id, err
+}
 
 func scopedHTTP(d *Deps) http.Handler {
 	// SQLite remains a single-connection portable deployment. PostgreSQL's
@@ -27,6 +50,11 @@ func scopedHTTP(d *Deps) http.Handler {
 		}
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/"), "/")
 		org := ""
+		if len(parts) > 0 && parts[0] == "access" {
+			if id, err := orgIDForLocator(d.DB, r.URL.Query().Get("locator")); err == nil {
+				org = id
+			}
+		}
 		if len(parts) >= 2 {
 			var err error
 			switch parts[0] {

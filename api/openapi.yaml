@@ -335,6 +335,60 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/access:
+    get:
+      tags: [secrets]
+      summary: 按定位符列出目录，或读取一把密钥
+      operationId: accessLocator
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { name: locator, in: query, required: true, schema: { type: string }, description: 归属/项目/目录。根目录不写目录段 }
+        - { name: key, in: query, schema: { type: string }, description: 密钥名。省略时列出该目录 }
+      responses:
+        '200': { description: 目录内容或密钥明文 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [secrets]
+      summary: 按定位符写入密钥
+      operationId: putLocator
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { name: locator, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key: { type: string }
+                value: { type: string }
+                locator: { type: string }
+      responses:
+        '200': { description: 已写入 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [secrets]
+      summary: 按定位符删除密钥
+      operationId: deleteLocator
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { name: locator, in: query, required: true, schema: { type: string } }
+        - { name: key, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已删除 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/me:
     get:
       tags: [orgs]
