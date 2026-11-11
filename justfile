@@ -25,6 +25,11 @@ web:
     npm run build -w @taboo/web
     node scripts/embed-web.mjs
 
+# 清理构建产物：清掉后旧页面里引用的 /assets/index-<hash>.js 会 404（白屏/操作失败）。
+# 排查“刷新前能用、just start 重建后报错”这类问题时先清一次再 just start。
+clean:
+    rm -rf apps/web/dist apps/server-go/cmd/server/web/assets apps/server-go/cmd/server/web/index.html
+
 # 前端 embed + 编译 bin/taboo-server（TABOO_VERSION / TABOO_COMMIT / BUILD_TIME 可覆盖）
 build: web
     node scripts/build-go.mjs
