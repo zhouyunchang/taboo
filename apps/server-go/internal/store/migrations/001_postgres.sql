@@ -352,28 +352,36 @@ ALTER TABLE sync_runs ADD CONSTRAINT runs_target_org FOREIGN KEY(target_id,org_i
 ALTER TABLE webhooks ADD CONSTRAINT webhooks_id_org UNIQUE(id,org_id);
 ALTER TABLE webhook_deliveries ADD CONSTRAINT deliveries_webhook_org FOREIGN KEY(webhook_id,org_id) REFERENCES webhooks(id,org_id) ON DELETE CASCADE;
 
-CREATE FUNCTION check_identity_scope() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION check_identity_scope() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NOT EXISTS (SELECT 1 FROM projects p JOIN machine_identities m ON m.org_id=p.org_id WHERE p.id=NEW.project_id AND m.id=NEW.identity_id) THEN
   RAISE EXCEPTION 'invalid resource ownership' USING ERRCODE='23503';
  END IF;
  RETURN NEW;
 END; $$;
+DROP TRIGGER IF EXISTS integrity_identity_scopes ON identity_scopes;
 CREATE TRIGGER integrity_identity_scopes BEFORE INSERT OR UPDATE ON identity_scopes FOR EACH ROW EXECUTE FUNCTION check_identity_scope();
 
-CREATE FUNCTION immutable_ownership() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION immutable_ownership() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF to_jsonb(NEW)->>'id' IS DISTINCT FROM to_jsonb(OLD)->>'id' OR to_jsonb(NEW)->>TG_ARGV[0] IS DISTINCT FROM to_jsonb(OLD)->>TG_ARGV[0] THEN
   RAISE EXCEPTION 'resource ownership is immutable' USING ERRCODE='23503';
  END IF;
  RETURN NEW;
 END; $$;
+DROP TRIGGER IF EXISTS immutable_projects ON projects;
 CREATE TRIGGER immutable_projects BEFORE UPDATE ON projects FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
+DROP TRIGGER IF EXISTS immutable_folders ON folders;
 CREATE TRIGGER immutable_folders BEFORE UPDATE ON folders FOR EACH ROW EXECUTE FUNCTION immutable_ownership('project_id');
+DROP TRIGGER IF EXISTS immutable_secrets ON secrets;
 CREATE TRIGGER immutable_secrets BEFORE UPDATE ON secrets FOR EACH ROW EXECUTE FUNCTION immutable_ownership('project_id');
+DROP TRIGGER IF EXISTS immutable_machine_identities ON machine_identities;
 CREATE TRIGGER immutable_machine_identities BEFORE UPDATE ON machine_identities FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
+DROP TRIGGER IF EXISTS immutable_sync_targets ON sync_targets;
 CREATE TRIGGER immutable_sync_targets BEFORE UPDATE ON sync_targets FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
+DROP TRIGGER IF EXISTS immutable_webhooks ON webhooks;
 CREATE TRIGGER immutable_webhooks BEFORE UPDATE ON webhooks FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
+DROP TRIGGER IF EXISTS immutable_dynamic_engines ON dynamic_engines;
 CREATE TRIGGER immutable_dynamic_engines BEFORE UPDATE ON dynamic_engines FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
 
 ALTER TABLE sync_runs ADD COLUMN event_payload TEXT NOT NULL DEFAULT '{}';

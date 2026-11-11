@@ -473,16 +473,16 @@ func installWorkloads(tx *sql.Tx, owner, role string) error {
 	if _, err := tx.Exec(`ALTER TABLE workload_grants ADD CONSTRAINT workloads_project_org FOREIGN KEY(project_id,org_id) REFERENCES projects(id,org_id) ON DELETE CASCADE; ALTER TABLE machine_identities ADD CONSTRAINT identities_id_org UNIQUE(id,org_id); ALTER TABLE workload_bindings ADD CONSTRAINT workloads_machine_org FOREIGN KEY(id,org_id) REFERENCES machine_identities(id,org_id) ON DELETE CASCADE;`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`CREATE FUNCTION check_workload_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+	if _, err := tx.Exec(`CREATE OR REPLACE FUNCTION check_workload_identity() RETURNS trigger LANGUAGE plpgsql AS $$
  BEGIN
  IF NOT EXISTS(SELECT 1 FROM machine_identities WHERE id=NEW.id AND org_id=NEW.org_id AND auth_type='external_oauth') THEN
  RAISE EXCEPTION 'external workload identity required' USING ERRCODE='23503';
  END IF; RETURN NEW; END $$;
- CREATE TRIGGER integrity_workload_identity BEFORE INSERT OR UPDATE ON workload_bindings FOR EACH ROW EXECUTE FUNCTION check_workload_identity();
- CREATE TRIGGER immutable_oauth_trusts BEFORE UPDATE ON oauth_trusts FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
- CREATE TRIGGER immutable_workload_bindings BEFORE UPDATE ON workload_bindings FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
- CREATE TRIGGER immutable_workload_binding_trust BEFORE UPDATE ON workload_bindings FOR EACH ROW EXECUTE FUNCTION immutable_ownership('trust_id');
- CREATE TRIGGER immutable_machine_auth BEFORE UPDATE ON machine_identities FOR EACH ROW EXECUTE FUNCTION immutable_ownership('auth_type');`); err != nil {
+ DROP TRIGGER IF EXISTS integrity_workload_identity ON workload_bindings; CREATE TRIGGER integrity_workload_identity BEFORE INSERT OR UPDATE ON workload_bindings FOR EACH ROW EXECUTE FUNCTION check_workload_identity();
+ DROP TRIGGER IF EXISTS immutable_oauth_trusts ON oauth_trusts; CREATE TRIGGER immutable_oauth_trusts BEFORE UPDATE ON oauth_trusts FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
+ DROP TRIGGER IF EXISTS immutable_workload_bindings ON workload_bindings; CREATE TRIGGER immutable_workload_bindings BEFORE UPDATE ON workload_bindings FOR EACH ROW EXECUTE FUNCTION immutable_ownership('org_id');
+ DROP TRIGGER IF EXISTS immutable_workload_binding_trust ON workload_bindings; CREATE TRIGGER immutable_workload_binding_trust BEFORE UPDATE ON workload_bindings FOR EACH ROW EXECUTE FUNCTION immutable_ownership('trust_id');
+ DROP TRIGGER IF EXISTS immutable_machine_auth ON machine_identities; CREATE TRIGGER immutable_machine_auth BEFORE UPDATE ON machine_identities FOR EACH ROW EXECUTE FUNCTION immutable_ownership('auth_type');`); err != nil {
 		return err
 	}
 	for _, table := range []string{"oauth_trusts", "workload_bindings", "workload_grants"} {
