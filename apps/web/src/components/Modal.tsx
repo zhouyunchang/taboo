@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
+import Icon from '../design/Icon';
 
 // Native dialog owns focus containment, inert background, Escape and restoration.
 export default function Modal({ title, children, onClose, busy = false }: {
@@ -15,7 +16,12 @@ export default function Modal({ title, children, onClose, busy = false }: {
   }, []);
   return <dialog ref={ref} className="modal" aria-labelledby={titleId}
     onCancel={(e) => { e.preventDefault(); if (!busy) onClose(); }}>
-    <h3 id={titleId}>{title}</h3>
+    <header className="modal-head">
+      <h3 id={titleId}>{title}</h3>
+      <button type="button" className="icon-btn" aria-label="关闭" disabled={busy} onClick={onClose}>
+        <Icon name="x" />
+      </button>
+    </header>
     {children}
   </dialog>;
 }

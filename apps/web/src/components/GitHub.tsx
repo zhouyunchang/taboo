@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import Modal from './Modal';
+import Icon from '../design/Icon';
+import { Pill, Skeleton } from '../design/primitives';
 
 // GitHub 回调 /?github=error&reason=X 的中文说明（reason 见 openapi githubCallback）。
 const reasons: Record<string, string> = {
@@ -54,26 +56,30 @@ export function GitHubPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal title="GitHub 登录" onClose={onClose} busy={busy}>
-      <div className="drawer-inner">
-        {err && <div className="error" role="alert">{err}</div>}
-        {msg && <p role="status">{msg}</p>}
-        {!st && !err && <p className="muted">加载中…</p>}
+      <div className="form-stack">
+        {err && <p className="error" role="alert">{err}</p>}
+        {msg && <p role="status" className="notice notice-ok">{msg}</p>}
+        {!st && !err && <Skeleton rows={2} />}
         {st && !st.enabled && <p className="muted">管理员尚未配置 GitHub 登录。</p>}
         {st && st.enabled && !st.linked && (
           <>
+            <dl className="meta-list">
+              <div className="meta-row"><dt>GitHub</dt><dd><Icon name="globe" size={12} /> 未绑定</dd></div>
+              <div className="meta-row"><dt>本账号</dt><dd><Icon name="seal" size={12} /> 已登录</dd></div>
+            </dl>
             <p className="muted">绑定后可用 GitHub 账号直接登录此 Taboo 账号（按 GitHub 数字 ID 绑定，改用户名不影响）。</p>
-            <button onClick={link} disabled={busy}>{busy ? '跳转中…' : '绑定 GitHub'}</button>
+            <div className="form-actions"><button type="button" onClick={link} disabled={busy}>{busy ? '跳转中…' : '绑定 GitHub'}</button></div>
           </>
         )}
         {st && st.linked && (
           <>
-            <p><span className="tag ok">已绑定</span> <span className="muted">GitHub ID {st.github_id}</span></p>
+            <p><Pill tone="ok" icon="check">已绑定</Pill> <span className="muted mono">GitHub ID {st.github_id}</span></p>
             {st.has_password
-              ? <button onClick={unlink} disabled={busy}>解绑 GitHub</button>
-              : <p className="muted">此账号没有密码，解绑会导致无法登录，因此不可解绑。</p>}
+              ? <div className="form-actions"><button type="button" className="btn-danger" onClick={unlink} disabled={busy}>解绑 GitHub</button></div>
+              : <p className="notice notice-warn">此账号没有密码，解绑会导致无法登录，因此不可解绑。</p>}
           </>
         )}
-        <div className="drawer-actions"><button type="button" className="ghost" disabled={busy} onClick={onClose}>关闭</button></div>
+        <div className="form-actions"><button type="button" className="ghost" disabled={busy} onClick={onClose}>关闭</button></div>
       </div>
     </Modal>
   );

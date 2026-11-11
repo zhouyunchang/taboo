@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api, ApiError, type SecretVersionValue, type Version } from '../api';
+import Icon from '../design/Icon';
 
 export function lineDiff(left: string, right: string): { kind: 'same' | 'add' | 'del'; text: string }[] {
   const a = left.split('\n');
@@ -78,31 +79,51 @@ export default function VersionDiff({ projectId, folder, secretKey, versions }: 
 
   if (ordered.length < 2) return <p className="muted">至少需要两个版本才能对比。</p>;
 
+  const adds = rows?.filter((r) => r.kind === 'add').length ?? 0;
+  const dels = rows?.filter((r) => r.kind === 'del').length ?? 0;
+
   return (
-    <div className="version-diff-block">
+    <div>
       <div className="version-diff">
         <label>基准版本
           <select aria-label="基准版本" value={left} onChange={(e) => { setLeft(e.target.value); setRows(null); }}>
             {ordered.map((v) => <option key={v.version} value={v.version}>v{v.version}</option>)}
           </select>
         </label>
+        <span className="faint" aria-hidden="true"><Icon name="arrow-right" size={14} /></span>
         <label>对比版本
           <select aria-label="对比版本" value={right} onChange={(e) => { setRight(e.target.value); setRows(null); }}>
             {ordered.map((v) => <option key={v.version} value={v.version}>v{v.version}</option>)}
           </select>
         </label>
-        <button type="button" disabled={busy} onClick={() => void compare()}>{busy ? '对比中…' : '对比'}</button>
+        <button type="button" className="btn btn-default btn-sm" disabled={busy} onClick={() => void compare()}>{busy ? '对比中…' : '对比'}</button>
       </div>
-      {err && <div className="error" role="alert">{err}</div>}
+      {err && <p className="error" role="alert">{err}</p>}
       {rows && (
-        <div>
-          <p role="status">{shown ? '正在显示明文，关闭抽屉后不会保留。' : '值已掩码。需要查看差异内容时再显示明文。'}</p>
-          <button type="button" className="ghost" onClick={() => setShown((v) => !v)}>{shown ? '隐藏明文' : '显示明文'}</button>
+        <div className="form-stack">
+          <div className="panel-head">
+            <p role="status" className={shown ? 'warning' : 'muted'}>
+              <Icon name={shown ? 'eye' : 'eye-off'} size={13} />
+              {shown ? '正在显示明文，关闭抽屉后不会保留。' : '值已掩码。需要查看差异内容时再显示明文。'}
+            </p>
+            <button type="button" className="btn btn-quiet btn-sm" onClick={() => setShown((v) => !v)}>
+              <Icon name={shown ? 'eye-off' : 'eye'} size={13} />{shown ? '隐藏明文' : '显示明文'}
+            </button>
+          </div>
+          {rows.length > 0 && (
+            <p className="mono">
+              <span className="tag ok">+{adds}</span>
+              <span className="tag bad">−{dels}</span>
+              <span className="faint">共 {rows.length} 行</span>
+            </p>
+          )}
           <ul className="diff-list">
             {rows.map((row, index) => (
-              <li key={index} className={row.kind === 'add' ? 'diff-add' : row.kind === 'del' ? 'diff-del' : ''}>
-                {row.kind === 'same' ? '相同' : row.kind === 'add' ? '新增' : '删除'}
-                {shown ? ` ${row.text || '（空行）'}` : ` · ${row.text.length} 个字符`}
+              <li key={index} className={row.kind === 'add' ? 'diff-add' : row.kind === 'del' ? 'diff-del' : undefined}>
+                <span className="faint">{row.kind === 'same' ? '相同' : row.kind === 'add' ? '新增' : '删除'}</span>
+                {shown
+                  ? <code>{row.text || '（空行）'}</code>
+                  : <span className="cipher">{row.text.length} 字符</span>}
               </li>
             ))}
           </ul>
