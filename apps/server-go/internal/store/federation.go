@@ -5,15 +5,6 @@ import (
 	"strings"
 )
 
-//go:embed migrations/002_workloads.sql
-var workloadSchema string
-
-//go:embed migrations/003_governance.sql
-var governanceSchema string
-
-//go:embed migrations/004_browser_security.sql
-var browserSecuritySchema string
-
 // Additive schema: existing organizations and secrets retain their IDs. A
 // tombstoned admission is retained so JIT cannot recreate revoked membership.
 func migrateFederation(db migrationDB) error {
@@ -52,7 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_browser_session_exp ON browser_sessions(expires_a
 	if err != nil {
 		return err
 	}
-	if _, err = db.Exec(workloadSchema); err != nil {
+	if _, err = db.Exec(sqliteWorkloads); err != nil {
 		return err
 	}
 	var definition string
@@ -63,17 +54,17 @@ CREATE INDEX IF NOT EXISTS idx_browser_session_exp ON browser_sessions(expires_a
 		if _, err = db.Exec(`ALTER TABLE workload_grants RENAME TO workload_grants_previous`); err != nil {
 			return err
 		}
-		if _, err = db.Exec(workloadSchema); err != nil {
+		if _, err = db.Exec(sqliteWorkloads); err != nil {
 			return err
 		}
 		if _, err = db.Exec(`INSERT INTO workload_grants SELECT * FROM workload_grants_previous; DROP TABLE workload_grants_previous;`); err != nil {
 			return err
 		}
 	}
-	_, err = db.Exec(governanceSchema)
+	_, err = db.Exec(sqliteGovernance)
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(browserSecuritySchema)
+	_, err = db.Exec(sqliteBrowserSecurity)
 	return err
 }
