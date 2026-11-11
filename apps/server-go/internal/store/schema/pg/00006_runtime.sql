@@ -1,9 +1,10 @@
 -- 动态密钥、轮换、扫描与审批
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- dynamic_engines
-DROP TABLE IF EXISTS dynamic_engines CASCADE;
 CREATE TABLE dynamic_engines (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -22,7 +23,6 @@ CREATE TABLE dynamic_engines (
 );
 
 -- dynamic_leases
-DROP TABLE IF EXISTS dynamic_leases CASCADE;
 CREATE TABLE dynamic_leases (
   id                 text NOT NULL,
   engine_id          text NOT NULL,
@@ -43,7 +43,6 @@ CREATE TABLE dynamic_leases (
 );
 
 -- rotation_policies
-DROP TABLE IF EXISTS rotation_policies CASCADE;
 CREATE TABLE rotation_policies (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -65,7 +64,6 @@ CREATE TABLE rotation_policies (
 );
 
 -- scan_reports
-DROP TABLE IF EXISTS scan_reports CASCADE;
 CREATE TABLE scan_reports (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -82,7 +80,6 @@ CREATE TABLE scan_reports (
 );
 
 -- approval_requests
-DROP TABLE IF EXISTS approval_requests CASCADE;
 CREATE TABLE approval_requests (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -109,7 +106,6 @@ CREATE TABLE approval_requests (
 );
 
 -- access_requests
-DROP TABLE IF EXISTS access_requests CASCADE;
 CREATE TABLE access_requests (
   id                 text NOT NULL,
   org_id             text NOT NULL,

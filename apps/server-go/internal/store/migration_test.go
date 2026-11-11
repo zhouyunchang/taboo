@@ -112,7 +112,8 @@ func TestSQLiteMigrationRefusesFutureSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`PRAGMA user_version=999`); err != nil {
+	// 模拟"库由更新的二进制迁移过"：goose 版本表里出现高于本服务的版本。
+	if _, err = db.Exec(`INSERT INTO goose_db_version(version_id, is_applied) VALUES (999, 1)`); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()

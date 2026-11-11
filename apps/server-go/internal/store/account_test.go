@@ -10,7 +10,7 @@ import (
 
 func TestClassifyTenantsSplitsSoleOwnersOnce(t *testing.T) {
 	db := testdb.Open(t)
-	if v, err := store.Version(db); err != nil || v != store.SchemaVersion {
+	if v, err := store.Version(db); err != nil || v != store.ExpectedVersion(db) {
 		t.Fatalf("schema %d %v", v, err)
 	}
 	exec := func(q string, args ...any) {

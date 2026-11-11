@@ -5,13 +5,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/pressly/goose/v3"
 )
 
 // PostgreSQL uses a provisioned control login (schema owner) and a NOLOGIN,
@@ -218,15 +218,6 @@ func Scoped(ctx context.Context, db *sql.DB, org, user string) (*sql.DB, func(),
 	return x, func() { x.Close() }, nil
 }
 
-func Version(db *sql.DB) (int, error) {
-	q := "PRAGMA user_version"
-	if IsPostgres(db) {
-		q = "SELECT version FROM schema_version WHERE singleton=true"
-	}
-	var v int
-	err := db.QueryRow(q).Scan(&v)
-	return v, err
-}
 func HasTable(db *sql.DB, name string) (bool, error) {
 	q := `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`
 	if IsPostgres(db) {
@@ -238,59 +229,31 @@ func HasTable(db *sql.DB, name string) (bool, error) {
 }
 
 func migratePostgres(ctx context.Context, db *sql.DB, role string) error {
-	tx, err := db.BeginTx(ctx, nil)
+	if !autoMigrateEnabled() {
+		return requireSchema(db)
+	}
+	owner, err := checkRoles(db, role)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(735642019)`); err != nil {
-		return err
-	}
-	owner, err := checkRoles(tx, role)
-	if err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS schema_version (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton), version BIGINT NOT NULL)`); err != nil {
-		return err
-	}
-	var v int
-	err = tx.QueryRow(`SELECT version FROM schema_version WHERE singleton=true`).Scan(&v)
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-	if v > SchemaVersion {
-		return fmt.Errorf("database schema %d is newer than server %d", v, SchemaVersion)
-	}
-
-	// The scripts in schema/ are the only place PostgreSQL structures are
-	// defined: one folder per domain, then functions, triggers, policies and the
-	// version stamp. Every statement is written to be safe to replay, so a fresh
-	// database and an interrupted first start both converge on the same schema.
-	for _, script := range schemaOrder {
-		body := script.render(owner, role, SchemaVersion)
-		if _, err = tx.Exec(body); err != nil {
-			return fmt.Errorf("PostgreSQL schema %s: %w", script.name, err)
-		}
-	}
-	return tx.Commit()
+	return migrateSchema(ctx, db, goose.DialectPostgres, "pg", SchemaVersionPostgres, owner, role)
 }
 
-// checkRoles verifies the deployment shape the schema depends on: a control
-// login that owns the objects and a runtime role that owns nothing.
-func checkRoles(tx *sql.Tx, role string) (string, error) {
+// checkRoles 校验部署形态：控制登录拥有对象，运行角色不拥有任何对象。
+func checkRoles(db *sql.DB, role string) (string, error) {
 	var owner string
-	if err := tx.QueryRow(`SELECT current_user`).Scan(&owner); err != nil {
+	if err := db.QueryRow(`SELECT current_user`).Scan(&owner); err != nil {
 		return "", err
 	}
 	var privileged bool
-	if err := tx.QueryRow(`SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user`).Scan(&privileged); err != nil || privileged {
+	if err := db.QueryRow(`SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user`).Scan(&privileged); err != nil || privileged {
 		return "", errors.New("control login must be NOSUPERUSER NOBYPASSRLS; provision roles with a separate administrator")
 	}
-	if err := tx.QueryRow(`SELECT pg_has_role(?,?,'MEMBER')`, role, owner).Scan(&privileged); err != nil || privileged {
+	if err := db.QueryRow(`SELECT pg_has_role($1,$2,'MEMBER')`, role, owner).Scan(&privileged); err != nil || privileged {
 		return "", errors.New("runtime role must not inherit the control role")
 	}
 	var safe bool
-	if err := tx.QueryRow(`SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcanlogin FROM pg_roles WHERE rolname=?`, role).Scan(&safe); err != nil || !safe || owner == role {
+	if err := db.QueryRow(`SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcanlogin FROM pg_roles WHERE rolname=$1`, role).Scan(&safe); err != nil || !safe || owner == role {
 		return "", errors.New("runtime role must exist, be NOLOGIN NOSUPERUSER NOBYPASSRLS, and differ from control login")
 	}
 	return owner, nil

@@ -1,9 +1,10 @@
 -- 项目、目录、密钥与权限基线
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- projects
-DROP TABLE IF EXISTS projects CASCADE;
 CREATE TABLE projects (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -18,7 +19,6 @@ CREATE TABLE projects (
 );
 
 -- folders
-DROP TABLE IF EXISTS folders CASCADE;
 CREATE TABLE folders (
   id                 text NOT NULL,
   project_id         text NOT NULL,
@@ -35,7 +35,6 @@ CREATE TABLE folders (
 );
 
 -- secrets
-DROP TABLE IF EXISTS secrets CASCADE;
 CREATE TABLE secrets (
   id                 text NOT NULL,
   project_id         text NOT NULL,
@@ -55,7 +54,6 @@ CREATE TABLE secrets (
 );
 
 -- secret_versions
-DROP TABLE IF EXISTS secret_versions CASCADE;
 CREATE TABLE secret_versions (
   id                 text NOT NULL,
   secret_id          text NOT NULL,
@@ -69,7 +67,6 @@ CREATE TABLE secret_versions (
 );
 
 -- org_security
-DROP TABLE IF EXISTS org_security CASCADE;
 CREATE TABLE org_security (
   org_id             text NOT NULL,
   login_policy       text NOT NULL DEFAULT 'LOCAL_OR_EXTERNAL'::text,
@@ -79,7 +76,6 @@ CREATE TABLE org_security (
 );
 
 -- member_action_grants
-DROP TABLE IF EXISTS member_action_grants CASCADE;
 CREATE TABLE member_action_grants (
   org_id             text NOT NULL,
   user_id            text NOT NULL,
@@ -95,7 +91,6 @@ CREATE TABLE member_action_grants (
 );
 
 -- project_grants
-DROP TABLE IF EXISTS project_grants CASCADE;
 CREATE TABLE project_grants (
   org_id             text NOT NULL,
   project_id         text NOT NULL,
@@ -110,7 +105,6 @@ CREATE TABLE project_grants (
 );
 
 -- org_invites
-DROP TABLE IF EXISTS org_invites CASCADE;
 CREATE TABLE org_invites (
   id                 text NOT NULL,
   org_id             text NOT NULL,

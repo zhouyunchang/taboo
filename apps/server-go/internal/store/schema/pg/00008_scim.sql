@@ -1,9 +1,10 @@
 -- SCIM 2.0 用户与组
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- scim_tokens
-DROP TABLE IF EXISTS scim_tokens CASCADE;
 CREATE TABLE scim_tokens (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -20,7 +21,6 @@ CREATE TABLE scim_tokens (
 );
 
 -- scim_users
-DROP TABLE IF EXISTS scim_users CASCADE;
 CREATE TABLE scim_users (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -36,7 +36,6 @@ CREATE TABLE scim_users (
 );
 
 -- scim_groups
-DROP TABLE IF EXISTS scim_groups CASCADE;
 CREATE TABLE scim_groups (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -52,7 +51,6 @@ CREATE TABLE scim_groups (
 );
 
 -- scim_group_members
-DROP TABLE IF EXISTS scim_group_members CASCADE;
 CREATE TABLE scim_group_members (
   org_id             text NOT NULL,
   group_id           text NOT NULL,

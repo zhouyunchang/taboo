@@ -1,9 +1,10 @@
 -- 设备授权、限流与集群租约
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- device_authorizations
-DROP TABLE IF EXISTS device_authorizations CASCADE;
 CREATE TABLE device_authorizations (
   id                 text NOT NULL,
   device_hash        text NOT NULL,
@@ -23,7 +24,6 @@ CREATE TABLE device_authorizations (
 );
 
 -- cli_auth_codes
-DROP TABLE IF EXISTS cli_auth_codes CASCADE;
 CREATE TABLE cli_auth_codes (
   code_hash          text NOT NULL,
   user_id            text NOT NULL,
@@ -36,7 +36,6 @@ CREATE TABLE cli_auth_codes (
 );
 
 -- rate_counters
-DROP TABLE IF EXISTS rate_counters CASCADE;
 CREATE TABLE rate_counters (
   bucket             text NOT NULL,
   window_start       bigint NOT NULL,
@@ -45,7 +44,6 @@ CREATE TABLE rate_counters (
 );
 
 -- cluster_leases
-DROP TABLE IF EXISTS cluster_leases CASCADE;
 CREATE TABLE cluster_leases (
   name               text NOT NULL,
   holder             text NOT NULL,

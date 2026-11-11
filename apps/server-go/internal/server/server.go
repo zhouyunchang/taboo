@@ -176,7 +176,7 @@ func New(d *Deps) *chi.Mux {
 				return
 			}
 			ver, err := store.Version(d.DB)
-			if err != nil || ver != store.SchemaVersion {
+			if err != nil || ver != store.ExpectedVersion(d.DB) {
 				http.Error(w, `{"ok":false,"error":"schema"}`, http.StatusServiceUnavailable)
 				return
 			}

@@ -1,9 +1,10 @@
 -- OIDC / 浏览器会话 / 外部身份
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- oidc_providers
-DROP TABLE IF EXISTS oidc_providers CASCADE;
 CREATE TABLE oidc_providers (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -27,7 +28,6 @@ CREATE TABLE oidc_providers (
 );
 
 -- provider_security
-DROP TABLE IF EXISTS provider_security CASCADE;
 CREATE TABLE provider_security (
   provider_id        text NOT NULL,
   org_id             text NOT NULL,
@@ -39,7 +39,6 @@ CREATE TABLE provider_security (
 );
 
 -- external_identities
-DROP TABLE IF EXISTS external_identities CASCADE;
 CREATE TABLE external_identities (
   issuer             text NOT NULL,
   subject            text NOT NULL,
@@ -50,7 +49,6 @@ CREATE TABLE external_identities (
 );
 
 -- federation_admissions
-DROP TABLE IF EXISTS federation_admissions CASCADE;
 CREATE TABLE federation_admissions (
   org_id             text NOT NULL,
   provider_id        text NOT NULL,
@@ -62,7 +60,6 @@ CREATE TABLE federation_admissions (
 );
 
 -- oidc_login_requests
-DROP TABLE IF EXISTS oidc_login_requests CASCADE;
 CREATE TABLE oidc_login_requests (
   state_hash         text NOT NULL,
   browser_hash       text NOT NULL,
@@ -77,7 +74,6 @@ CREATE TABLE oidc_login_requests (
 );
 
 -- browser_sessions
-DROP TABLE IF EXISTS browser_sessions CASCADE;
 CREATE TABLE browser_sessions (
   token_hash         text NOT NULL,
   user_id            text NOT NULL,
@@ -98,7 +94,6 @@ CREATE TABLE browser_sessions (
 );
 
 -- browser_credentials
-DROP TABLE IF EXISTS browser_credentials CASCADE;
 CREATE TABLE browser_credentials (
   token_hash         text NOT NULL,
   org_id             text NOT NULL,
@@ -113,7 +108,6 @@ CREATE TABLE browser_credentials (
 );
 
 -- logout_replays
-DROP TABLE IF EXISTS logout_replays CASCADE;
 CREATE TABLE logout_replays (
   token_hash         text NOT NULL,
   provider_id        text NOT NULL,

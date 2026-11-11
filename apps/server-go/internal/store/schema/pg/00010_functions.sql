@@ -1,6 +1,10 @@
 -- 不可变与完整性触发器函数。CREATE OR REPLACE：重复执行安全。
+-- +goose Up
+
 
 -- function: check_identity_scope
+
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION check_identity_scope()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -12,8 +16,13 @@ BEGIN
  RETURN NEW;
 END
 $function$;
+-- +goose StatementEnd
+
 
 -- function: check_workload_identity
+
+
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION check_workload_identity()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -24,8 +33,13 @@ AS $function$
  END IF; RETURN NEW;
 END
 $function$;
+-- +goose StatementEnd
+
 
 -- function: immutable_ownership
+
+
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION immutable_ownership()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -37,3 +51,5 @@ BEGIN
  RETURN NEW;
 END
 $function$;
+-- +goose StatementEnd
+

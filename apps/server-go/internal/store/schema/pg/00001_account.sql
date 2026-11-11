@@ -1,9 +1,10 @@
 -- 账号、组织、成员与会话令牌
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- users
-DROP TABLE IF EXISTS users CASCADE;
 CREATE TABLE users (
   id                 text NOT NULL,
   email              text NOT NULL,
@@ -24,7 +25,6 @@ CREATE TABLE users (
 );
 
 -- orgs
-DROP TABLE IF EXISTS orgs CASCADE;
 CREATE TABLE orgs (
   id                 text NOT NULL,
   name               text NOT NULL,
@@ -40,7 +40,6 @@ CREATE TABLE orgs (
 );
 
 -- org_members
-DROP TABLE IF EXISTS org_members CASCADE;
 CREATE TABLE org_members (
   org_id             text NOT NULL,
   user_id            text NOT NULL,
@@ -55,7 +54,6 @@ CREATE TABLE org_members (
 );
 
 -- refresh_tokens
-DROP TABLE IF EXISTS refresh_tokens CASCADE;
 CREATE TABLE refresh_tokens (
   id                 text NOT NULL,
   user_id            text NOT NULL,
@@ -68,7 +66,6 @@ CREATE TABLE refresh_tokens (
 );
 
 -- recovery_codes
-DROP TABLE IF EXISTS recovery_codes CASCADE;
 CREATE TABLE recovery_codes (
   id                 text NOT NULL,
   user_id            text NOT NULL,
@@ -81,7 +78,6 @@ CREATE TABLE recovery_codes (
 );
 
 -- path_codes
-DROP TABLE IF EXISTS path_codes CASCADE;
 CREATE TABLE path_codes (
   code               text NOT NULL,
   kind               text NOT NULL,

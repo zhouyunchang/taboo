@@ -1,9 +1,10 @@
 -- 审计链与导出
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- audit_logs
-DROP TABLE IF EXISTS audit_logs CASCADE;
 CREATE TABLE audit_logs (
   -- rowid：单调序号。SQLite 的隐式 rowid 在 PostgreSQL 里显式化，并允许调用方插入 NULL
   -- （outbox 物化等内部路径按全列插入，identity 必须以 DEFAULT 生成而不是拒绝 NULL）。
@@ -27,7 +28,6 @@ CREATE TABLE audit_logs (
 );
 
 -- audit_heads
-DROP TABLE IF EXISTS audit_heads CASCADE;
 CREATE TABLE audit_heads (
   org_id             text NOT NULL,
   revision           bigint NOT NULL DEFAULT 0,
@@ -35,7 +35,6 @@ CREATE TABLE audit_heads (
 );
 
 -- audit_checkpoints
-DROP TABLE IF EXISTS audit_checkpoints CASCADE;
 CREATE TABLE audit_checkpoints (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -47,7 +46,6 @@ CREATE TABLE audit_checkpoints (
 );
 
 -- audit_exports
-DROP TABLE IF EXISTS audit_exports CASCADE;
 CREATE TABLE audit_exports (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -68,7 +66,6 @@ CREATE TABLE audit_exports (
 );
 
 -- mutation_receipts
-DROP TABLE IF EXISTS mutation_receipts CASCADE;
 CREATE TABLE mutation_receipts (
   org_id             text NOT NULL,
   actor_id           text NOT NULL,
@@ -82,7 +79,6 @@ CREATE TABLE mutation_receipts (
 -- outbox_events
 -- 事件总线：密钥变更先在同一事务写入，再由任意副本认领派发。
 -- RLS 在 95-rls.sql 里打开；事件派发走控制连接，不授予运行角色。
-DROP TABLE IF EXISTS outbox_events CASCADE;
 CREATE TABLE outbox_events (
   id                 text NOT NULL,
   org_id             text NOT NULL,

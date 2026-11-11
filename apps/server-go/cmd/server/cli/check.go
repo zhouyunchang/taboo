@@ -62,8 +62,8 @@ func runSelfCheck(db *sql.DB, masterKey []byte) error {
 
 	v, err := store.Version(db)
 	check("read schema version", err)
-	if v != store.SchemaVersion {
-		check("schema version", fmt.Errorf("user_version=%d, want %d", v, store.SchemaVersion))
+	if want := store.ExpectedVersion(db); v != want {
+		check("schema version", fmt.Errorf("applied=%d, want %d", v, want))
 	} else {
 		log.Printf("[check] ok   schema version %d", v)
 	}

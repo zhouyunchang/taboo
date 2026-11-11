@@ -1,9 +1,10 @@
 -- Secret Sync 与 Webhook
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- sync_targets
-DROP TABLE IF EXISTS sync_targets CASCADE;
 CREATE TABLE sync_targets (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -22,7 +23,6 @@ CREATE TABLE sync_targets (
 );
 
 -- sync_runs
-DROP TABLE IF EXISTS sync_runs CASCADE;
 CREATE TABLE sync_runs (
   id                 text NOT NULL,
   target_id          text NOT NULL,
@@ -49,7 +49,6 @@ CREATE TABLE sync_runs (
 );
 
 -- webhooks
-DROP TABLE IF EXISTS webhooks CASCADE;
 CREATE TABLE webhooks (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -64,7 +63,6 @@ CREATE TABLE webhooks (
 );
 
 -- webhook_deliveries
-DROP TABLE IF EXISTS webhook_deliveries CASCADE;
 CREATE TABLE webhook_deliveries (
   id                 text NOT NULL,
   webhook_id         text NOT NULL,

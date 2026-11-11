@@ -50,6 +50,7 @@ func newRootCmd() *cobra.Command {
 		newBackupCmd(),
 		newUserCmd(),
 		newMigrateCmd(),
+		newSchemaCmd(),
 	)
 	return root
 }

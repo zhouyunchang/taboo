@@ -1,9 +1,10 @@
 -- 机器身份与外部工作负载
+-- +goose Up
+
 
 -- 由 schema_version 23 的真实库结构整理；任何环境执行后应得到同一结构。
 
 -- machine_identities
-DROP TABLE IF EXISTS machine_identities CASCADE;
 CREATE TABLE machine_identities (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -24,7 +25,6 @@ CREATE TABLE machine_identities (
 );
 
 -- identity_scopes
-DROP TABLE IF EXISTS identity_scopes CASCADE;
 CREATE TABLE identity_scopes (
   identity_id        text NOT NULL,
   project_id         text NOT NULL,
@@ -36,7 +36,6 @@ CREATE TABLE identity_scopes (
 );
 
 -- oauth_trusts
-DROP TABLE IF EXISTS oauth_trusts CASCADE;
 CREATE TABLE oauth_trusts (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -59,7 +58,6 @@ CREATE TABLE oauth_trusts (
 );
 
 -- workload_bindings
-DROP TABLE IF EXISTS workload_bindings CASCADE;
 CREATE TABLE workload_bindings (
   id                 text NOT NULL,
   org_id             text NOT NULL,
@@ -78,7 +76,6 @@ CREATE TABLE workload_bindings (
 );
 
 -- workload_grants
-DROP TABLE IF EXISTS workload_grants CASCADE;
 CREATE TABLE workload_grants (
   binding_id         text NOT NULL,
   org_id             text NOT NULL,
