@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"database/sql"
 	"io/fs"
 	"strings"
@@ -63,23 +62,6 @@ func TestAutoMigrateSwitch(t *testing.T) {
 	t.Setenv("TABOO_AUTO_MIGRATE", "")
 	if !autoMigrateEnabled() {
 		t.Fatal("migrations must run by default")
-	}
-}
-
-func TestBaselineRejectsIntermediateLegacyVersion(t *testing.T) {
-	db := openTestSQLite(t)
-	st, err := newMigrationStore(goose.DialectSQLite3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = st.CreateVersionTable(context.Background(), db); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec(`PRAGMA user_version=12`); err != nil {
-		t.Fatal(err)
-	}
-	if err = baseline(context.Background(), db, st, goose.DialectSQLite3, SchemaVersionSQLite); err == nil {
-		t.Fatal("intermediate legacy version must not be baselined silently")
 	}
 }
 

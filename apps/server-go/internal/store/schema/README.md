@@ -27,19 +27,15 @@ NOSUPERUSER NOBYPASSRLS、运行角色 NOLOGIN 且不继承控制角色），并
 **会话锁**（`pg_advisory_lock`），多副本同时启动时只有一个实例真正执行迁移。
 SQLite 是单文件单写者，靠连接串行化。
 
-## 基线化（老库怎么办）
+## 老库不支持升级
 
-goose 之前的两代实现没有执行历史，只有终值：PostgreSQL 的 `schema_version.version`、
-SQLite 的 `PRAGMA user_version`。首次用 goose 打开老库时：
+迁移器只向前：库里的版本高于本二进制时拒绝启动，不做降级。
 
-| 终值 | 行为 |
-| --- | --- |
-| 0 | 空库，从头执行全部迁移 |
-| 23（旧迁移器的终值） | **基线化**：把 1..N 标记为已执行，不重放任何脚本 |
-| 其他 | 报错并提示：旧的中间版本结构不同，请用旧版本二进制先升到 23，或重建数据库 |
+早期自研迁移器建的老库（`schema_version` / `PRAGMA user_version` 那一代）**不再兼容**：
+结构变更直接改脚本历史，老库删掉重建。项目未发布 1.0，没有需要保数据的生产库。
 
-基线化必须存在，因为这些脚本创建的是**终态结构**，对已有数据的库重放会 `CREATE TABLE`
-失败（或更糟：重建空表）。基线化只写 `goose_db_version`，不碰业务表。
+重建方式：删掉 SQLite 数据文件（`data/taboo.db`，保留 `data/master.key`），
+PostgreSQL 清空 schema 后重启服务，goose 会从零建到最新版本。
 
 ## 关闭自动迁移
 
@@ -61,8 +57,8 @@ taboo-server --check    # 自检：schema 版本、RLS、触发器、密钥可�
 4. 跑 `go test ./internal/store ./internal/server`——`TestPostgresTwoReplicas` 会在真实
    PostgreSQL 上从空库重放全部脚本，验证顺序与幂等性。
 
-**不要修改已经发布过的脚本**：goose 按版本号记录执行状态，改内容不会重跑，
-不同环境会悄悄产生结构差异。需要修正就新增一个版本。
+已存在的环境跑过的脚本不要再改内容：goose 按版本号记录执行状态，改内容不会重跑，
+不同环境会悄悄产生结构差异。开发期需要调整结构时，直接改脚本并删库重建。
 
 ## 写脚本的注意点
 

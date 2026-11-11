@@ -8,9 +8,8 @@
 // 启动时按顺序执行尚未运行过的脚本，版本表 goose_db_version 记录进度；
 // 多副本同时启动由 goose 的会话锁（PostgreSQL advisory lock）串行化。
 //
-// 历史上的自研迁移器没有版本记录，只有 schema_version（PostgreSQL）/
-// PRAGMA user_version（SQLite）里的终值。旧库首次用 goose 打开时按该终值基线化：
-// 把 1..N 标记为已执行，不重放任何脚本（重放会 DROP 数据）。
+// 迁移只向前：库里的版本高于本二进制时拒绝启动，不做降级。
+// 不支持从早期自研迁移器的库升级——结构变更直接改脚本历史（项目未发布 1.0）。
 package store
 
 import (
@@ -48,9 +47,6 @@ const (
 
 	// migrationsTable 是 goose 的版本表名。
 	migrationsTable = "goose_db_version"
-
-	// legacySchemaVersion 是自研迁移器时代的终值，用来识别需要基线化的旧库。
-	legacySchemaVersion = 23
 )
 
 // ExpectedVersion 返回该数据库连接应达到的迁移版本。
@@ -125,11 +121,7 @@ func migrateSchema(ctx context.Context, db *sql.DB, dialect goose.Dialect, root 
 	if err != nil {
 		return err
 	}
-	if latest == 0 {
-		if err := baseline(ctx, db, st, dialect, expected); err != nil {
-			return err
-		}
-	} else if int(latest) > expected {
+	if int(latest) > expected {
 		// 库比二进制新：拒绝启动，不做降级尝试。
 		return fmt.Errorf("database schema %d is newer than server %d", latest, expected)
 	}
@@ -157,57 +149,6 @@ func migrateSchema(ctx context.Context, db *sql.DB, dialect goose.Dialect, root 
 		slog.Info("schema migrated", "source", r.Source.Path, "duration", r.Duration.String())
 	}
 	return nil
-}
-
-// baseline 处理"旧迁移器建好的库"：结构已经是终态，只补版本记录。
-//
-// 只支持从旧终值（legacySchemaVersion）迁移；更早的中间版本结构不同，
-// 逐版本补 DDL 的风险大于收益，直接报错让人工处理。
-func baseline(ctx context.Context, db *sql.DB, st database.Store, dialect goose.Dialect, expected int) error {
-	legacy, err := legacyVersion(db, dialect)
-	if err != nil {
-		return err
-	}
-	if legacy == 0 {
-		return nil // 空库：让 goose 从头执行
-	}
-	if legacy != legacySchemaVersion {
-		hint := "re-create the database or migrate it with an older release first"
-		if dialect == goose.DialectSQLite3 {
-			hint = "delete the local database file (development data) or migrate it with an older release first"
-		}
-		return fmt.Errorf("database was created by the legacy migrator at version %d, which cannot be baselined automatically (supported: 0 or %d): %s", legacy, legacySchemaVersion, hint)
-	}
-	for v := int64(1); v <= int64(expected); v++ {
-		if err := st.Insert(ctx, db, database.InsertRequest{Version: v}); err != nil {
-			return fmt.Errorf("baseline migration %d: %w", v, err)
-		}
-	}
-	slog.Info("schema baselined from legacy migrator", "legacy_version", legacy, "migrations", expected)
-	return nil
-}
-
-// legacyVersion 读取旧迁移器留下的版本标记。
-func legacyVersion(db *sql.DB, dialect goose.Dialect) (int, error) {
-	if dialect == goose.DialectPostgres {
-		ok, err := hasTable(db, "schema_version")
-		if err != nil || !ok {
-			return 0, err
-		}
-		var v int
-		if err := db.QueryRow(`SELECT version FROM schema_version WHERE singleton=true`).Scan(&v); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return 0, nil
-			}
-			return 0, err
-		}
-		return v, nil
-	}
-	var v int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
-		return 0, err
-	}
-	return v, nil
 }
 
 // hasTable 报告当前库里是否存在某张表（两种方言）。
