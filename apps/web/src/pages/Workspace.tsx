@@ -495,6 +495,7 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
   const [cur, setCur] = useState('/'); // 当前文件夹路径（物化路径 /a/b/）
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState(''); // 成功类回执：解释刚刚发生了什么
   const [editing, setEditing] = useState<string | null>(null);
   const [importing, setImporting] = useState(false); // key 或 '__new__'
   const [detail, setDetail] = useState<SecretMeta | null>(null);
@@ -509,7 +510,7 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
   }, [projectId]);
 
   const listGeneration = useRef(0);
-  const selectFolder = (path: string) => { listGeneration.current++; setSecrets([]); setEditing(null); setDetail(null); setCur(path); };
+  const selectFolder = (path: string) => { listGeneration.current++; setSecrets([]); setEditing(null); setDetail(null); setNotice(''); setCur(path); };
   const load = useCallback(() => {
     const started = ++listGeneration.current;
     api.get<{ secrets: SecretMeta[]; permissions?: { write: boolean; delete: boolean; rollback: boolean; export: boolean } }>(`/api/v1/projects/${projectId}/secrets?path=${encodeURIComponent(cur)}`)
@@ -523,23 +524,31 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
 
   async function createFolder() {
     const name = window.prompt(`在当前文件夹 ${cur} 下新建子文件夹名称？`);
-    if (!name) return;
+    if (name === null) return; // 取消
     const clean = name.trim().replace(/^\/+|\/+$/g, '');
-    if (!clean) return;
+    if (!clean) { setError('文件夹名称不能为空，也不能以 / 开头或结尾。'); return; }
+    if (clean.includes('/')) { setError('文件夹名不能包含 /：一次建一层，深层目录请在父目录里继续新建。'); return; }
+    const path = `${cur}${clean}/`;
+    setError(''); setNotice('');
     try {
-      await api.post(`/api/v1/projects/${projectId}/folders`, { path: cur + clean + '/' });
+      await api.post(`/api/v1/projects/${projectId}/folders`, { path });
       loadFolders();
-    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+      selectFolder(path);
+      setNotice(`已新建文件夹 ${path}，已进入该目录。`);
+    } catch (e) { setError(describeFailure('新建文件夹', e)); }
   }
 
   async function deleteFolder() {
     if (cur === '/') return;
     if (!window.confirm(`删除空文件夹 ${cur}？（仅空文件夹可删除）`)) return;
+    setError(''); setNotice('');
     try {
       await api.del(`/api/v1/projects/${projectId}/folders?path=${encodeURIComponent(cur)}`);
-      selectFolder(parentOf(cur));
+      const parent = parentOf(cur);
+      selectFolder(parent);
       loadFolders();
-    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+      setNotice(`已删除空文件夹 ${cur}。`);
+    } catch (e) { setError(describeFailure('删除文件夹', e)); }
   }
 
   const crumbs = cur === '/' ? [] : cur.replace(/^\/+|\/+$/g, '').split('/');
@@ -564,6 +573,7 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
       />
 
       {error && <Notice tone="danger">{error}</Notice>}
+      {notice && <Notice tone="ok">{notice}</Notice>}
 
       <div className="secret-toolbar">
         <div className="search">
@@ -646,6 +656,19 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
       )}
     </div>
   );
+}
+
+/** 把失败翻译成操作者能据以行动的一句话：网络层、服务端错误码、其它。 */
+function describeFailure(action: string, e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 401) return `${action}失败：登录已过期，请重新登录后再试。`;
+    if (e.status === 403) return `${action}失败：当前角色没有写入权限（${e.message}）。`;
+    if (e.status === 400) return `${action}失败：请求不合法（${e.message}）。`;
+    if (e.status >= 500) return `${action}失败：服务端暂时不可用（${e.code}），请稍后重试。`;
+    return `${action}失败：${e.message}（${e.code}）`;
+  }
+  if (e instanceof TypeError) return `${action}失败：连不上服务器，检查 taboo 服务是否在运行后重试。`;
+  return `${action}失败：${e instanceof Error ? e.message : String(e)}`;
 }
 
 function parentOf(path: string) {

@@ -116,6 +116,50 @@ test('本地账号：新建/显示/隐藏/编辑/删除密钥，版本抽屉，�
   expect(errors).toEqual([]);
 });
 
+test('本地账号：新建文件夹（成功/取消/非法名/断网）都有明确反馈', async ({ page, request }) => {
+  const owner = await account(request, 'local-folder@example.test', '文件夹 owner');
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await signIn(page, owner.tokens);
+
+  // 成功：出现在树里、自动进入、并给出回执
+  page.once('dialog', (d) => void d.accept('db'));
+  await page.getByRole('button', { name: '＋ 新建文件夹', exact: true }).click();
+  await expect(page.locator('.folder-tree')).toContainText('db');
+  await expect(page.locator('.path-bar')).toContainText('db');
+  await expect(page.getByText('已新建文件夹 /db/', { exact: false })).toBeVisible();
+
+  // 再建一层子目录
+  page.once('dialog', (d) => void d.accept('mysql'));
+  await page.getByRole('button', { name: '＋ 新建文件夹', exact: true }).click();
+  // 面包屑按层渲染：根目录 / db / mysql 三个 crumb
+  await expect(page.locator('.path-bar .crumb')).toHaveCount(3);
+  await expect(page.locator('.path-bar .crumb').nth(2)).toHaveText('mysql');
+  await expect(page.getByText('已新建文件夹 /db/mysql/', { exact: false })).toBeVisible();
+
+  // 取消：什么都不发生，也不报错
+  page.once('dialog', (d) => void d.dismiss());
+  await page.getByRole('button', { name: '＋ 新建文件夹', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  // 非法名：本地直接拒绝，不发请求
+  let posted = 0;
+  page.on('request', (r) => { if (r.method() === 'POST' && r.url().includes('/folders')) posted += 1; });
+  page.once('dialog', (d) => void d.accept('a/b'));
+  await page.getByRole('button', { name: '＋ 新建文件夹', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('不能包含 /');
+  expect(posted).toBe(0);
+
+  // 断网：错误要说清楚“连不上服务器”，而不是 TypeError: Failed to fetch
+  page.once('dialog', (d) => void d.accept('offline'));
+  await page.route('**/api/v1/projects/*/folders', (r) => (r.request().method() === 'POST' ? r.abort('connectionrefused') : r.continue()));
+  await page.getByRole('button', { name: '＋ 新建文件夹', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('连不上服务器');
+  await expect(page.getByRole('alert')).not.toContainText('Failed to fetch');
+  await page.unroute('**/api/v1/projects/*/folders');
+  expect(errors).toEqual([]);
+});
+
 test('本地账号：组织设置、身份连接表单、成员操作授权、工作负载与登录策略', async ({ page, request }) => {
   const owner = await account(request, 'local-settings@example.test', '设置 owner');
   const headers = { Authorization: `Bearer ${owner.tokens.access}` };
