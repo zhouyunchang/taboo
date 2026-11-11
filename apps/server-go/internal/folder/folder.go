@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -51,7 +52,9 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, e *apperr.Error) { writeJSON(w, e.Status, e) }
 
-// NormalizePath 规范化物化路径：/a/b/（拒绝 .. 与空段）
+// NormalizePath 规范化物化路径：/a/b/（拒绝 ..、空段、空白与控制字符）。
+// 路径段同时是定位符（归属/项目/目录）的一部分，CLI、MCP 与 SDK 都按 / 切分，
+// 含空白的段会让同一把密钥在不同客户端解析成不同位置，因此这里一律拒绝。
 func NormalizePath(p string) (string, error) {
 	p = strings.Trim(p, "/")
 	if p == "" {
@@ -60,13 +63,29 @@ func NormalizePath(p string) (string, error) {
 	segs := strings.Split(p, "/")
 	clean := make([]string, 0, len(segs))
 	for _, s := range segs {
-		s = strings.TrimSpace(s)
 		if s == "" || s == "." || s == ".." {
 			return "", apperr.New(400, "INVALID", "invalid folder path")
+		}
+		if !ValidSegment(s) {
+			return "", apperr.New(400, "INVALID", "folder name must not contain spaces or control characters")
 		}
 		clean = append(clean, s)
 	}
 	return "/" + strings.Join(clean, "/") + "/", nil
+}
+
+// ValidSegment 报告一个文件夹名能否出现在定位符里。
+// 允许中日韩等非 ASCII 字符与 - _ . 等常规符号，拒绝空白、/ 与控制字符。
+func ValidSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		if r == '/' || unicode.IsSpace(r) || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func parentPathOf(path string) string {

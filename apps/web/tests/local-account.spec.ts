@@ -150,6 +150,13 @@ test('本地账号：新建文件夹（成功/取消/非法名/断网）都有�
   await expect(page.getByRole('alert')).toContainText('不能包含 /');
   expect(posted).toBe(0);
 
+  // 空格：名称是定位符的一段，含空白会让不同客户端解析到不同目录
+  page.once('dialog', (d) => void d.accept('tes t'));
+  await page.getByRole('button', { name: '＋ 新建文件夹', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('不能包含空格');
+  expect(posted).toBe(0);
+  await expect(page.locator('.folder-tree')).not.toContainText('tes t');
+
   // 断网：错误要说清楚“连不上服务器”，而不是 TypeError: Failed to fetch
   page.once('dialog', (d) => void d.accept('offline'));
   await page.route('**/api/v1/projects/*/folders', (r) => (r.request().method() === 'POST' ? r.abort('connectionrefused') : r.continue()));

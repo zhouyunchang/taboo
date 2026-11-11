@@ -528,6 +528,11 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
     const clean = name.trim().replace(/^\/+|\/+$/g, '');
     if (!clean) { setError('文件夹名称不能为空，也不能以 / 开头或结尾。'); return; }
     if (clean.includes('/')) { setError('文件夹名不能包含 /：一次建一层，深层目录请在父目录里继续新建。'); return; }
+    // 名称同时是定位符的一段（归属/项目/目录），空白会让同一把密钥在不同客户端解析到不同位置。
+    if (/\s/.test(clean)) {
+      setError('文件夹名不能包含空格或换行：定位符由 / 切分，请用 - 或 _ 连接。');
+      return;
+    }
     const path = `${cur}${clean}/`;
     setError(''); setNotice('');
     try {
