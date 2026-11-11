@@ -59,6 +59,7 @@ func Record(db DBTX, rec Rec) error {
 	}
 	// A row lock serializes the chain for this organization across processes.
 	if _, err := db.Exec(`INSERT INTO audit_heads(org_id,revision) VALUES(?,1) ON CONFLICT(org_id) DO UPDATE SET revision=audit_heads.revision+1`, rec.OrgID); err != nil {
+		slog.Error("audit head bump failed", "org", rec.OrgID, "action", rec.Action, "err", err)
 		return err
 	}
 

@@ -2,9 +2,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -38,6 +40,37 @@ import (
 	whsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/webhooks"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/workload"
 )
+
+// errRecorder captures the status and the head of a response body for the
+// diagnostic log above. It changes no response behaviour.
+type errRecorder struct {
+	http.ResponseWriter
+	status int
+	body   bytes.Buffer
+}
+
+func (e *errRecorder) WriteHeader(code int) {
+	if e.status == 0 {
+		e.status = code
+	}
+	e.ResponseWriter.WriteHeader(code)
+}
+
+func (e *errRecorder) Write(b []byte) (int, error) {
+	if e.status == 0 {
+		e.status = http.StatusOK
+	}
+	if e.body.Len() < 512 {
+		e.body.Write(b[:min(len(b), 512-e.body.Len())])
+	}
+	return e.ResponseWriter.Write(b)
+}
+
+func (e *errRecorder) Flush() {
+	if f, ok := e.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
 
 type Deps struct {
 	AccountDB       *sql.DB // Trusted local account operations, always bound to the authenticated user.
@@ -84,6 +117,22 @@ func New(d *Deps) *chi.Mux {
 		d.Dynamic = dynamic.New(d.DB, d.MasterKey)
 	}
 	r := chi.NewRouter()
+	// 诊断开关：TABOO_DEBUG_ERRORS=1 时把所有 5xx 的 apperr 与内部错误写进服务端日志。
+	// 默认关闭；开启后只写日志，不改变响应内容（响应仍是 {code,message}）。
+	debugErrors := os.Getenv("TABOO_DEBUG_ERRORS") == "1"
+	if debugErrors {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				rec := &errRecorder{ResponseWriter: w}
+				next.ServeHTTP(rec, r)
+				if rec.status >= 500 {
+					// 只记录最终响应与请求标识；处理器内部的真实原因由各自的 slog.Error 记录。
+					slog.Error("request failed", "request_id", httpx.RequestID(r), "method", r.Method,
+						"path", r.URL.Path, "status", rec.status, "body", rec.body.String())
+				}
+			})
+		})
+	}
 	r.Use(middleware.RequestID)
 	// 只采信受信代理的 X-Real-IP；机器身份 IP 白名单依赖这里。
 	r.Use(httpx.RealIP(httpx.ParseTrusted(os.Getenv("TABOO_TRUSTED_PROXIES"))))
@@ -269,7 +318,7 @@ func writeErr(w http.ResponseWriter, e *apperr.Error) {
 func protectedRoutes(d *Deps) *chi.Mux {
 	r := chi.NewRouter()
 	orgs := &orgsvc.Service{DB: d.DB, ControlDB: d.AccountDB, LookupLocalUser: d.LookupLocalUser, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
-	folders := &folder.Service{DB: d.DB}
+	folders := &folder.Service{DB: d.DB, ControlDB: d.AccountDB}
 	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs, Events: d.Events}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
 	totps := &totpsvc.Service{DB: d.AccountDB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}

@@ -22,6 +22,17 @@ import (
 
 type Service struct {
 	DB *sql.DB
+	// ControlDB 是 PostgreSQL 下的非租户连接：审计链必须由 schema owner 推进
+	// （runtime 角色没有 audit_logs 的 SELECT 权限）。SQLite 下留空，沿用 DB。
+	ControlDB *sql.DB
+}
+
+// control returns the connection that may advance the audit chain.
+func (s *Service) control() *sql.DB {
+	if s.ControlDB != nil {
+		return s.ControlDB
+	}
+	return s.DB
 }
 
 type Folder struct {
@@ -175,7 +186,7 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err.(*apperr.Error))
 		return
 	}
-	tx, started := auth.BeginMutation(s.DB, w, r)
+	tx, started := auth.BeginMutation(s.control(), w, r)
 	if !started {
 		return
 	}
@@ -202,7 +213,7 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "cannot delete root folder"))
 		return
 	}
-	tx, started := auth.BeginMutation(s.DB, w, r)
+	tx, started := auth.BeginMutation(s.control(), w, r)
 	if !started {
 		return
 	}
@@ -263,7 +274,7 @@ func (s *Service) Move(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "cannot move into itself"))
 		return
 	}
-	tx, started := auth.BeginMutation(s.DB, w, r)
+	tx, started := auth.BeginMutation(s.control(), w, r)
 	if !started {
 		return
 	}

@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -146,7 +147,26 @@ func pgSQL(q string) string {
 		}
 		i++
 	}
-	return b.String()
+	return pgUpsert(b.String())
+}
+
+// upsertTarget captures the SQLite upsert form whose SET repeats a
+// table-qualified column, "SET c=t.c...". PostgreSQL requires the column list
+// after SET and rejects the qualified form; SQLite accepts both spellings, so
+// one rewrite serves both engines.
+var (
+	upsertTarget  = regexp.MustCompile(`SET\s+(\w+)\s*=\s*(\w+)\.(\w+)`)
+	upsertRewrite = regexp.MustCompile(`^SET\s+(\w+)\s*=\s*(\w+)\.(\w+)$`)
+)
+
+func pgUpsert(q string) string {
+	return upsertTarget.ReplaceAllStringFunc(q, func(m string) string {
+		g := upsertRewrite.FindStringSubmatch(m)
+		if g == nil {
+			return m
+		}
+		return "SET " + g[1] + " = " + g[2] + "." + g[3]
+	})
 }
 
 func IsPostgres(db *sql.DB) bool { _, ok := db.Driver().(*pgDriver); return ok }
@@ -155,6 +175,7 @@ func OpenPostgres(ctx context.Context, dsn, runtimeRole string) (*sql.DB, error)
 	if runtimeRole == "" {
 		return nil, errors.New("TABOO_DATABASE_RUNTIME_ROLE is required for PostgreSQL")
 	}
+	dsn = withQueryTimeout(dsn)
 	c, err := pq.NewConnector(dsn)
 	if err != nil {
 		return nil, err
@@ -169,6 +190,19 @@ func OpenPostgres(ctx context.Context, dsn, runtimeRole string) (*sql.DB, error)
 		return nil, err
 	}
 	return db, nil
+}
+
+// withQueryTimeout bounds a single statement so a lock or a stalled replica
+// fails the request instead of hanging it. An explicit setting wins.
+func withQueryTimeout(dsn string) string {
+	if strings.Contains(dsn, "statement_timeout") {
+		return dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "statement_timeout=15000"
 }
 
 // Scoped deliberately does not share session-stateful PostgreSQL connections
