@@ -22,7 +22,6 @@ interface Props {
   user: User;
   orgs: Org[];
   onOrgChange: (orgs: Org[]) => void;
-  onUser: (user: User) => void;
   onLogout: () => void;
   logoutError?: string;
 }
@@ -32,7 +31,7 @@ type Menu = 'project' | 'account' | null;
 
 interface RailItem { tab: Tab; label: string; icon: IconName; current?: boolean }
 
-export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, logoutError }: Props) {
+export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutError }: Props) {
   const org = orgs[0];
   const federated = hasBrowserSession();
   const session = getBrowserSessionInfo();
@@ -299,8 +298,6 @@ export default function Workspace({ user, orgs, onOrgChange, onUser, onLogout, l
           </span>
         </div>
       </header>
-
-      {user.handle_confirmed === false && <HandleConfirm user={user} orgs={orgs} onUser={onUser} onOrgChange={onOrgChange} />}
 
       {githubNotice && (
         <p className="session-notice" role="status">
@@ -1251,48 +1248,5 @@ function DynamicEngineCreator({ projectId, onClose, onCreated }: {
         </div>
       </ValidatedForm>
     </Modal>
-  );
-}
-
-/* ───────────────────────── 用户名确认 ───────────────────────── */
-
-function HandleConfirm({ user, orgs, onUser, onOrgChange }: { user: User; orgs: Org[]; onUser: (user: User) => void; onOrgChange: (orgs: Org[]) => void }) {
-  const [handle, setHandle] = useState(user.handle ?? '');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  async function save(confirm: boolean) {
-    setError('');
-    setBusy(true);
-    try {
-      const next = handle.trim().toLowerCase();
-      if (next && next !== user.handle) await api.patch('/api/v1/me/handle', { handle: next });
-      if (confirm) await api.post('/api/v1/me/handle/confirm');
-      const me = await api.get<{ user: User; orgs: Org[] }>('/api/v1/me');
-      onUser(me.user);
-      onOrgChange(orgs.map((item) => me.orgs.find((org) => org.id === item.id) ?? item));
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form className="session-notice" onSubmit={(e) => { e.preventDefault(); void save(false); }}>
-      <div className="inline" style={{ gap: 10 }}>
-        <span className="field-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Icon name="seal" size={13} />确认用户名
-        </span>
-        <label className="inline" style={{ gap: 6 }}>
-          <span className="faint" style={{ fontSize: 'var(--fs-11)' }}>用户名</span>
-          <input aria-label="用户名" className="mono" value={handle} autoComplete="off" onChange={(e) => setHandle(e.target.value)} />
-        </label>
-        <Button type="submit" variant="quiet" className="btn-sm" disabled={busy}>保存</Button>
-        <Button type="button" variant="stamp" className="btn-sm" icon="seal" disabled={busy} onClick={() => void save(true)}>确认用户名</Button>
-        <span className="faint" style={{ fontSize: 'var(--fs-11)' }}>确认后不能再改，它会成为定位符的第一段。</span>
-        {error && <span className="error" role="alert">{error}</span>}
-      </div>
-    </form>
   );
 }

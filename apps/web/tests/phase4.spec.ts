@@ -11,6 +11,10 @@ test('version diff masks values, escape restores focus, and a viewer cannot read
   const viewerBody = { email: 'phase4-viewer@example.test', password: 'fixture-password', name: 'Phase4 viewer' };
   const viewerRes = await request.post('/api/v1/auth/register', { data: viewerBody });
   const viewer = viewerRes.status() === 409 ? await (await request.post('/api/v1/auth/login', { data: viewerBody })).json() : await viewerRes.json();
+  // 控制台现在有「先落款」这道门：两个夹具账号先确认用户名。
+  for (const fixture of [owner, viewer]) {
+    expect((await request.post('/api/v1/me/handle/confirm', { headers: { Authorization: `Bearer ${fixture.tokens.access}` } })).ok()).toBeTruthy();
+  }
   expect((await request.post('/api/v1/orgs/phase4-owner/members', { headers, data: { email: viewerBody.email, role: 'viewer' } })).ok()).toBeTruthy();
   const projects = await (await request.get('/api/v1/orgs/phase4-owner/projects', { headers })).json();
   const projectId = projects.projects[0].id;

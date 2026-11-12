@@ -76,6 +76,16 @@ The login screen is a split spread: the left half is the gate (the form, `.auth-
 - **卷末留白** — the text ends after the `MIT · 无 open-core 付费墙` colophon column; the remaining columns stay empty 界行 (the ruled page is the right half's content). A flat 60px `.seal-mark` sits at the page's bottom right (48/38/34px in the compact steps; the lift glow is dropped — it is ink on paper, not a button) and never touches the text.
 - The form is untouched vocabulary: same `.auth-card`, a 60×60 brand 印 beside the wordmark, same `h2` `taboo · 禁制` (now `--fs-26` with its Chinese half in Songti, so the left half has a title at the same scale as the book; `--fs-20` ≤1024px), same controls and accessible names.
 
+## The first-run leaf (落款)
+
+A confirmed username is a sealed act, so it is not a notice bar inside the console: `.onboard-shell` is a full-page stop before the workspace, one `.onboard-card` on the ink ground (seam border, no shadow, 440px wide, stacking to full width ≤640px). The check runs on **every entry** — after a password/OIDC login, after the boot `/me`, after a 30s refresh — whenever the server says `handle_confirmed === false`; confirming once is what retires the screen.
+
+- **Head** — the 48px 印, `taboo · 禁制`, and the kicker `入府 · 落款`; then `定下你的用户名` at `--fs-26` and one paragraph saying what the name is for: the 第一段 of the locator and what the audit records.
+- **Field** — a `.handle-input` seam with a mono `/` prefix; the input is mono and 44px tall. `.onboard-preview` prints the locator the name produces (`用户名/default/目录 / 密钥`) in mono behind a 2px `--seal-line` left rule, so editing the name visibly edits the address.
+- **Actions** — one vermilion primary `确认用户名，进入控制台`, one quiet `退出登录`. Confirming is the only path in; the screen has no skip.
+- **Rules** — format and reserved-word errors are stated inline in Chinese before submit; the server remains the only judge of uniqueness, and `CODE_TAKEN` is rewritten as `「name」已被占用，换一个再试。`. Confirmed names lock server-side (`HANDLE_LOCKED`); the screen does not restate the lock.
+- **No footer** — the card ends after 退出登录; the build stamp stays on the login leaf and in the rail, not on this one-off sheet.
+
 ## Signature behaviours
 
 - **Ciphertext carries length.** `.cipher` renders ● segments sized to the value's length (`cipher-xs|sm|mid|md|lg|xl`); unseen values render at mid density, never a fabricated length. A revealed value is `.cipher-value` — a vermilion-tinted chip that enters with one `unseal` clip+blur ease. Re-sealing is instant.

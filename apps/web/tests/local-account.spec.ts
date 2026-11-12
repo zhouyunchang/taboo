@@ -10,7 +10,13 @@ async function account(request: import('@playwright/test').APIRequestContext, em
   const register = await request.post('/api/v1/auth/register', { data: body });
   const res = register.status() === 409 ? await request.post('/api/v1/auth/login', { data: body }) : register;
   expect(res.ok()).toBe(true);
-  return res.json() as Promise<{ user: { id: string; email: string }; tokens: { access: string; refresh: string }; orgs?: unknown }>;
+  const data = await res.json() as { user: { id: string; email: string }; tokens: { access: string; refresh: string }; orgs?: unknown };
+  // 控制台现在有「先落款」这道门：夹具账号先确认用户名，再进工作区。
+  const confirmed = await request.post('/api/v1/me/handle/confirm', {
+    headers: { Authorization: `Bearer ${data.tokens.access}` },
+  });
+  expect(confirmed.ok()).toBe(true);
+  return data;
 }
 
 async function signIn(page: import('@playwright/test').Page, tokens: { access: string; refresh: string }) {
@@ -35,7 +41,7 @@ async function selectOrg(page: import('@playwright/test').Page, name: string) {
 
 test('本地账号：登录页 → 注册即进入控制台，退出回到登录页', async ({ page, request }) => {
   const email = `local-${Date.now()}@example.test`;
-  await request.post('/api/v1/auth/register', { data: { email, password, name: 'Local operator' } });
+  await account(request, email, 'Local operator');
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
 
@@ -63,6 +69,85 @@ test('本地账号：登录页 → 注册即进入控制台，退出回到登录
   await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
   await expect(page.getByRole('button', { name: '账户菜单' })).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+test('初次注册：先落款确认用户名，占用名被拒绝，确认后才进控制台', async ({ page, request }) => {
+  const stamp = Date.now();
+  const email = `onboard-${stamp}@example.test`;
+  // 另一个账号注册时会自动占住一个用户名，用来验证唯一性报错。
+  const takenEmail = `blocked-${stamp}@example.test`;
+  const blocked = await request.post('/api/v1/auth/register', { data: { email: takenEmail, password, name: 'Blocked' } });
+  expect(blocked.ok()).toBe(true);
+  const takenHandle = `blocked-${stamp}`;
+
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '没有账号？注册' }).click();
+  await page.getByLabel('邮箱').fill(email);
+  await page.getByLabel('昵称').fill('新来的人');
+  await page.getByLabel('密码').fill(password);
+  await page.getByRole('button', { name: '注册', exact: true }).click();
+
+  // 注册后停在落款页：控制台与旧的首页横条都不出现
+  await expect(page.getByRole('heading', { name: '定下你的用户名' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '账户菜单' })).toHaveCount(0);
+  await expect(page.getByText('确认后不能再改，它会成为定位符的第一段。')).toHaveCount(0);
+  await page.screenshot({ path: '/tmp/taboo-username-setup.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/taboo-username-setup-mobile.png' });
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  const handle = page.getByLabel('用户名', { exact: true });
+  // 保留字在提交前就被拦下
+  await handle.fill('login');
+  await handle.press('Tab');
+  await expect(page.getByText('「login」是保留字，换一个。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '确认用户名，进入控制台' })).toBeDisabled();
+
+  // 已被占用的用户名：服务端拒绝，仍停在落款页
+  await handle.fill(takenHandle);
+  await handle.press('Tab');
+  await page.getByRole('button', { name: '确认用户名，进入控制台' }).click();
+  await expect(page.getByRole('alert')).toContainText('已被占用');
+  await expect(page.getByRole('heading', { name: '定下你的用户名' })).toBeVisible();
+
+  // 换成唯一的名字：确认后进入控制台，首页不再有确认用户名的横条
+  await handle.fill(`operator-${stamp}`);
+  await page.getByRole('button', { name: '确认用户名，进入控制台' }).click();
+  await expect(page.getByRole('button', { name: '账户菜单' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '定下你的用户名' })).toHaveCount(0);
+  await expect(page.getByText('确认用户名', { exact: true })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('每次登录都检查用户名：未确认先落款，确认后再次进入直接进控制台', async ({ page, request }) => {
+  const stamp = Date.now();
+  const email = `returning-${stamp}@example.test`;
+  // 直接注册、不确认用户名，模拟「已有账号但从未确认」的再次登录。
+  const reg = await request.post('/api/v1/auth/register', { data: { email, password, name: 'Returning' } });
+  expect(reg.ok()).toBe(true);
+  const fixture = await reg.json();
+  await page.addInitScript((t) => {
+    localStorage.setItem('taboo.access', t.access);
+    localStorage.setItem('taboo.refresh', t.refresh);
+  }, fixture.tokens);
+
+  // 登录后任何入口都先检查：命令行授权页也不能绕过落款
+  await page.goto('/device');
+  await expect(page.getByRole('heading', { name: '定下你的用户名' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '命令行登录' })).toHaveCount(0);
+  await page.getByRole('button', { name: '确认用户名，进入控制台' }).click();
+  await expect(page.getByRole('heading', { name: '命令行登录' })).toBeVisible();
+
+  // 确认后重新进入和刷新都不再拦
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '账户菜单' })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: '账户菜单' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '定下你的用户名' })).toHaveCount(0);
 });
 
 test('本地账号：新建/显示/隐藏/编辑/删除密钥，版本抽屉，窄屏不溢出', async ({ page, request }) => {

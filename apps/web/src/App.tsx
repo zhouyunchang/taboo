@@ -3,6 +3,7 @@ import { api, getToken, setTokens, initializeBrowserSession, logout, checkSessio
 import type { User, Org } from './api';
 import Login from './pages/Login';
 import Workspace from './pages/Workspace';
+import UsernameSetup from './pages/UsernameSetup';
 import CliConsent from './components/CliConsent';
 import Icon from './design/Icon';
 import { Skeleton } from './design/primitives';
@@ -37,6 +38,8 @@ export default function App() {
   const [selectedOrg, setSelectedOrg] = useState('');
   const [changed, setChanged] = useState(false);
   const [loading, setLoading] = useState(true);
+  // 登录成功到 /me 返回之间的过渡：避免用不完整的登录响应先画出控制台。
+  const [entering, setEntering] = useState(false);
 
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -90,6 +93,12 @@ export default function App() {
     return () => { active = false; window.removeEventListener('taboo:logout', expired); };
   }, [attempt]);
 
+  function signOut() {
+    setError('');
+    logout().then(() => { setUser(null); setOrgs([]); })
+      .catch(() => setError('退出未完成，请检查网络后重试。'));
+  }
+
   if (changed) return (
     <div className="center-screen">
       <section className="card auth-card" aria-label="登录身份已变化">
@@ -110,6 +119,8 @@ export default function App() {
   );
 
   if (loading) return <BootSurface />;
+
+  if (entering) return <BootSurface label="正在进入控制台" />;
 
   if (!user && error) return (
     <div className="center-screen">
@@ -138,11 +149,14 @@ export default function App() {
       <Login
         onSuccess={(d) => {
           setTokens(d.tokens);
-          setUser(d.user);
+          setEntering(true);
           const invite = window.location.pathname.startsWith('/invite/')
             ? window.location.pathname.slice('/invite/'.length)
             : '';
-          const go = () => api.get<{ user: User; orgs: Org[] }>('/api/v1/me').then((m) => { setUser(m.user); setOrgs(m.orgs); });
+          const go = () => api.get<{ user: User; orgs: Org[] }>('/api/v1/me')
+            .then((m) => { setUser(m.user); setOrgs(m.orgs); })
+            .catch((e) => { setError(e instanceof Error ? e.message : '暂时无法进入控制台。'); })
+            .finally(() => setEntering(false));
           if (invite) {
             api.post(`/api/v1/invites/${invite}/accept`).then(() => { window.history.replaceState({}, '', '/'); go(); }).catch(go);
           } else {
@@ -153,21 +167,29 @@ export default function App() {
     );
   }
 
+  // 每次进入都按服务端最新状态判断（登录后的 /me、启动时的 /me、30s 刷新）：
+  // 未确认用户名就先落款，不因「注册过一次」而放行，也不在首页留提示条。
+  if (user.handle_confirmed === false) {
+    return (
+      <UsernameSetup
+        user={user}
+        onDone={(nextUser, nextOrgs) => { setUser(nextUser); setOrgs(nextOrgs); }}
+        onLogout={signOut}
+        logoutError={error}
+      />
+    );
+  }
+
   if (cliLogin) return <CliConsent orgs={orgs} />;
 
   return (
     <Workspace
       key={`${orgs.find(o=>o.id===selectedOrg)?.id || orgs[0]?.id}:${orgs.find(o=>o.id===selectedOrg)?.role || orgs[0]?.role}`}
       user={user}
-      onUser={setUser}
       orgs={selectedOrg ? [...orgs.filter(o=>o.id===selectedOrg),...orgs.filter(o=>o.id!==selectedOrg)] : orgs}
       onOrgChange={(next) => { invalidateRequests(); setOrgs(next); setSelectedOrg(next[0]?.id ?? ''); }}
       logoutError={error}
-      onLogout={() => {
-        setError('');
-        logout().then(() => { setUser(null); setOrgs([]); })
-          .catch(() => setError('退出未完成，请检查网络后重试。'));
-      }}
+      onLogout={signOut}
     />
   );
 }

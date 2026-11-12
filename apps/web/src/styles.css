@@ -672,6 +672,62 @@ button.key-link:focus-visible { outline: 2px solid var(--vermilion-hi); outline-
 .auth-book-prose { font-size: var(--fs-17); color: var(--faint); }
 .auth-book-colophon { margin: 0; font-size: var(--fs-13); line-height: var(--book-pitch); letter-spacing: 0.04em; color: var(--faint); }
 
+/* ---------- 入府落款：注册后先确认用户名，再进控制台 ---------- */
+.onboard-shell {
+  min-height: 100vh; display: flex; align-items: flex-start; justify-content: center;
+  padding: 48px var(--pad);
+  background:
+    radial-gradient(760px 520px at 50% 12%, rgb(212 67 46 / 9%), transparent 66%),
+    radial-gradient(680px 480px at 84% 100%, rgb(255 246 234 / 2.5%), transparent 70%);
+}
+.onboard-card {
+  width: 100%; max-width: 440px; margin: auto; display: flex; flex-direction: column; gap: 22px;
+  padding: 32px 32px 24px;
+  background: var(--ink-900);
+  border: 1px solid var(--border-strong); border-radius: var(--r-xl);
+}
+.onboard-head { display: flex; align-items: center; gap: 14px; }
+.onboard-head .seal-mark { width: 48px; height: 48px; font-size: 28px; border-radius: var(--r-md); }
+.onboard-head .seal-mark::after { inset: 5px; }
+.onboard-head-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.onboard-brand { font-size: var(--fs-13); color: var(--porcelain-dim); letter-spacing: 0.06em; }
+.onboard-brand .cjk { font-family: var(--font-cjk-display); font-size: 1.1em; letter-spacing: 0.16em; color: var(--fg); }
+.onboard-kicker { font-size: var(--fs-11); color: var(--faint); letter-spacing: 0.26em; }
+.onboard-intro { display: flex; flex-direction: column; gap: 8px; }
+.onboard-intro h1 { font-size: var(--fs-26); letter-spacing: 0.01em; }
+.onboard-lead { margin: 0; color: var(--muted); font-size: var(--fs-13); line-height: 1.7; }
+.onboard-form { display: flex; flex-direction: column; gap: 16px; }
+.handle-input {
+  display: flex; align-items: center;
+  background: var(--ink-925);
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.handle-input:hover { border-color: var(--ink-600); }
+.handle-input:focus-within { border-color: var(--vermilion); box-shadow: 0 0 0 3px rgb(212 67 46 / 16%); }
+.handle-input.is-invalid { border-color: var(--vermilion); }
+.handle-prefix { padding-left: 12px; font-family: var(--font-mono); font-size: var(--fs-15); color: var(--faint); }
+.handle-input input {
+  flex: 1; min-width: 0;
+  background: transparent; border: 0; border-radius: 0;
+  min-height: 44px; padding: 0 12px 0 2px;
+  font-family: var(--font-mono); font-size: var(--fs-14); font-weight: 500; letter-spacing: 0.01em;
+}
+.handle-input input:hover:not(:disabled) { border-color: transparent; }
+.handle-input input:focus { border-color: transparent; box-shadow: none; }
+.onboard-preview {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 14px;
+  background: var(--ink-925);
+  border: 1px solid var(--border); border-left: 2px solid var(--seal-line);
+  border-radius: var(--r-lg);
+}
+.onboard-locator { font-family: var(--font-mono); font-size: var(--fs-12); color: var(--porcelain-dim); overflow-wrap: anywhere; }
+.onboard-locator strong { color: var(--fg); font-weight: 520; }
+.onboard-sep { padding: 0 4px; color: var(--faint); }
+.onboard-actions { display: flex; flex-direction: column; gap: 8px; }
+.onboard-actions .btn { justify-content: center; }
+
 /* ---------- 版本标识 ---------- */
 .version-tag { margin: 0; font-size: var(--fs-11); overflow-wrap: anywhere; color: var(--faint); font-family: var(--font-mono); letter-spacing: -0.02em; }
 .sidebar-version { margin-top: auto; padding: 12px 10px 0; border-top: 1px solid var(--border-soft); }
@@ -1163,6 +1219,10 @@ button.key-link:focus-visible { outline: 2px solid var(--vermilion-hi); outline-
 }
 
 @media (max-width: 640px) {
+  /* 落款页：窄屏铺满，别让卡片边距吃掉输入宽度 */
+  .onboard-shell { padding: 20px 14px; align-items: flex-start; }
+  .onboard-card { padding: 24px 20px 18px; gap: 18px; border-radius: var(--r-lg); }
+  .onboard-intro h1 { font-size: var(--fs-20); }
   /* 密钥表 → 卡列表：Key + 版本 / 值 + 标签 / 时间 + 操作，一行一件事 */
   .secret-table[data-mobile='cards'], .secret-table[data-mobile='cards'] tbody { display: block; }
   .secret-table[data-mobile='cards'] thead { display: none; }

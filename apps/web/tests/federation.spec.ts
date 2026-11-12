@@ -11,7 +11,13 @@ test.beforeAll(async ({ request }) => {
     const data = { email, password: 'fixture-password', name: 'Fixture operator' };
     const register = await request.post('/api/v1/auth/register', { data });
     const res = register.status() === 409 ? await request.post('/api/v1/auth/login', { data }) : register;
-    expect(res.ok()).toBe(true); return res.json();
+    expect(res.ok()).toBe(true);
+    const fixture = await res.json();
+    // 控制台入口多了一道「先落款」：夹具账号先确认用户名，避免落到落款页。
+    expect((await request.post('/api/v1/me/handle/confirm', {
+      headers: { Authorization: `Bearer ${fixture.tokens.access}` },
+    })).ok()).toBe(true);
+    return fixture;
   }
   await account('browser-fixture@example.test');
   const owner = await account('a@example.test'); localTokens = owner.tokens; slug = 'a';
@@ -24,6 +30,16 @@ test.beforeAll(async ({ request }) => {
   expect(create.status()).toBe(201); providerID = (await create.json()).id;
 });
 
+/** 首次外部登录会先落到「落款」页；已确认用户名的会话直接进控制台。 */
+async function enterConsole(page: import('@playwright/test').Page) {
+  await page.waitForSelector('.onboard-card, .appbar');
+  if (await page.locator('.onboard-card').count()) {
+    await page.getByLabel('用户名', { exact: true }).fill('fixture-user');
+    await page.getByRole('button', { name: '确认用户名，进入控制台' }).click();
+    await expect(page.getByRole('heading', { name: '定下你的用户名' })).toHaveCount(0);
+  }
+}
+
 test('real Keycloak login, cookie session, isolation, CSRF, logout', async ({ page, context }) => {
   const errors: string[] = []; page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');
@@ -31,6 +47,7 @@ test('real Keycloak login, cookie session, isolation, CSRF, logout', async ({ pa
   await page.getByLabel('Username').fill('fixture-user');
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await enterConsole(page);
   await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
   await expect(page.getByText('外部登录 · 当前组织：', { exact: false })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('taboo.access'))).toBeNull();
@@ -81,6 +98,7 @@ test('provider disable invalidates an existing browser session', async ({ page, 
   await page.goto('/'); await page.getByRole('button', { name: '使用 Standard OIDC 登录', exact: true }).click();
   await page.getByLabel('Username').fill('fixture-user'); await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await enterConsole(page);
   await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
   expect((await request.patch(`/api/v1/orgs/${slug}/oidc/${providerID}`, { headers: { Authorization: `Bearer ${localTokens.access}` }, data: { enabled: false } })).status()).toBe(200);
   await page.reload(); await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
@@ -108,6 +126,7 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
   await page.getByLabel('Username').fill('fixture-user');
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await enterConsole(page);
   await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
   const uid = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()).user.id);
   const headers = { Authorization: `Bearer ${localTokens.access}` };
@@ -163,6 +182,7 @@ test('identity replacement proves both sign-ins and preserves membership and sec
   await page.getByLabel('Username').fill('fixture-user');
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await enterConsole(page);
   await expect(page.getByRole('button', { name: '登录身份', exact: true })).toBeVisible();
   const original = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()));
   await page.getByRole('button', { name: '登录身份', exact: true }).click();
@@ -175,6 +195,7 @@ test('identity replacement proves both sign-ins and preserves membership and sec
   await dialog.getByRole('button', { name: '验证新身份并更换', exact: true }).click();
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+  await enterConsole(page);
   await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
   const current = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()));
   expect(current.user.id).toBe(original.user.id); expect(current.orgs).toEqual(original.orgs);
@@ -189,6 +210,7 @@ test('external owner manages standard governance and safely retries a lost write
   expect((await request.patch(`/api/v1/orgs/a/oidc/${providerID}`,{headers,data:{enabled:true}})).ok()).toBe(true);
   await page.goto(`/api/v1/auth/oidc/a/login?pid=${providerID}`);
   await page.getByLabel('Username').fill('fixture-user');await page.getByLabel('Password',{exact:true}).fill('fixture-password');await page.getByRole('button',{name:'Sign In',exact:true}).click();
+  await enterConsole(page);
   await expect(page.getByRole('button',{name:'退出',exact:true})).toBeVisible();
   const uid=await page.evaluate(async()=>(await(await fetch('/api/v1/me')).json()).user.id);
   expect((await request.patch(`/api/v1/orgs/a/members/${uid}`,{headers,data:{role:'owner'}})).ok()).toBe(true);
