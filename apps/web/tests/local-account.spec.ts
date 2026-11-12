@@ -28,15 +28,14 @@ async function signIn(page: import('@playwright/test').Page, tokens: { access: s
   await expect(page.getByRole('button', { name: '账户菜单' })).toBeVisible();
 }
 
-/** 通过账户菜单的「当前组织」选择器切换组织，并等到工作区按新组织重挂载。 */
+/** 通过「账户菜单 → 管理组织」进入管理页，选中空间并进入控制台。 */
 async function selectOrg(page: import('@playwright/test').Page, name: string) {
   await page.getByRole('button', { name: '账户菜单' }).click();
-  const picker = page.getByRole('combobox', { name: '当前组织', exact: true });
-  const option = picker.locator('option', { hasText: name });
-  await expect(option).toHaveCount(1);
-  const value = await option.getAttribute('value');
-  await picker.selectOption(value ?? '');
-  await expect(page.locator('.rail-owner-name')).toHaveText(name);
+  await page.getByRole('button', { name: '管理组织' }).click();
+  await expect(page.locator('.spaces-shell')).toBeVisible();
+  await page.locator('.space-row').filter({ hasText: name }).click();
+  await page.getByRole('button', { name: '进入控制台' }).click();
+  await expect(page.locator('.ctx-owner')).toContainText(name);
 }
 
 test('本地账号：登录页 → 注册即进入控制台，退出回到登录页', async ({ page, request }) => {
@@ -148,6 +147,68 @@ test('每次登录都检查用户名：未确认先落款，确认后再次进�
   await page.reload();
   await expect(page.getByRole('button', { name: '账户菜单' })).toBeVisible();
   await expect(page.getByRole('heading', { name: '定下你的用户名' })).toHaveCount(0);
+});
+
+test('组织管理页：空间列表、创建组织、进入并切回个人空间', async ({ page, request }) => {
+  const owner = await account(request, `orgadmin-${Date.now()}@example.test`, '组织 owner');
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await signIn(page, owner.tokens);
+
+  // 账户菜单现在是账户动作 + 一个「管理组织」入口
+  await page.getByRole('button', { name: '账户菜单' }).click();
+  await expect(page.getByRole('button', { name: '管理组织' })).toBeVisible();
+  await page.waitForTimeout(260);
+  await page.screenshot({ path: '/tmp/taboo-org-menu.png' });
+  await page.getByRole('button', { name: '管理组织' }).click();
+  await expect(page.locator('.spaces-shell')).toBeVisible();
+  await expect(page.locator('.space-row').filter({ hasText: '个人空间' })).toHaveCount(1);
+  expect(await page.evaluate(() => location.pathname)).toBe('/organizations');
+  // 直接刷新管理页 URL 也能落到同一面（不需要先回工作台）
+  await page.reload();
+  await expect(page.locator('.spaces-shell')).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.screenshot({ path: '/tmp/taboo-org-admin.png' });
+
+  // 新建组织：页内独立表单，code 有定位符前缀预览
+  await page.getByRole('button', { name: '新建组织' }).click();
+  await expect(page.getByRole('heading', { name: '新建组织' })).toBeVisible();
+  await page.getByLabel('显示名称', { exact: true }).fill('设计系统');
+  const code = `design-${Date.now()}`;
+  await page.getByLabel('组织 code', { exact: true }).fill(code);
+  await expect(page.locator('.space-code-preview code')).toContainText(code);
+  await page.screenshot({ path: '/tmp/taboo-org-create.png' });
+  await page.getByRole('button', { name: '创建组织' }).click();
+  await expect(page.getByRole('heading', { name: '设计系统' })).toBeVisible();
+  await expect(page.getByText('已创建组织')).toBeVisible();
+  await expect(page.locator('.space-row').filter({ hasText: '设计系统' })).toHaveCount(1);
+  await page.screenshot({ path: '/tmp/taboo-org-detail.png' });
+
+  // 进入组织，工作台上下文切换
+  await page.getByRole('button', { name: '进入控制台' }).click();
+  await expect(page.locator('.ctx-owner')).toContainText('设计系统');
+  expect(await page.evaluate(() => location.pathname)).toBe('/');
+
+  // 从管理页切回个人空间
+  await page.getByRole('button', { name: '账户菜单' }).click();
+  await page.getByRole('button', { name: '管理组织' }).click();
+  await page.locator('.space-row').filter({ hasText: '个人空间' }).click();
+  await page.getByRole('button', { name: '进入控制台' }).click();
+  await expect(page.locator('.ctx-owner')).toContainText('个人');
+
+  // 窄屏：先看列表，选中后看详情，可返回列表
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: '账户菜单' }).click();
+  await page.getByRole('button', { name: '管理组织' }).click();
+  await expect(page.locator('.spaces-shell')).toHaveAttribute('data-mobile-view', 'list');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/taboo-org-admin-mobile.png' });
+  await page.locator('.space-row').filter({ hasText: '个人空间' }).click();
+  await expect(page.getByRole('button', { name: '空间列表' })).toBeVisible();
+  await page.screenshot({ path: '/tmp/taboo-org-detail-mobile.png' });
+  await page.getByRole('button', { name: '空间列表' }).click();
+  await expect(page.locator('.space-row').first()).toBeVisible();
+  expect(errors).toEqual([]);
 });
 
 test('本地账号：新建/显示/隐藏/编辑/删除密钥，版本抽屉，窄屏不溢出', async ({ page, request }) => {

@@ -15,8 +15,11 @@ test('version diff masks values, escape restores focus, and a viewer cannot read
   for (const fixture of [owner, viewer]) {
     expect((await request.post('/api/v1/me/handle/confirm', { headers: { Authorization: `Bearer ${fixture.tokens.access}` } })).ok()).toBeTruthy();
   }
-  expect((await request.post('/api/v1/orgs/phase4-owner/members', { headers, data: { email: viewerBody.email, role: 'viewer' } })).ok()).toBeTruthy();
-  const projects = await (await request.get('/api/v1/orgs/phase4-owner/projects', { headers })).json();
+  // 个人空间不能共享：版本对比的共享组织单独创建。
+  const shared = await request.post('/api/v1/orgs', { headers, data: { name: 'Phase4 shared', code: 'phase4-shared' } });
+  expect(shared.status(), await shared.text()).toBe(201);
+  expect((await request.post('/api/v1/orgs/phase4-shared/members', { headers, data: { email: viewerBody.email, role: 'viewer' } })).ok()).toBeTruthy();
+  const projects = await (await request.get('/api/v1/orgs/phase4-shared/projects', { headers })).json();
   const projectId = projects.projects[0].id;
   const key = `PHASE4_${Date.now()}`;
   expect((await request.post(`/api/v1/projects/${projectId}/secrets`, { headers, data: { key, value: secret } })).ok()).toBeTruthy();
@@ -46,10 +49,7 @@ test('version diff masks values, escape restores focus, and a viewer cannot read
 
   await page.evaluate((tokens) => sessionStorage.setItem('phase4-tokens', JSON.stringify(tokens)), viewer.tokens);
   await page.goto('/');
-  const orgSelect = page.getByLabel('当前组织');
-  const viewerOrg = orgSelect.locator('option', { hasText: '(viewer)' });
-  await expect(viewerOrg).toHaveCount(1);
-  await orgSelect.selectOption(await viewerOrg.getAttribute('value') ?? '');
+  // 共享组织排在个人空间前面，viewer 直接落在 Phase4 shared 的密钥面。
   await page.getByRole('button', { name: key, exact: true }).click();
   const viewerDialog = page.getByRole('dialog', { name: '版本历史' });
   await expect(viewerDialog.getByText('需要 reveal 权限才能对比版本内容。')).toBeVisible();

@@ -15,13 +15,14 @@ import ImportEnv from '../components/ImportEnv';
 import ScanReports from '../components/ScanReports';
 import Icon from '../design/Icon';
 import type { IconName } from '../design/Icon';
-import { Button, Check, EmptyState, Field, IconButton, MetaList, Notice, PageHead, Pill, Section, Select, Skeleton, TableWrap } from '../design/primitives';
+import { Button, Check, EmptyState, Field, IconButton, MetaList, Notice, PageHead, Pill, Section, Skeleton, TableWrap } from '../design/primitives';
 import { FolderTree, SecretRow } from '../ui/SecretRows';
+import { normalizeCode, suggestCode } from '../pathcode';
 
 interface Props {
   user: User;
   orgs: Org[];
-  onOrgChange: (orgs: Org[]) => void;
+  onManageOrgs: () => void;
   onLogout: () => void;
   logoutError?: string;
 }
@@ -31,7 +32,7 @@ type Menu = 'project' | 'account' | null;
 
 interface RailItem { tab: Tab; label: string; icon: IconName; current?: boolean }
 
-export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutError }: Props) {
+export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutError }: Props) {
   const org = orgs[0];
   const federated = hasBrowserSession();
   const session = getBrowserSessionInfo();
@@ -39,7 +40,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
   const [project, setProject] = useState<Project | null>(null);
   const [tab, setTab] = useState<Tab>('secrets');
   const [menu, setMenu] = useState<Menu>(null);
-  const [draft, setDraft] = useState<'project' | 'org' | null>(null);
+  const [draft, setDraft] = useState<'project' | null>(null);
   const [draftName, setDraftName] = useState('');
   const [draftCode, setDraftCode] = useState('');
   const [switchOrg, setSwitchOrg] = useState(false);
@@ -77,37 +78,23 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
 
   useEffect(() => { loadProjects().catch((e) => setError(String(e))); }, [loadProjects]);
 
-  function suggestCode(name: string) {
-    return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 39);
-  }
-
-  function openDraft(kind: 'project' | 'org') {
-    setDraft(kind);
+  function openDraft() {
+    setDraft('project');
     setDraftName('');
     setDraftCode('');
-    setMenu(kind === 'project' ? 'project' : 'account');
+    setMenu('project');
   }
 
   async function submitDraft(e: React.FormEvent) {
     e.preventDefault();
     const name = draftName.trim();
-    const code = (draftCode.trim() || suggestCode(name)).toLowerCase();
+    const code = normalizeCode(draftCode) || suggestCode(name);
     if (!name || !code) return;
     try {
-      if (draft === 'project') {
-        await api.post(`/api/v1/orgs/${org.slug}/projects`, { name, code });
-        setDraft(null);
-        setMenu(null);
-        await loadProjects();
-      } else {
-        const made = await api.post<{ id: string }>('/api/v1/orgs', { name, code });
-        const m = await api.get<{ orgs: Org[] }>('/api/v1/me');
-        const next = m.orgs ?? [];
-        onOrgChange([...next.filter((item) => item.id === made.id), ...next.filter((item) => item.id !== made.id)]);
-        setDraft(null);
-        setMenu(null);
-        setTab('secrets');
-      }
+      await api.post(`/api/v1/orgs/${org.slug}/projects`, { name, code });
+      setDraft(null);
+      setMenu(null);
+      await loadProjects();
     } catch (err) { setError(err instanceof ApiError ? err.message : String(err)); }
   }
 
@@ -115,8 +102,6 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
 
   const personal = org.kind === 'personal';
   const ownerLabel = personal ? '个人' : org.name;
-  const personalOrgs = orgs.filter((item) => item.kind === 'personal');
-  const sharedOrgs = orgs.filter((item) => item.kind !== 'personal');
   const canAdmin = org.role === 'owner' || org.role === 'admin';
   const canDelegate = org.role === 'owner' || (!federated && org.role === 'admin');
   const canAudit = org.role === 'owner' || org.role === 'admin';
@@ -199,7 +184,7 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
               {projects.length === 0 && <p className="section-hint" style={{ padding: '0 8px 6px' }}>还没有项目</p>}
               <div className="pop-sep" />
               {canAdmin && draft !== 'project' && (
-                <div className="pop-foot"><Button variant="quiet" icon="plus" onClick={() => openDraft('project')}>新建项目</Button></div>
+                <div className="pop-foot"><Button variant="quiet" icon="plus" onClick={openDraft}>新建项目</Button></div>
               )}
               {draft === 'project' && (
                 <form className="pop-form" onSubmit={(e) => void submitDraft(e)}>
@@ -234,54 +219,19 @@ export default function Workspace({ user, orgs, onOrgChange, onLogout, logoutErr
                   <span className="rail-owner-meta">{user.email}</span>
                 </div>
                 <div className="pop-sep" />
-                <Field label="当前组织" htmlFor="appbar-current-org">
-                  <Select id="appbar-current-org" value={org.id}
-                    onChange={(e) => { const next = orgs.find((o) => o.id === e.target.value); if (next) { onOrgChange([next, ...orgs.filter((o) => o.id !== next.id)]); setMenu(null); } }}>
-                    {orgs.map((item) => (
-                      <option key={item.id} value={item.id}>{item.kind === 'personal' ? '个人' : item.name}（{item.role}）</option>
-                    ))}
-                  </Select>
-                </Field>
-                <div className="pop-head">切换到</div>
-                <ul className="pop-list">
-                  {personalOrgs.map((item) => (
-                    <li key={item.id}>
-                      <button type="button" className={`pop-item ${item.id === org.id ? 'active' : ''}`}
-                        onClick={() => { onOrgChange([item, ...orgs.filter((o) => o.id !== item.id)]); setMenu(null); }}>
-                        <Icon name="users" size={14} /><span className="pop-item-main"><span className="pop-item-name">个人</span></span>
-                        {item.id === org.id && <Icon name="check" size={13} className="check" />}
-                      </button>
-                    </li>
-                  ))}
-                  {sharedOrgs.map((item) => (
-                    <li key={item.id}>
-                      <button type="button" className="pop-item" onClick={() => { onOrgChange([item, ...orgs.filter((o) => o.id !== item.id)]); setMenu(null); }}>
-                        <Icon name="shield" size={14} />
-                        <span className="pop-item-main">
-                          <span className="pop-item-name">{item.name}</span>
-                          <span className="pop-item-sub">{item.role}</span>
-                        </span>
-                        {item.id === org.id && <Icon name="check" size={13} className="check" />}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <div className="pop-head">空间</div>
+                <button type="button" className="pop-item" aria-label="管理组织"
+                  onClick={() => { setMenu(null); onManageOrgs(); }}>
+                  <Icon name={personal ? 'users' : 'shield'} size={14} />
+                  <span className="pop-item-main">
+                    <span className="pop-item-name">管理组织</span>
+                    <span className="pop-item-sub">{personal ? '个人空间' : ownerLabel} · {org.role}</span>
+                  </span>
+                  <Icon name="chevron-right" size={13} />
+                </button>
                 {federated && (
-                  <Button variant="quiet" icon="refresh" onClick={() => { setMenu(null); setSwitchOrg(true); }}>切换组织</Button>
+                  <div className="pop-foot"><Button variant="quiet" icon="refresh" onClick={() => { setMenu(null); setSwitchOrg(true); }}>切换组织</Button></div>
                 )}
-                {!federated && (draft === 'org' ? (
-                  <form className="pop-form" onSubmit={(e) => void submitDraft(e)}>
-                    <div className="pop-head">创建组织</div>
-                    <Field label="显示名称"><input aria-label="组织名称" placeholder="显示名称" value={draftName} onChange={(e) => setDraftName(e.target.value)} required autoFocus /></Field>
-                    <Field label="组织 code" hint="留空则按名称生成。"><input aria-label="组织 code" placeholder="组织 code" value={draftCode} onChange={(e) => setDraftCode(e.target.value)} /></Field>
-                    <div className="form-actions">
-                      <Button variant="quiet" onClick={() => setDraft(null)}>取消</Button>
-                      <Button variant="primary" type="submit">创建组织</Button>
-                    </div>
-                  </form>
-                ) : (
-                  <div className="pop-foot"><Button variant="quiet" icon="plus" onClick={() => openDraft('org')}>创建组织</Button></div>
-                ))}
                 {!federated && (
                   <div className="pop-foot">
                     <Button variant="quiet" icon="lock" onClick={() => { setMenu(null); setShow2FA(true); }}>两步验证</Button>

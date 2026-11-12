@@ -4,6 +4,7 @@ import type { User, Org } from './api';
 import Login from './pages/Login';
 import Workspace from './pages/Workspace';
 import UsernameSetup from './pages/UsernameSetup';
+import Organizations from './pages/Organizations';
 import CliConsent from './components/CliConsent';
 import Icon from './design/Icon';
 import { Skeleton } from './design/primitives';
@@ -35,8 +36,10 @@ function BootSurface({ label = '正在检查登录状态' }: { label?: string })
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [orgs, setOrgs] = useState<Org[]>([]);
-  const [selectedOrg, setSelectedOrg] = useState('');
   const [changed, setChanged] = useState(false);
+  // 全屏管理页与工作台都是同一会话下的两个入口；/organizations 可直接刷新进入。
+  const [view, setView] = useState<'workspace' | 'organizations'>(() =>
+    location.pathname === '/organizations' ? 'organizations' : 'workspace');
   const [loading, setLoading] = useState(true);
   // 登录成功到 /me 返回之间的过渡：避免用不完整的登录响应先画出控制台。
   const [entering, setEntering] = useState(false);
@@ -46,8 +49,10 @@ export default function App() {
   useEffect(() => {
     if (new URLSearchParams(location.search).has('signed_in')) { announceSession(); history.replaceState({}, '', '/'); }
     const changed = () => { setChanged(true); setUser(null); setOrgs([]); };
+    const route = () => setView(location.pathname === '/organizations' ? 'organizations' : 'workspace');
     window.addEventListener('taboo:session-changed', changed);
-    return () => window.removeEventListener('taboo:session-changed', changed);
+    window.addEventListener('popstate', route);
+    return () => { window.removeEventListener('taboo:session-changed', changed); window.removeEventListener('popstate', route); };
   }, []);
   useEffect(() => {
     if (!user || changed) return;
@@ -58,7 +63,16 @@ export default function App() {
       try {
         await checkSessionContinuity();
         const d=await api.get<{user:User;orgs:Org[]}>('/api/v1/me');
-        if(live){setUser(d.user);setOrgs(d.orgs); window.dispatchEvent(new Event('taboo:permissions-refresh'));}
+        if(live){
+          setUser(d.user);
+          // 刷新 /me 时把当前空间留在第一位：组织页与工作台都以 orgs[0] 为当前上下文。
+          setOrgs((prev) => {
+            const currentId = prev[0]?.id;
+            const current = currentId ? d.orgs.find((item) => item.id === currentId) : undefined;
+            return current ? [current, ...d.orgs.filter((item) => item.id !== currentId)] : d.orgs;
+          });
+          window.dispatchEvent(new Event('taboo:permissions-refresh'));
+        }
       } catch { if(live) window.dispatchEvent(new Event('taboo:verification-unavailable')); }
       finally {running=false;}
     };
@@ -93,10 +107,32 @@ export default function App() {
     return () => { active = false; window.removeEventListener('taboo:logout', expired); };
   }, [attempt]);
 
+  function goWorkspace() {
+    if (location.pathname !== '/') history.pushState({}, '', '/');
+    setView('workspace');
+  }
+
+  function goOrganizations() {
+    if (location.pathname !== '/organizations') history.pushState({}, '', '/organizations');
+    setView('organizations');
+  }
+
+  /** 从管理页进入某个空间：把它排到第一位，工作台的 key 随之变化。 */
+  function enterSpace(orgId: string) {
+    const target = orgs.find((item) => item.id === orgId);
+    if (!target) return;
+    invalidateRequests();
+    setOrgs([target, ...orgs.filter((item) => item.id !== orgId)]);
+    goWorkspace();
+  }
+
   function signOut() {
     setError('');
-    logout().then(() => { setUser(null); setOrgs([]); })
-      .catch(() => setError('退出未完成，请检查网络后重试。'));
+    logout().then(() => {
+      setUser(null); setOrgs([]);
+      if (location.pathname !== '/') history.pushState({}, '', '/');
+      setView('workspace');
+    }).catch(() => setError('退出未完成，请检查网络后重试。'));
   }
 
   if (changed) return (
@@ -182,12 +218,22 @@ export default function App() {
 
   if (cliLogin) return <CliConsent orgs={orgs} />;
 
+  if (view === 'organizations') {
+    return <Organizations
+      user={user}
+      orgs={orgs}
+      onOrgsChange={setOrgs}
+      onEnter={enterSpace}
+      onBack={goWorkspace}
+    />;
+  }
+
   return (
     <Workspace
-      key={`${orgs.find(o=>o.id===selectedOrg)?.id || orgs[0]?.id}:${orgs.find(o=>o.id===selectedOrg)?.role || orgs[0]?.role}`}
+      key={`${orgs[0]?.id}:${orgs[0]?.role}`}
       user={user}
-      orgs={selectedOrg ? [...orgs.filter(o=>o.id===selectedOrg),...orgs.filter(o=>o.id!==selectedOrg)] : orgs}
-      onOrgChange={(next) => { invalidateRequests(); setOrgs(next); setSelectedOrg(next[0]?.id ?? ''); }}
+      orgs={orgs}
+      onManageOrgs={goOrganizations}
       logoutError={error}
       onLogout={signOut}
     />

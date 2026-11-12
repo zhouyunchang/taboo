@@ -81,10 +81,19 @@ The login screen is a split spread: the left half is the gate (the form, `.auth-
 A confirmed username is a sealed act, so it is not a notice bar inside the console: `.onboard-shell` is a full-page stop before the workspace, one `.onboard-card` on the ink ground (seam border, no shadow, 440px wide, stacking to full width ≤640px). The check runs on **every entry** — after a password/OIDC login, after the boot `/me`, after a 30s refresh — whenever the server says `handle_confirmed === false`; confirming once is what retires the screen.
 
 - **Head** — the 48px 印, `taboo · 禁制`, and the kicker `入府 · 落款`; then `定下你的用户名` at `--fs-26` and one paragraph saying what the name is for: the 第一段 of the locator and what the audit records.
-- **Field** — a `.handle-input` seam with a mono `/` prefix; the input is mono and 44px tall. `.onboard-preview` prints the locator the name produces (`用户名/default/目录 / 密钥`) in mono behind a 2px `--seal-line` left rule, so editing the name visibly edits the address.
+- **Field** — a `.handle-input` seam with a mono `/` prefix; the input is mono and 44px tall. `.onboard-preview` prints the locator the name produces (`用户名/default/目录 / 密钥`) in mono inside a quiet seam block, so editing the name visibly edits the address.
 - **Actions** — one vermilion primary `确认用户名，进入控制台`, one quiet `退出登录`. Confirming is the only path in; the screen has no skip.
 - **Rules** — format and reserved-word errors are stated inline in Chinese before submit; the server remains the only judge of uniqueness, and `CODE_TAKEN` is rewritten as `「name」已被占用，换一个再试。`. Confirmed names lock server-side (`HANDLE_LOCKED`); the screen does not restate the lock.
 - **No footer** — the card ends after 退出登录; the build stamp stays on the login leaf and in the rail, not on this one-off sheet.
+
+## The space registry (组织管理)
+
+`/organizations` is a full-screen register, not a popover. It keeps the console's world: a sticky topbar with the 印, `taboo 禁制 / 组织`, the current operator and `返回控制台`; below it a 264px left index and the opened folio.
+
+- **Index** — `个人与组织` head, then seam rows: a 32px mark (circle = 个人空间, square = 组织), name, `code · role`, and one vermilion `当前` pill on the active context. Selection is `--ink-850` with no second accent. `新建组织` sits at the index foot as a default-weight button, not a second primary.
+- **Folio** — the selected space's management sheet: 56px mark, name at `--fs-26`, `code · 角色`, one vermilion `进入控制台`, a `MetaList` (类型 / 成员 / 项目), project seam rows, member seam rows for owners (non-owners see a teaching notice), and a footnote pointing at 组织设置 inside the console. `新建组织` swaps the sheet for an in-page form — 显示名称, 组织 code with the locator prefix (`code/default/…`) previewed, no modal.
+- **External sessions** — a federated session is bound to one organization, so the sheet keeps `进入控制台` enabled only for the current space and states why; creation is disabled with the same reason.
+- **Narrow** — ≤900px the register becomes two views: index first, then the selected sheet with a `空间列表` back button; ≤640px the wordmark and crumb collapse to the seal and `组织`.
 
 ## Signature behaviours
 
