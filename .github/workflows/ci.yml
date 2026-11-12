@@ -105,6 +105,15 @@ jobs:
       - run: npm exec --workspace=@taboo/web -- tsc --noEmit
       - name: Public Keycloak, negative protocol tests and real browser
         run: TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
+      - name: Upload Playwright failure context
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-federation
+          path: |
+            apps/web/test-results
+            apps/web/playwright-report
+          if-no-files-found: ignore
 
   postgres:
     runs-on: ubuntu-latest
