@@ -25,7 +25,7 @@
 - [x] 导入：`.env`、Doppler JSON、1Password `op` JSON。预览、`skip`/`overwrite`、CLI `import --format`、控制台对话框；文件夹和密钥在同一个事务里写入
 - [x] 版本对比（默认掩码）和扫描报告。上传时的命中原文只用于计算组织 HMAC，不落库；升级前的报告仍以 `sha256` 标出。owner/admin 可删除报告
 - [x] 动态密钥：PostgreSQL（`VALID UNTIL`）和 MySQL（`PASSWORD EXPIRE`，到期 `DROP USER`）短期只读账号
-- [x] 轮换策略：按间隔或五段 cron 发出 `secret.rotation_due`，由 webhook 通知外部轮换器回写新版本
+- [x] 轮换：独立 worker、轮次/负责人/宽限期/逾期、fixed 不轮换、存储级 CSPRNG 随机生成、外部 Webhook 回写
 - [x] 审批：项目可要求写入、删除、回滚先经另一名管理员批准；默认关闭，可在项目设置里开启
 - [x] 限时访问：申请 reveal/export/write/delete/rollback，到期立刻失效
 - [x] SCIM 2.0 用户和组、OIDC Back-Channel Logout、CLI `login --browser` / `login --device`

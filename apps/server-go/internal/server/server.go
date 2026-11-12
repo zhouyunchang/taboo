@@ -93,6 +93,7 @@ type Deps struct {
 	DisableRegister bool
 	DisablePassword bool
 	WorkerCtx       context.Context
+	Rotation        *rotation.Service
 	GitHub          ghsvc.Config // Instance-level "Sign in with GitHub" (disabled unless configured).
 }
 
@@ -320,6 +321,13 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	orgs := &orgsvc.Service{DB: d.DB, ControlDB: d.AccountDB, LookupLocalUser: d.LookupLocalUser, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, DEKs: d.DEKs, DataDir: d.DataDir, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
 	folders := &folder.Service{DB: d.DB, ControlDB: d.AccountDB}
 	secrets := &secretsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs, Events: d.Events}
+	rot := d.Rotation
+	if rot == nil {
+		rot = &rotation.Service{DB: d.DB}
+	}
+	if rot.Secrets == nil {
+		rot.Secrets = secrets
+	}
 	identities := &identity.Service{DB: d.DB, JWTSecret: d.JWTSecret}
 	totps := &totpsvc.Service{DB: d.AccountDB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret}
 	syncs := &syncsvc.Service{DB: d.DB, MasterKey: d.MasterKey, DEKs: d.DEKs}
@@ -327,6 +335,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 	dyn := d.Dynamic.WithDB(d.DB)
 	oidcSvc := &oidc.Service{DB: d.DB, MasterKey: d.MasterKey, JWTSecret: d.JWTSecret, PublicOrigin: d.PublicOrigin, SessionProfile: d.SessionProfile, IssuerAllowlist: d.IssuerAllowlist, DisableRegister: d.DisableRegister, DisablePassword: d.DisablePassword}
 	orgs.Routes(r)
+	rot.OrgRoutes(r)
 	r.Get("/access", secrets.Access)
 	r.Put("/access", secrets.Access)
 	r.Post("/access", secrets.Access)
@@ -357,7 +366,7 @@ func protectedRoutes(d *Deps) *chi.Mux {
 		r.Patch("/", orgs.PatchProject)
 		folders.Routes(r)
 		secrets.Routes(r)
-		(&rotation.Service{DB: d.DB}).Routes(r)
+		rot.Routes(r)
 		dyn.Routes(r)
 	})
 	return r

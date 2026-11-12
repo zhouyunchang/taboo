@@ -23,6 +23,13 @@ type SecretEvent struct {
 	ActorID     string
 	ActorName   string
 	ActorKind   string // user | identity
+	// Rotation run metadata; empty for ordinary secret events.
+	RunID      string
+	PolicyID   string
+	Mode       string
+	OldVersion int
+	DueAt      int64
+	GraceUntil int64
 }
 
 // Bus is the in-process list of durable consumers. Dispatch runs inside the

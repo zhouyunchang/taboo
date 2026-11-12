@@ -164,3 +164,20 @@ func (s schedule) matches(t time.Time) bool {
 	}
 	return dom || dow
 }
+
+// nextAfter advances an interval schedule in whole periods until it is after
+// now, preserving the original phase. A cron schedule is absolute, so it is
+// recomputed from now.
+func nextAfter(due time.Time, interval int, cron string, now time.Time) (time.Time, error) {
+	if strings.TrimSpace(cron) != "" {
+		return nextRun(now, 0, cron)
+	}
+	if interval < minInterval {
+		return time.Time{}, fmt.Errorf("interval_seconds out of range")
+	}
+	next := due.Add(time.Duration(interval) * time.Second)
+	for !next.After(now) {
+		next = next.Add(time.Duration(interval) * time.Second)
+	}
+	return next, nil
+}

@@ -5,7 +5,7 @@ import { api, ApiError, hasBrowserSession } from '../api';
 import type { SecretMeta, Version } from '../api';
 import useSecretMutation from '../components/useSecretMutation';
 import VersionDiff from '../components/VersionDiff';
-import RotationPolicy from '../components/RotationPolicy';
+import RotationPanel from '../components/RotationPanel';
 import { fmtTime, timeTitle } from '../time';
 import Icon from '../design/Icon';
 import { Button, IconButton, MetaList, Notice, Pill, Skeleton } from '../design/primitives';
@@ -16,10 +16,12 @@ function copyText(text: string) {
   return navigator.clipboard?.writeText(text) ?? Promise.reject(new Error('clipboard unavailable'));
 }
 
-export default function SecretDetail({ projectId, projectSlug, meta, onClose, onChanged, onEdit }: {
+export default function SecretDetail({ projectId, projectSlug, meta, onClose, onChanged, onEdit, initialTab = 'overview' }: {
   projectId: string; projectSlug: string; meta: SecretMeta;
   onClose: () => void; onChanged: () => void; onEdit: () => void;
+  initialTab?: 'overview' | 'rotation';
 }) {
+  const [tab, setTab] = useState<'overview' | 'rotation'>(initialTab);
   const secretKey = meta.key;
   const folder = meta.folder;
   const mutate = useSecretMutation();
@@ -104,7 +106,7 @@ export default function SecretDetail({ projectId, projectSlug, meta, onClose, on
   }
 
   return (
-    <dialog ref={dialogRef} className="detail-dialog" aria-label="版本历史"
+    <dialog ref={dialogRef} className="detail-dialog" aria-label="密钥详情"
       onCancel={(e) => { e.preventDefault(); onClose(); }}>
       <header className="detail-head">
         <div className="detail-title">
@@ -115,6 +117,12 @@ export default function SecretDetail({ projectId, projectSlug, meta, onClose, on
       </header>
 
       <div className="detail-body">
+        <div className="tabs" role="tablist" aria-label="密钥详情分区">
+          <button type="button" role="tab" aria-selected={tab === 'overview'} className={`tab ${tab === 'overview' ? 'active' : ''}`} onClick={() => setTab('overview')}>概览</button>
+          <button type="button" role="tab" aria-selected={tab === 'rotation'} className={`tab ${tab === 'rotation' ? 'active' : ''}`} onClick={() => setTab('rotation')}>轮换</button>
+        </div>
+        {tab === 'overview' ? (
+          <>
         <div className="detail-value">
           <div className="detail-value-row">
             <span className="detail-value-text">
@@ -184,7 +192,10 @@ export default function SecretDetail({ projectId, projectSlug, meta, onClose, on
           ? <VersionDiff projectId={projectId} folder={folder} secretKey={secretKey} versions={versions ?? []} />
           : <p className="muted">需要 reveal 权限才能对比版本内容。</p>}
 
-        <RotationPolicy projectId={projectId} folder={folder} secretKey={secretKey} canWrite={meta.canWrite} />
+          </>
+        ) : (
+          <RotationPanel projectId={projectId} folder={folder} secretKey={secretKey} canWrite={meta.canWrite} canReveal={meta.canReveal} onChanged={onChanged} />
+        )}
 
         {copied.on && <FlashDialog text="已复制 · 20 秒后清空剪贴板" />}
         <div className="form-actions">

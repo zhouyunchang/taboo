@@ -39,7 +39,7 @@ func TestPhase5ImportRotationAndScanBoundaries(t *testing.T) {
 	}
 
 	checkStatus(t, f.localRequest("POST", "/api/v1/projects/project-a/secrets", `{"key":"ROTATE_ME","value":"rotation-plaintext","expectedVersion":0}`, "p5-rot"), 200)
-	checkStatus(t, f.localRequest("PUT", "/api/v1/projects/project-a/secrets/ROTATE_ME/rotation", `{"interval_seconds":3600}`, "p5-policy"), 200)
+	checkStatus(t, f.localRequest("PUT", "/api/v1/projects/project-a/secrets/ROTATE_ME/rotation", `{"status":"active","mode":"manual","interval_seconds":3600}`, "p5-policy"), 200)
 	if _, err := f.db.Exec(`UPDATE rotation_policies SET next_run_at = 1`); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestPhase5ImportRotationAndScanBoundaries(t *testing.T) {
 		t.Fatalf("rotation event: %s", payload)
 	}
 	var audits int
-	if err := f.db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action = 'secrets.rotation.due'`).Scan(&audits); err != nil || audits != 1 {
+	if err := f.db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action = 'rotation.run.created'`).Scan(&audits); err != nil || audits != 1 {
 		t.Fatalf("rotation audits %d %v", audits, err)
 	}
 

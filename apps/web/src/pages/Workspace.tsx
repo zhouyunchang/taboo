@@ -13,6 +13,8 @@ import VersionTag from '../components/VersionTag';
 import { GitHubPanel, githubErrorMessage } from '../components/GitHub';
 import ImportEnv from '../components/ImportEnv';
 import ScanReports from '../components/ScanReports';
+import RotationsPage from '../components/RotationsPage';
+import RotationPanel from '../components/RotationPanel';
 import Icon from '../design/Icon';
 import type { IconName } from '../design/Icon';
 import { Button, Check, EmptyState, Field, IconButton, MetaList, Notice, PageHead, Pill, Section, Skeleton, TableWrap } from '../design/primitives';
@@ -27,7 +29,7 @@ interface Props {
   logoutError?: string;
 }
 
-type Tab = 'secrets' | 'audit' | 'identities' | 'dynamic' | 'settings' | 'scans';
+type Tab = 'secrets' | 'audit' | 'identities' | 'dynamic' | 'rotations' | 'settings' | 'scans';
 type Menu = 'project' | 'account' | null;
 
 interface RailItem { tab: Tab; label: string; icon: IconName; current?: boolean }
@@ -46,6 +48,7 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
   const [switchOrg, setSwitchOrg] = useState(false);
   const [showGitHub, setShowGitHub] = useState(false);
   const [githubNotice, setGithubNotice] = useState('');
+  const [rotationTarget, setRotationTarget] = useState<{ key: string; folder: string } | null>(null);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const gh = q.get('github');
@@ -117,6 +120,7 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
           { tab: 'identities', label: '机器身份', icon: 'robot' },
           { tab: 'dynamic', label: '动态密钥', icon: 'db' },
         ] as RailItem[]) : []),
+        { tab: 'rotations', label: '轮换', icon: 'refresh' },
       ],
     },
     {
@@ -139,7 +143,7 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
     { tab: 'settings', label: '设置', icon: 'settings' },
   ];
   // 小屏底栏只有四格：落在治理/印记里的其它页时，把「审计」标记为当前位置。
-  const navCurrent: Tab = mobileItems.some((i) => i.tab === tab) ? tab : tab === 'dynamic' ? 'identities' : tab === 'scans' ? 'audit' : 'settings';
+  const navCurrent: Tab = mobileItems.some((i) => i.tab === tab) ? tab : tab === 'dynamic' ? 'identities' : tab === 'rotations' ? 'secrets' : tab === 'scans' ? 'audit' : 'settings';
 
   const avatarLetter = (user.name || user.email || '我').slice(0, 1);
   const projectPath = project ? `${ownerLabel} / ${project.name}` : ownerLabel;
@@ -305,11 +309,13 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
         <main className="main">
           <div className="stage">
             {tab === 'secrets'
-              ? project && <SecretsPanel key={project.id} projectId={project.id} projectSlug={project.slug} projectName={project.name} ownerLabel={ownerLabel} canWrite={org.role === 'developer' || canAdmin} />
+              ? project && <SecretsPanel key={project.id} projectId={project.id} projectSlug={project.slug} projectName={project.name} ownerLabel={ownerLabel} canWrite={org.role === 'developer' || canAdmin} onRotations={() => setTab('rotations')} />
               : tab === 'identities'
                 ? <IdentitiesPanel orgSlug={org.slug} project={project} projects={projects} />
                 : tab === 'dynamic'
                   ? project && <DynamicPanel key={project.id} projectId={project.id} projectSlug={project.slug} />
+                  : tab === 'rotations'
+                    ? project && <RotationsPage key={project.id} projectId={project.id} projectSlug={project.slug} orgSlug={org.slug} onOpen={(key, folder) => setRotationTarget({ key, folder })} />
                   : tab === 'settings'
                     ? <SettingsPanel key={org.id} orgSlug={org.slug} role={org.role} personal={personal} initialSub={settingsSub ?? undefined} />
                     : tab === 'scans'
@@ -333,6 +339,12 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
       {showIdentity && <IdentityReplacement key={org.id} orgSlug={org.slug} onClose={() => setShowIdentity(false)} />}
       {show2FA && <TotpPanel onClose={() => setShow2FA(false)} />}
       {showGitHub && <GitHubPanel onClose={() => setShowGitHub(false)} />}
+      {rotationTarget && project && (
+        <Modal title={`轮换 · ${rotationTarget.key}`} onClose={() => setRotationTarget(null)}>
+          <RotationPanel projectId={project.id} folder={rotationTarget.folder} secretKey={rotationTarget.key}
+            canWrite={org.role === 'developer' || canAdmin} canReveal={true} />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -435,8 +447,8 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
 
 /* ───────────────────────── 密钥面 ───────────────────────── */
 
-function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrite: legacyCanWrite }: {
-  projectId: string; projectSlug: string; projectName: string; ownerLabel: string; canWrite: boolean;
+function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrite: legacyCanWrite, onRotations }: {
+  projectId: string; projectSlug: string; projectName: string; ownerLabel: string; canWrite: boolean; onRotations: () => void;
 }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
@@ -517,11 +529,14 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
       <PageHead
         title={<h1 style={{ font: 'inherit', letterSpacing: 'inherit' }}>{projectSlug}</h1>}
         meta={<><span>归属于{ownerLabel}</span><span aria-hidden="true">·</span><span className="mono">{projectName}</span></>}
-        actions={canWrite ? (
-          <button type="button" className="btn btn-primary" aria-label="＋ 新建密钥" onClick={() => setEditing('__new__')}>
-            <Icon name="plus" size={13} /><span className="btn-label nowrap">新建密钥</span>
-          </button>
-        ) : undefined}
+        actions={<>
+          <Button variant="quiet" icon="refresh" onClick={onRotations}>轮换</Button>
+          {canWrite && (
+            <button type="button" className="btn btn-primary" aria-label="＋ 新建密钥" onClick={() => setEditing('__new__')}>
+              <Icon name="plus" size={13} /><span className="btn-label nowrap">新建密钥</span>
+            </button>
+          )}
+        </>}
       />
 
       {error && <Notice tone="danger">{error}</Notice>}
@@ -637,9 +652,18 @@ function SecretEditor({ projectId, path, secretKey, expectedVersion, onClose, on
   const [value, setValue] = useState('');
   const [comment, setComment] = useState('');
   const [tags, setTags] = useState('');
+  const [reason, setReason] = useState('');
+  const [fixed, setFixed] = useState(false);
   const [err, setErr] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!secretKey) { setFixed(false); return; }
+    api.get<{ status: string }>(`/api/v1/projects/${projectId}/secrets/${encodeURIComponent(secretKey)}/rotation?path=${encodeURIComponent(path)}`)
+      .then((p) => setFixed(p.status === 'fixed'))
+      .catch(() => setFixed(false));
+  }, [projectId, path, secretKey]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -647,11 +671,12 @@ function SecretEditor({ projectId, path, secretKey, expectedVersion, onClose, on
       setErr('Key 不能包含 /（用文件夹分层），且不能是 . / .. 或首尾空白');
       return;
     }
+    if (fixed && !reason.trim()) { setErr('固定密钥手动更新必须填写原因。'); return; }
     setBusy(true);
     setErr('');
     try {
       const saved = await mutate('post', `/api/v1/projects/${projectId}/secrets?path=${encodeURIComponent(path)}`, {
-        key, value, comment, expectedVersion,
+        key, value, comment, expectedVersion, reason,
         tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
       }) as { approval_id?: string };
       if (saved?.approval_id) {
@@ -677,6 +702,10 @@ function SecretEditor({ projectId, path, secretKey, expectedVersion, onClose, on
         <Field label="值" htmlFor="secret-editor-value"><textarea id="secret-editor-value" className="resize-none mono" value={value} onChange={(e) => setValue(e.target.value)} required rows={4} spellCheck={false} autoFocus={!!secretKey} /></Field>
         <Field label="备注" htmlFor="secret-editor-comment"><input id="secret-editor-comment" value={comment} onChange={(e) => setComment(e.target.value)} /></Field>
         <Field label="标签（逗号分隔）" htmlFor="secret-editor-tags"><input id="secret-editor-tags" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="db, prod" /></Field>
+        {fixed && <Notice tone="warn">这是固定密钥：手动更新不会创建轮换轮次，也不会自动修改数据库/外部系统。请先在上游更新，并通知消费方重载。</Notice>}
+        <Field label={fixed ? '原因（必填）' : '原因（可选）'} htmlFor="secret-editor-reason" hint={fixed ? '记录这次手动变更；不会改变固定状态。' : '写入审计，便于追溯。'}>
+          <input id="secret-editor-reason" value={reason} onChange={(e) => setReason(e.target.value)} required={fixed} placeholder={fixed ? '例如：DBA 已在数据库改密，已通知 app-team' : ''} />
+        </Field>
         {status && <Notice tone="warn">{status}</Notice>}
         {err && <Notice tone="danger">{err}</Notice>}
         <div className="form-actions">

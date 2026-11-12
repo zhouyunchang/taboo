@@ -11,6 +11,29 @@
 - 前置 HTTPS 反向代理（Caddy/nginx），见设计文档 §8「传输：强制 TLS」
 - 限制 `/data` 目录权限（容器内以 uid 10001 运行）
 
+## 进程角色（PostgreSQL / 多副本）
+
+`TABOO_ROLE` 控制一个进程做什么：
+
+| 值 | HTTP / Web UI | 后台循环 | 适用 |
+|---|---|---|---|
+| `all`（默认） | 有 | 有 | 单二进制 / SQLite；也兼容单实例 PG |
+| `serve` | 有 | 无轮换/投递/同步/动态回收/审计检查点 | PG 多副本 API |
+| `worker` | 可选健康端口 | rotation + webhook + outbox + sync + dynamic + audit | PG 后台进程 |
+
+- SQLite 只支持 `all`；`serve`/`worker` 会拒绝启动。
+- `worker` 与 API 共用同一个 `TABOO_DATABASE_URL`、`TABOO_MASTER_KEY`、`TABOO_JWT_SECRET`。
+- worker 不暴露业务 API；需要探针时设置 `TABOO_WORKER_ADDR=:7101`，提供 `/healthz`、`/readyz`。
+- 轮换调度每 15 秒扫一次；心跳写入 `worker_heartbeats`，API 的 `/api/v1/orgs/{slug}/rotation/health` 读取它。
+- 迁移仍由第一个启动的新实例执行；如果要独立迁移 Job，目前需先新增 `schema up` 命令（现有 `schema` 只读）。
+
+```bash
+# API
+TABOO_ROLE=serve ./taboo-server
+# Worker
+TABOO_ROLE=worker TABOO_WORKER_ADDR=:7101 ./taboo-server
+```
+
 ## Keycloak（外部用户源）
 
 1. Keycloak 创建 Confidential Client，Standard flow；Valid redirect URI：

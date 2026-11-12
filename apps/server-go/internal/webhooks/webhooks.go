@@ -41,11 +41,15 @@ const maxAttempts = 6
 
 // 事件名映射：SecretEvent.Action → webhook 事件类型
 var eventNames = map[string]string{
-	"created":      "secret.created",
-	"updated":      "secret.updated",
-	"rolled_back":  "secret.rolled_back",
-	"deleted":      "secret.deleted",
-	"rotation_due": "secret.rotation_due",
+	"created":            "secret.created",
+	"updated":            "secret.updated",
+	"rolled_back":        "secret.rolled_back",
+	"deleted":            "secret.deleted",
+	"rotation_due":       "secret.rotation_due",
+	"rotation_overdue":   "secret.rotation_overdue",
+	"rotation_succeeded": "secret.rotation_succeeded",
+	"rotation_failed":    "secret.rotation_failed",
+	"rotation_skipped":   "secret.rotation_skipped",
 }
 
 type Service struct {
@@ -119,7 +123,7 @@ func matchEvents(filterJSON, eventName string) bool {
 
 // enqueue 幂等：同一事件同一订阅只保留一条 pending
 func enqueue(tx *sql.Tx, webhookID string, e events.SecretEvent, eventName string) error {
-	payload, _ := json.Marshal(map[string]any{
+	body := map[string]any{
 		"id":        e.EventID,
 		"type":      eventName,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
@@ -131,7 +135,14 @@ func enqueue(tx *sql.Tx, webhookID string, e events.SecretEvent, eventName strin
 		"actor": map[string]string{
 			"id": e.ActorID, "name": e.ActorName, "kind": e.ActorKind,
 		},
-	})
+	}
+	if e.RunID != "" {
+		body["rotation"] = map[string]any{
+			"policy_id": e.PolicyID, "run_id": e.RunID, "mode": e.Mode,
+			"old_version": e.OldVersion, "due_at": e.DueAt, "grace_until": e.GraceUntil,
+		}
+	}
+	payload, _ := json.Marshal(body)
 	_, err := tx.Exec(`INSERT INTO webhook_deliveries(id,webhook_id,org_id,event_id,event,payload,status,next_attempt_at) VALUES(?,?,?,?,?,?,'pending',?) ON CONFLICT(id) DO NOTHING`, tc.SHA256(webhookID+"\x00"+e.EventID), webhookID, e.OrgID, e.EventID, eventName, string(payload), time.Now().Unix())
 	return err
 }

@@ -70,7 +70,7 @@ func runSelfCheck(db *sql.DB, masterKey []byte) error {
 	for _, t := range []string{
 		"users", "orgs", "secrets", "secret_versions", "audit_logs", "webhooks", "sync_targets",
 		"oidc_providers", "org_invites", "project_grants", "outbox_events", "audit_checkpoints", "scan_reports", "rotation_policies",
-		"approval_requests", "access_requests", "scim_tokens", "cluster_leases",
+		"approval_requests", "access_requests", "scim_tokens", "cluster_leases", "rotation_runs", "worker_heartbeats",
 	} {
 		exists, err := store.HasTable(db, t)
 		if err == nil && !exists {

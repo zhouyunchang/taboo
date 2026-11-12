@@ -35,7 +35,7 @@ test('version diff masks values, escape restores focus, and a viewer cannot read
   await page.goto('/');
   const opener = page.getByRole('button', { name: key, exact: true });
   await opener.click();
-  const dialog = page.getByRole('dialog', { name: '版本历史' });
+  const dialog = page.getByRole('dialog', { name: '密钥详情' });
   await dialog.getByRole('button', { name: '对比', exact: true }).click();
   await expect(dialog.getByText('值已掩码')).toBeVisible();
   await expect(dialog).not.toContainText(secret);
@@ -51,7 +51,7 @@ test('version diff masks values, escape restores focus, and a viewer cannot read
   await page.goto('/');
   // 共享组织排在个人空间前面，viewer 直接落在 Phase4 shared 的密钥面。
   await page.getByRole('button', { name: key, exact: true }).click();
-  const viewerDialog = page.getByRole('dialog', { name: '版本历史' });
+  const viewerDialog = page.getByRole('dialog', { name: '密钥详情' });
   await expect(viewerDialog.getByText('需要 reveal 权限才能对比版本内容。')).toBeVisible();
   await expect(viewerDialog.getByRole('button', { name: '对比', exact: true })).toHaveCount(0);
   await expect(viewerDialog).not.toContainText(secret);

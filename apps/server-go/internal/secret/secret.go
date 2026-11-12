@@ -348,6 +348,13 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(409, "VERSION_CONFLICT", "secret changed; reload before retrying"))
 		return
 	}
+	if !isCreate && strings.TrimSpace(b.Reason) == "" {
+		var rotationStatus string
+		if err := tx.QueryRow(`SELECT status FROM rotation_policies WHERE secret_id = ?`, secretID).Scan(&rotationStatus); err == nil && rotationStatus == "fixed" {
+			writeErr(w, apperr.New(400, "ROTATION_REASON_REQUIRED", "a reason is required when manually updating a fixed secret"))
+			return
+		}
+	}
 	if isCreate {
 		secretID = tc.NewID()
 		if _, err := tx.Exec(`INSERT INTO secrets (id, project_id, folder, folder_id, key, comment, tags) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -388,8 +395,12 @@ func (s *Service) Upsert(w http.ResponseWriter, r *http.Request) {
 		action = "secrets.create"
 		eventAction = "created"
 	}
+	auditMeta := map[string]any{"version": next}
+	if strings.TrimSpace(b.Reason) != "" {
+		auditMeta["reason"] = b.Reason
+	}
 	if err := auth.AuditReq(tx, r, p.OrgID, u, action, "project/"+p.Slug+"/secret/"+b.Key,
-		map[string]any{"version": next}); err != nil {
+		auditMeta); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}

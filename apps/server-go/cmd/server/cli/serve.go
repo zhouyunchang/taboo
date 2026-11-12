@@ -23,7 +23,9 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/oidc"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/outbox"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rotation"
+	secretsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/server"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/store"
 	syncsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/sync"
 	whsvc "github.com/zhouyunchang/taboo/apps/server-go/internal/webhooks"
 )
@@ -41,11 +43,29 @@ var mime = map[string]string{
 
 func runServe() error {
 	initJSONLogger()
+	role := strings.ToLower(strings.TrimSpace(os.Getenv("TABOO_ROLE")))
+	if role == "" {
+		role = "all"
+	}
+	switch role {
+	case "all", "serve", "worker":
+	default:
+		fatalErr(errors.New("TABOO_ROLE must be all, serve or worker"))
+	}
+	if role != "all" && os.Getenv("TABOO_DATABASE_URL") == "" {
+		fatalErr(errors.New("SQLite requires TABOO_ROLE=all"))
+	}
+	if role == "worker" {
+		return runWorker()
+	}
 	rt, err := loadRuntime(true)
 	if err != nil {
 		fatalErr(err)
 	}
 	defer rt.close()
+	if role != "all" && !store.IsPostgres(rt.db) {
+		fatalErr(errors.New("SQLite requires TABOO_ROLE=all"))
+	}
 
 	if os.Getenv("TABOO_DYNAMIC_ENGINE") == "mock" {
 		mock := dynamic.NewMockEngine()
@@ -78,6 +98,8 @@ func runServe() error {
 		}
 		log.Printf("[taboo] GitHub login enabled (callback %s/api/v1/auth/github/callback, autocreate=%v)", strings.TrimRight(rt.cfg.PublicOrigin, "/"), ghCfg.AutoCreate)
 	}
+	rotSecrets := &secretsvc.Service{DB: rt.db, MasterKey: rt.masterKey, DEKs: deks, Events: bus}
+	rotSvc := &rotation.Service{DB: rt.db, Secrets: rotSecrets, Role: "rotation"}
 	r := server.New(&server.Deps{
 		PublicOrigin:    rt.cfg.PublicOrigin,
 		SessionProfile:  rt.cfg.SessionProfile,
@@ -96,15 +118,18 @@ func runServe() error {
 		DisableRegister: rt.cfg.DisableRegister,
 		DisablePassword: rt.cfg.DisablePassword,
 		WorkerCtx:       ctx,
+		Rotation:        rotSvc,
 		GitHub:          ghCfg,
 	})
 
-	dynSvc.StartWorker(ctx, 20*time.Second)
-	(&rotation.Service{DB: rt.db}).StartWorker(ctx, 20*time.Second)
-	syncs.StartWorker(ctx, 10*time.Second)
-	webhooks.StartWorker(ctx, 5*time.Second)
-	ob.StartWorker(ctx, 3*time.Second)
-	audit.StartCheckpointWorker(ctx.Done(), rt.db, rt.masterKey, time.Minute)
+	if role == "all" {
+		dynSvc.StartWorker(ctx, 20*time.Second)
+		rotSvc.StartWorker(ctx, 15*time.Second)
+		syncs.StartWorker(ctx, 10*time.Second)
+		webhooks.StartWorker(ctx, 5*time.Second)
+		ob.StartWorker(ctx, 3*time.Second)
+		audit.StartCheckpointWorker(ctx.Done(), rt.db, rt.masterKey, time.Minute)
+	}
 
 	dist, err := fs.Sub(opts.WebFS, "web")
 	if err != nil {

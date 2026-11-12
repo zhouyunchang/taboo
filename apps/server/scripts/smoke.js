@@ -85,7 +85,7 @@ check('export .env format', expText.includes(`${KEY}=s3cret-v1`), expText);
 
 const imported = await call('POST', `/api/v1/projects/${projectId}/import`, { token, body: { format: 'doppler', preview: true, content: '{"SMOKE_DOPPLER":"preview-only","DOPPLER_PROJECT":"demo"}' } });
 check('doppler preview does not require strategy', imported.status === 200 && imported.data?.created === 1 && !(imported.data?.entries || []).some((e) => e.key?.startsWith('DOPPLER_')), JSON.stringify(imported.data));
-const rotation = await call('PUT', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation`, { token, body: { interval_seconds: 86400 } });
+const rotation = await call('PUT', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation`, { token, body: { status: 'active', mode: 'manual', interval_seconds: 86400 } });
 check('rotation policy saved', rotation.status === 200 && rotation.data?.enabled === true && !JSON.stringify(rotation.data).includes('s3cret'), JSON.stringify(rotation.data));
 const scan = await call('POST', `/api/v1/orgs/${orgSlug}/scan-reports`, { token, body: { source: 'smoke', findings: [{ rule_id: 'generic-api-key', level: 'warning', file: 'smoke.env', line: 1, match: 'smoke-secret-value' }] } });
 check('scan report hmac', scan.status === 201 && !JSON.stringify(scan.data).includes('smoke-secret-value'), JSON.stringify(scan.data));

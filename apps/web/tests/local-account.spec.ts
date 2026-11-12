@@ -245,7 +245,7 @@ test('本地账号：新建/显示/隐藏/编辑/删除密钥，版本抽屉，�
   // 详情抽屉：版本时间线 + 掩码对比 + Escape 归还焦点
   const opener = page.getByRole('button', { name: key, exact: true });
   await opener.click();
-  const drawer = page.getByRole('dialog', { name: '版本历史' });
+  const drawer = page.getByRole('dialog', { name: '密钥详情' });
   await expect(drawer).toBeVisible();
   await expect(drawer.getByText('v2')).toBeVisible();
   await drawer.getByRole('button', { name: '对比', exact: true }).click();

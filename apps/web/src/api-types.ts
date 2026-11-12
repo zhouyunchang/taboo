@@ -895,13 +895,234 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 读取密钥轮换策略（到期只发事件，不生成新明文） */
+        /** 读取密钥轮换策略（status/mode/负责人/生成档位；fixed 没有到期） */
         get: operations["getRotationPolicy"];
-        /** 设置密钥轮换策略（间隔或五段 cron，至少 5 分钟一次） */
+        /** 保存轮换策略（草稿/启用/暂停/固定；生成模式需 generation） */
         put: operations["putRotationPolicy"];
         post?: never;
         /** 删除密钥轮换策略 */
         delete: operations["deleteRotationPolicy"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/rotations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 项目轮换策略列表（含未设置数量） */
+        get: operations["listRotations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 预览未来三次轮换时间（不写库） */
+        post: operations["previewRotation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 立即创建一条手动轮换轮次 */
+        post: operations["runRotationNow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 轮换轮次列表 */
+        get: operations["listRotationRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 轮次详情 */
+        get: operations["getRotationRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 生成新值并写入新版本（mode=generate） */
+        post: operations["generateRotationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/distribute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 确认生成值已分发 */
+        post: operations["distributeRotationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 完成人工/外部轮换轮次 */
+        post: operations["completeRotationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/fail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 外部报告轮换失败 */
+        post: operations["failRotationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 跳过本轮（必须给原因） */
+        post: operations["skipRotationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/notify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 重新发送轮换通知 */
+        post: operations["notifyRotationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 失败后新建一轮 */
+        post: operations["retryRotationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orgs/{slug}/rotation/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 轮换 worker 心跳与组织计数 */
+        get: operations["rotationHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2259,23 +2480,69 @@ export interface components {
             allowed_cidrs?: string[];
             list_scan_reports?: boolean;
         };
+        RotationGeneration: {
+            /** @enum {string} */
+            profile?: "alnum32" | "alnum64" | "base64url32" | "hex32" | "password24" | "custom";
+            length?: number;
+            prefix?: string;
+            /** @description 服务端计算；低于 128 拒绝 */
+            min_entropy_bits?: number;
+        };
         RotationPolicy: {
             id: string;
             key: string;
+            folder?: string;
+            /** @enum {string} */
+            status: "draft" | "active" | "paused" | "fixed";
+            /**
+             * @description fixed 时为空
+             * @enum {string}
+             */
+            mode?: "generate" | "manual" | "webhook" | "";
+            enabled: boolean;
             interval_seconds: number;
             /** @description 五段 UTC cron；与 interval_seconds 二选一 */
             cron: string;
-            enabled: boolean;
+            owner?: {
+                id?: string;
+                name?: string;
+            };
+            grace_seconds?: number;
+            /** @description 0 = 没有下次轮换（draft/paused/fixed） */
             next_run_at: number;
-            last_run_at: number;
-            last_event_id: string;
+            last_run_at?: number;
+            last_run_id?: string;
+            fixed_reason?: string;
+            fixed_by?: string;
+            fixed_by_name?: string;
+            fixed_at?: string;
+            generation?: components["schemas"]["RotationGeneration"];
+            auto_generate?: boolean;
+            open_run?: {
+                id?: string;
+                status?: string;
+                due_at?: number;
+            };
+            created_at?: string;
+            updated_at?: string;
+            version?: number;
         };
         RotationPolicyInput: {
+            /** @enum {string} */
+            status?: "draft" | "active" | "paused" | "fixed";
+            /** @enum {string} */
+            mode?: "generate" | "manual" | "webhook";
             /** @description 与 cron 二选一，最少 300 秒 */
             interval_seconds?: number;
             cron?: string;
-            /** @default true */
-            enabled: boolean;
+            owner_id?: string;
+            grace_seconds?: number;
+            generation?: components["schemas"]["RotationGeneration"];
+            auto_generate?: boolean;
+            fixed_reason?: string;
+            expected_version?: number;
+            /** @deprecated */
+            enabled?: boolean;
         };
         RegisterRequest: {
             /** Format: email */
@@ -4227,6 +4494,324 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    listRotations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 策略列表与计数 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    previewRotation: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    interval_seconds?: number;
+                    cron?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 未来时间 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+        };
+    };
+    runRotationNow: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已创建轮次 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listRotationRuns: {
+        parameters: {
+            query?: {
+                path?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 轮次列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getRotationRun: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 轮次 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+        };
+    };
+    generateRotationRun: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 新值（仅本次响应返回，no-store） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Conflict"];
+        };
+    };
+    distributeRotationRun: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已完成 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Conflict"];
+        };
+    };
+    completeRotationRun: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已完成 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Conflict"];
+        };
+    };
+    failRotationRun: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已记录失败 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    skipRotationRun: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已跳过 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    notifyRotationRun: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已入队 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    retryRotationRun: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                pid: components["parameters"]["Pid"];
+                key: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 新轮次 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: components["responses"]["Conflict"];
+        };
+    };
+    rotationHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: components["parameters"]["OrgSlug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description worker 健康 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
     listDynamicEngines: {
         parameters: {
             query?: never;
@@ -4584,7 +5169,7 @@ export interface operations {
                     /** @description HMAC 签名密钥（缺省自动生成） */
                     secret?: string;
                     /** @description 空 = 全部事件 */
-                    events?: ("secret.created" | "secret.updated" | "secret.rolled_back" | "secret.deleted" | "*")[];
+                    events?: ("secret.created" | "secret.updated" | "secret.rolled_back" | "secret.deleted" | "secret.rotation_due" | "secret.rotation_overdue" | "secret.rotation_succeeded" | "secret.rotation_failed" | "secret.rotation_skipped" | "*")[];
                 };
             };
         };
