@@ -117,14 +117,51 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, "export", "") {
 		return
 	}
+
+	// 目录作用域：path 为空时导出整个项目（兼容 SDK / 旧调用方）；
+	// 有 path 时精确到该目录，recursive=1 才包含子目录。
+	path := r.URL.Query().Get("path")
+	var folderID, folderNorm string
+	if path != "" {
+		id, norm, ferr := s.folderRef(p.ID, path, false)
+		if ferr != nil {
+			if ae, ok := ferr.(*apperr.Error); ok {
+				writeErr(w, ae)
+			} else {
+				writeErr(w, apperr.NotFound)
+			}
+			return
+		}
+		folderID, folderNorm = id, norm
+	}
+	recursive := queryBool(r, "recursive")
+
 	dek, err := s.orgDEK(p.OrgID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "dek unwrap failed"))
 		return
 	}
-	rows, err := s.DB.Query(`SELECT s.key, v.ciphertext,s.id,s.latest_version FROM secrets s
+	query := `SELECT s.key, v.ciphertext,s.id,s.latest_version FROM secrets s
 		JOIN secret_versions v ON v.secret_id = s.id AND v.version = s.latest_version
-		WHERE s.project_id = ? ORDER BY s.key`, p.ID)
+		WHERE s.project_id = ?`
+	args := []any{p.ID}
+	if folderID != "" {
+		switch {
+		case recursive && folderNorm == "/":
+			// 根目录的递归就是整个项目，不需要额外过滤。
+		case recursive:
+			// 用前缀比较而不是 LIKE，避免文件夹名里的 % 和 _ 被当成通配符。
+			query += ` AND s.folder_id IN (
+				SELECT id FROM folders
+				WHERE project_id = ? AND (path = ? OR substr(path, 1, length(?)) = ?))`
+			args = append(args, p.ID, folderNorm, folderNorm, folderNorm)
+		default:
+			query += ` AND s.folder_id = ?`
+			args = append(args, folderID)
+		}
+	}
+	query += ` ORDER BY s.key`
+	rows, err := s.DB.Query(query, args...)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -160,8 +197,14 @@ func (s *Service) Export(w http.ResponseWriter, r *http.Request) {
 			list[i].value = resolved
 		}
 	}
-	if err := auth.AuditReq(s.DB, r, p.OrgID, u, "secrets.export", "project/"+p.Slug,
-		map[string]any{"count": len(list)}); err != nil {
+	target := "project/" + p.Slug
+	meta := map[string]any{"count": len(list)}
+	if folderNorm != "" {
+		target += "/folder/" + strings.Trim(folderNorm, "/")
+		meta["folder"] = folderNorm
+		meta["recursive"] = recursive
+	}
+	if err := auth.AuditReq(s.DB, r, p.OrgID, u, "secrets.export", target, meta); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", "audit failed"))
 		return
 	}

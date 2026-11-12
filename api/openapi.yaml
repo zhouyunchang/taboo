@@ -338,13 +338,14 @@ paths:
   /api/v1/access:
     get:
       tags: [secrets]
-      summary: 按定位符列出目录，或读取一把密钥
+      summary: 按定位符列出目录、读取一把密钥或导出 .env
       operationId: accessLocator
       security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { name: locator, in: query, required: true, schema: { type: string }, description: 归属/项目/目录。根目录不写目录段 }
         - { name: key, in: query, schema: { type: string }, description: 密钥名。省略时列出该目录 }
         - { name: export, in: query, schema: { type: string, enum: ['1'] }, description: 为 1 时导出 .env }
+        - { name: recursive, in: query, schema: { type: boolean, default: false, description: 与 export=1 同用；true 时包含子目录，缺省只导出该定位符目录 } }
       responses:
         '200': { description: 目录内容、密钥明文或 .env }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -1113,7 +1114,11 @@ paths:
       summary: 导出 .env 格式（export 权限；resolve=true 时展开引用，值仅出现在响应体）
       operationId: exportSecrets
       security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Resolve' }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { name: path, in: query, schema: { type: string, description: 物化路径 /a/b/；缺省导出整个项目，指定时缺省只导出该目录 } }
+        - { name: recursive, in: query, schema: { type: boolean, default: false, description: 与 path 同用；true 时包含子目录。path 为空或 / 时等价于整个项目 } }
+        - { $ref: '#/components/parameters/Resolve' }
       responses:
         '200':
           description: text/plain .env 内容

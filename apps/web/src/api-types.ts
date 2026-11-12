@@ -371,7 +371,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 按定位符列出目录，或读取一把密钥 */
+        /** 按定位符列出目录、读取一把密钥或导出 .env */
         get: operations["accessLocator"];
         /** 按定位符写入密钥 */
         put: operations["putLocator"];
@@ -2859,6 +2859,7 @@ export interface operations {
                 key?: string;
                 /** @description 为 1 时导出 .env */
                 export?: "1";
+                recursive?: boolean;
             };
             header?: never;
             path?: never;
@@ -4086,6 +4087,8 @@ export interface operations {
     exportSecrets: {
         parameters: {
             query?: {
+                path?: string;
+                recursive?: boolean;
                 /** @description 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。 */
                 resolve?: components["parameters"]["Resolve"];
             };

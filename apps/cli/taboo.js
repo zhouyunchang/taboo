@@ -4,8 +4,8 @@
 //   taboo set <locator> <KEY> <VALUE>       写入/更新密钥（产生新版本）
 //   taboo get <locator> <KEY>               读取明文（记审计）
 //   taboo list <locator>                    列密钥（无值）
-//   taboo export <locator>                  导出 .env 到 stdout
-//   taboo run <locator> -- <cmd...>         注入环境变量并执行子进程（设计文档 §7.1 流程）
+//   taboo export <locator> [--recursive]    导出该目录的 .env 到 stdout（--recursive 含子目录）
+//   taboo run <locator> [--recursive] -- <cmd...>  注入该目录的环境变量并执行子进程（设计文档 §7.1 流程）
 //   taboo scan [opts]                       密钥泄漏扫描（M3 #6，设计文档 §2）
 // 用法：node cli/taboo.js <command> [args]   （后续打包为独立二进制分发）
 import fs from 'node:fs';
@@ -25,7 +25,12 @@ const flag = (name, def) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : def;
 };
-const resolveQuery = args.includes('--raw') ? '' : '&resolve=true';
+const beforeCommand = (list) => {
+  const end = list.indexOf('--');
+  return end < 0 ? list : list.slice(0, end);
+};
+const hasFlag = (name) => beforeCommand(args).includes(`--${name}`);
+const resolveQuery = hasFlag('raw') ? '' : '&resolve=true';
 function isLocator(value) {
   return typeof value === 'string' && /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)+$/.test(value);
 }
@@ -195,8 +200,9 @@ switch (cmd) {
   }
   case 'export': {
     const locator = positional()[0];
-    if (!isLocator(locator)) { console.error('usage: taboo export <locator> [--raw]'); process.exit(1); }
-    const path = `/api/v1/access?locator=${encodeURIComponent(locator)}&export=1${resolveQuery}`;
+    if (!isLocator(locator)) { console.error('usage: taboo export <locator> [--raw] [--recursive]'); process.exit(1); }
+    const recursive = hasFlag('recursive') ? '&recursive=1' : '';
+    const path = `/api/v1/access?locator=${encodeURIComponent(locator)}&export=1${recursive}${resolveQuery}`;
     const res = await call('GET', path, null, true);
     process.stdout.write(await res.text());
     break;
@@ -226,7 +232,8 @@ switch (cmd) {
     const idx = args.indexOf('--');
     const locator = positional()[0];
     if (idx < 0 || idx === args.length - 1 || !isLocator(locator)) { console.error('usage: taboo run <locator> [--raw] -- <cmd...>'); process.exit(1); }
-    const exportURL = `/api/v1/access?locator=${encodeURIComponent(locator)}&export=1${resolveQuery}`;
+    const recursive = hasFlag('recursive') ? '&recursive=1' : '';
+    const exportURL = `/api/v1/access?locator=${encodeURIComponent(locator)}&export=1${recursive}${resolveQuery}`;
     const res = await call('GET', exportURL, null, true);
     const text = await res.text();
     const childEnv = { ...process.env };
@@ -262,9 +269,10 @@ switch (cmd) {
   taboo set <locator> <KEY> <VALUE>            按 归属/项目/目录 写入密钥
   taboo get <locator> <KEY> [--raw]            按定位符读取明文
   taboo list <locator>                         列出该目录的密钥
-  taboo export <locator> [--raw]               按定位符导出 .env
+  taboo export <locator> [--raw] [--recursive] 按定位符导出该目录 .env（--recursive 含子目录）
   taboo import <locator> <file> [--format dotenv|doppler|1password] [--preview] [--strategy skip|overwrite]
-  taboo run <locator> [--raw] -- <cmd...>       注入该目录的密钥后执行命令
+  taboo run <locator> [--raw] [--recursive] -- <cmd...>
+                                              注入该目录的密钥后执行命令（--recursive 含子目录）
   taboo scan [--staged|--json|--list-rules]     密钥泄漏扫描（150+ 规则，命中即非零退出）
   taboo scan --upload [--org slug]              上传报告（服务端 HMAC，原文不落库）
   taboo scan --update-baseline                  将现存命中写入 baseline 抑制
