@@ -277,6 +277,8 @@ test('external owner manages standard governance and safely retries a lost write
   await page.getByRole('button',{name:'登录策略',exact:true}).click();await expect(page.getByLabel('允许的登录方式')).toHaveValue('LOCAL_OR_EXTERNAL');
   await page.getByRole('button',{name:'账户菜单'}).click();
   await page.getByRole('button',{name:'切换组织',exact:true}).click();await expect(page.getByRole('dialog',{name:'切换组织',exact:true})).toBeVisible();await page.keyboard.press('Escape');
+  // 设置页不是密钥面；从移动底栏回到密钥工作区再建测试项。
+  await page.getByRole('button',{name:'密钥',exact:true}).first().click();
   await page.getByRole('button',{name:'＋ 新建密钥',exact:true}).click();await page.getByLabel('Key',{exact:true}).fill('LOST_RESPONSE');await page.getByLabel('值',{exact:true}).fill('public-retry-fixture');
   const receipts:string[]=[];
   await page.route('**/secrets?**',async route=>{
