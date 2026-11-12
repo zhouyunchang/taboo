@@ -26,29 +26,29 @@
 - [x] 版本对比（默认掩码）和扫描报告。上传时的命中原文只用于计算组织 HMAC，不落库；升级前的报告仍以 `sha256` 标出。owner/admin 可删除报告
 - [x] 动态密钥：PostgreSQL（`VALID UNTIL`）和 MySQL（`PASSWORD EXPIRE`，到期 `DROP USER`）短期只读账号
 - [x] 轮换策略：按间隔或五段 cron 发出 `secret.rotation_due`，由 webhook 通知外部轮换器回写新版本
-- [x] 审批：环境可要求写入、删除、回滚先经另一名管理员批准；新建项目的 prod 默认开启
+- [x] 审批：项目可要求写入、删除、回滚先经另一名管理员批准；默认关闭，可在项目设置里开启
 - [x] 限时访问：申请 reveal/export/write/delete/rollback，到期立刻失效
 - [x] SCIM 2.0 用户和组、OIDC Back-Channel Logout、CLI `login --browser` / `login --device`
 - [x] PostgreSQL 多副本：outbox 认领、行租约和 `cluster_leases`；登录限流在库里，失败时拒绝
 - [x] 请求日志脱敏（`password`/`secret`/`token`/`value`/`match` 等为 `[REDACTED]`）、机器身份可选 IP/CIDR 白名单、响应 `Cache-Control: no-store`
 - [x] M5：Secret Sync（GitHub/Vercel/Cloudflare）、Webhooks（HMAC 签名）、OIDC SSO（JIT 入组）、审计导出 CSV/JSONL、Docker/Helm/GoReleaser 发布
-- [x] 注册即建个人组织 + 默认项目 + dev/staging/prod 三环境；组织/项目/环境模型
+- [x] 注册即建个人空间 + 默认项目；组织按需创建；owner / project / folder 模型
 - [x] 密钥 CRUD + 版本历史 + 回滚（`secret_versions` 只追加）
 - [x] 用户认证：**Argon2id**（m=64MB,t=3,p=4）密码哈希（旧 scrypt 登录透明迁移）+ JWT 15min + refresh 旋转 + 登录限流 5 次/分钟/IP
 - [x] 外部用户源：OIDC Realm（Keycloak 等），登录页一键跳转、`sub` 绑定、组角色同步、PKCE
 - [x] RBAC-lite：owner / admin / developer / viewer；**reveal（取明文）与 read（看元数据）分离**；developer 禁写 prod
 - [x] 审计日志：append-only，谁何时对哪个密钥做了什么（读/写/删/回滚/导出）
 - [x] REST API：`/api/v1/auth/*`、`/orgs/*`、`/projects/*/secrets`、`export`、`/audit`
-- [x] Web Dashboard：登录注册、项目/环境切换、密钥表（掩码/显示/复制 20s 自清除）、版本抽屉+回滚、审计筛选
-- [x] CLI：`login / set / get / list / export / import / run`（`get`、`export`、`run` 默认展开引用，`--raw` 保留原文）+ `scan` 泄漏扫描（151 条规则，含 .tabooignore / 行内 taboo:ignore / baseline 抑制、--staged、--json、--upload、pre-commit 钩子安装）
+- [x] Web Dashboard：登录注册、项目切换、密钥表（掩码/显示/复制 20s 自清除）、版本抽屉+回滚、审计筛选
+- [x] CLI：`login / set / get / list / export / import / run`（`get`、`export`、`run` 默认展开引用，`--raw` 保留原文；`export` / `run` 默认只处理 locator 目录，`--recursive` 含子目录）+ `scan` 泄漏扫描（151 条规则，含 .tabooignore / 行内 taboo:ignore / baseline 抑制、--staged、--json、--upload、pre-commit 钩子安装）
 - [x] **Go 后端（apps/server-go，M1）**：Chi 路由、模块化单体（internal/{config,server,auth,secret,crypto,org,store,apperr}）、`embed.FS` 单二进制、同一套 14 项冒烟测试全过
-- [x] **机器身份（M2 #3，Go 版）**：client_credentials 换短期 JWT（TTL 可配 ≤1h，临期 CLI 自动重换）；scope 显式 (项目+环境+read|write) **禁止通配**；吊销立即生效；审计 actor 标识 `identity:xxx`；Web 管理页（创建向导/一次性 secret 展示/吊销）+ 22 项专项冒烟全过
+- [x] **机器身份（M2 #3，Go 版）**：client_credentials 换短期 JWT（TTL 可配 ≤1h，临期 CLI 自动重换）；scope 显式 (项目 + read|reveal|write) **禁止通配**；吊销立即生效；审计 actor 标识 `identity:xxx`；Web 管理页（创建向导/一次性 secret 展示/吊销）+ 22 项专项冒烟全过
 - [x] **多级文件夹（M2 #5，Go 版）**：物化路径 `/a/b/`、`folders` 表 + `secrets.folder_id`（存量幂等迁移）；创建自动补中间节点、移动/重命名级联子孙、仅空目录可删、根目录保护、路径穿越拒绝；密钥按目录隔离（同 key 不同目录互不冲突）；前端文件夹树 + 面包屑 + 目录过滤；24 项专项冒烟全过
 - [x] **TOTP 2FA（M2 #4，Go 版）**：RFC 6238（SHA1/30s/6 位，stdlib 实现）+ otpauth 二维码；登录 `totp_required` → 5min challenge 二次验证换 token；secret 加密落库、时间窗防重放（last_step 单调）；10 个恢复码（仅存哈希、用后即废）；disable 需密码确认；前端登录 2FA 步 + 设置抽屉（扫码/密钥/恢复码）；23 项专项冒烟全过
 - [x] **OpenAPI 3.1 契约（M3 #7）**：`api/openapi.yaml` 为 REST 唯一事实源（auth/TOTP/orgs/identities/folders/secrets 全量端点 + `{code,message,details}` 错误模型）；前端 TS 类型由契约生成（`npm run types -w @taboo/web`）；Go 契约漂移测试（chi 路由表 vs 契约，漂移即失败）；Scalar 文档页 `/api/docs`
 - [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export / import、引用展开、扫描报告、folders；`examples/basic` 集成示例已对真实服务跑通
 - [x] **Node SDK（`packages/sdk-node`，`@taboo/sdk`）与 Python SDK（`packages/sdk-python`）**：与 Go SDK 相同的方法、幂等键、机器身份和 OAuth client credentials；消费者测试三种语言一起跑
-- [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份 scope 限定（dev 身份访问 prod 即拒）、吊销立即断连；11 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档
+- [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份按项目 scope 限定（read 只读掩码，reveal 才取明文；无环境维度）、吊销立即断连；10 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档见 [apps/mcp/README.md](apps/mcp/README.md)
 - [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 与 MySQL 动态引擎 —— 机器身份申请短期只读账号 lease（`taboo_` 前缀随机用户名）。PostgreSQL 使用 `CREATE USER … VALID UNTIL`；MySQL 使用 `CREATE USER … PASSWORD EXPIRE`（粒度是天），精确到期仍由 worker DROP。到期/吊销自动回收（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请
 - [x] 标准身份联邦 P0：OIDC BFF、独立 OAuth 工作负载、显式秘密动作授权、PostgreSQL 18/RLS、事务审计及持久任务、控制台治理和公开迁移恢复。Secret Sync、Webhooks 与审计导出支持外部 owner 治理。
 

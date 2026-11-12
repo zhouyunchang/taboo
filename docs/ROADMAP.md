@@ -1,6 +1,7 @@
-# taboo 开发路线图（2026-10-31 起）
+# taboo 开发路线图（2026-10-31 起，更新至 2026-11-12）
 
 > 本文件是 2026-10-31 之后的执行路线图，由 Phase 0 评估产出。历史里程碑 M0–M5 与“标准身份联邦 P0”见 README 与 `docs/design/standard-federation-acceptance.zh-CN.md`。
+> **当前状态（2026-11-12）**：Phase 0–6 已全部完成。Phase 7（个人空间/组织模型 + 控制台重设计）功能代码完成并 push（`d6af762`），但 CI、dev122 部署、文档与全量验证尚未收口；先看下文 Phase 7 的收尾任务。
 > 原则：编码与调试在本机（macOS arm64，可用本机 Docker）完成；每个阶段完成后部署到开发服务器 dev122（`ssh dev122-root`，x86_64）并在 `https://taboo-dev122.swetcc.com` 上验证。
 > 凭据只引用位置，不写入仓库：dev122 `/home/cloudzh/dev-services-credentials.txt`、`/var/snap/docker/common/swetcc-dev/`、taboo 部署目录 `/var/snap/docker/common/swetcc-dev/taboo/.env`（0600）。旧目录 `/home/cloudzh/taboo-dev122/` 保留不动。
 
@@ -72,8 +73,11 @@
 | Phase 4 | 补齐设计文档 Must 缺口：密钥引用、.env 导入/导出增强、版本 diff、扫描报告页、Node/Python SDK |
 | Phase 5 | Should 能力：MySQL 动态引擎、轮换策略、Doppler/1Password 导入、安全清单补齐（日志脱敏、IP 白名单） |
 | Phase 6 | Could / 联邦 P1：审批流、访问请求、SCIM、Back-Channel Logout、CLI 浏览器登录、PostgreSQL 多副本。SAML 与 AuthZEN 继续延期。已部署 dev122（schema 18，`taboo:dev-6beaa0c`） |
+| Phase 7 | 个人空间/组织模型与控制台重设计：取消环境、locator 寻址、结构基线重建、墨黑+朱砂控制台；把 `develop` 拉回可发布基线 |
 
 每个阶段的统一流程：从 `develop` 切分支 `phase-N-*` → 本机开发 → 本机全量验证（见 §通用验证）→ 构建 linux/amd64 镜像 → 部署 dev122 → 线上验证 → 更新本文件“状态”与验收记录 → 提交并 push 到 `origin/develop`（合并 `main` 需用户确认）。
+
+Phase 7 是控制台重设计带出的模型调整，直接在 `develop` 上迭代，未走 `phase-N-*` 分支；发布前的收尾仍按同一套验证与部署流程验收。
 
 ---
 
@@ -348,12 +352,83 @@ OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 18 增
 - 导出文件仍在本地磁盘，多副本需要共享卷。
 - NPM 全局 real_ip 问题（见 Phase 5）。
 
-## 总体延期清单（截至 Phase 6）
+> Phase 7 删除环境模型后，其中“单人组织 prod 默认开审批”已不再适用；其余审批 / JIT 条目需按项目级重新评估。
+
+---
+
+## Phase 7：个人空间/组织模型与控制台重设计（2026-11-10 – 11-12）
+
+**背景**：`/impeccable` 控制台重设计过程中确认原「组织 → 项目 → 环境」模型把同一批密钥拆成三份，也不符合个人自部署的使用场景。决定取消环境、引入个人空间，并按领域重建结构基线。该阶段不在原 Phase 0–6 计划内，直接在 `develop` 上迭代。
+
+**状态（2026-11-12）**：功能代码完成并 push（`d6af762`，与 `origin/develop` 同步，工作区干净）；本机 SQLite 测试、前端类型检查/构建、本地账号浏览器测试通过，CI 的 go-test / web-build / smoke-go 通过。**未达到可发布状态**：CI 5/8 job 失败、dev122 未部署、文档未收口、全量验证未跑。
+
+### 7.1 本阶段完成
+
+| 变更 | 内容 | 主要提交 |
+|---|---|---|
+| 空间模型 | 注册创建个人空间；组织按需创建；owner/project/folder 成为唯一结构 | `2fe022a`、`a04cb33` |
+| 取消环境 | 每个项目一棵密钥树；审批移到项目；`environments` 从 schema 与 API 删除，不迁移旧数据 | `4b95c53`、`1a4c44f`、`f34815c` |
+| 定位符 | `owner/project/folder` 寻址；CLI / SDK 跟随（MCP 仍走项目路由） | `10bef76`、`7cae0d6`、`7c15279` |
+| 控制台 | 墨黑+朱砂；分组侧栏、密钥行内动作、详情抽屉、审计时间线；首登用户名落款；全屏组织管理页 | `56ad794`、`f3c4f1a`、`838097a`、`d6af762` |
+| 结构基线 | PostgreSQL 13 个、SQLite 10 个迁移；goose 启动自动迁移；旧自研迁移器建的库不再兼容 | `2d3f83e`、`e4e3f30`、`d944b3a`、`32df33b` |
+
+设计基线：`DESIGN.md` 记录已建成的世界，`UX-CONTRACT.md` 记录行为契约；finish review 的两项外观遗留已在 `DESIGN.md` 关闭。
+
+### 7.2 当前缺口
+
+| 项 | 现状 |
+|---|---|
+| CI | 2026-11-12 的 run `43244817423`（`d6af762`）5/8 失败：postgres / consumers / smoke-node / federation / packaging |
+| dev122 | 仍是 `taboo:dev-6beaa0c`（2026-11-01，schema 18）；新基线 schema 13/10 与旧库不兼容（旧库没有 `goose_db_version`，脚本 `CREATE TABLE` 非幂等，直接覆盖会启动失败） |
+| 文档 | README 已按新模型修正；quickstart 第 16 行、本文件与 `docs/design/*` 仍按三环境描述 |
+| 全量验证 | 2026-11-01 后未再执行 `scripts/verify-all.sh --container` |
+
+### 7.3 收尾任务（未执行）
+
+| # | 任务 | 验收 |
+|---|---|---|
+| T1 | 修 PostgreSQL 下的 locator 404 | `TestLocatorReadsAndWritesASecret`、`TestPersonalSpaceAndCreatedOrganization` 等 PG 用例通过；SQLite 与 PG 都全绿 |
+| T2 | 修 consumers | Go / Node / Python / MCP consumer 夹具切到新 locator；`scripts/test-consumers.sh` 通过 |
+| T3 | 决定 Node MVP 范围 | 收缩为契约回归，或升级到新模型；`smoke-node` 通过 |
+| T4 | 修 federation / packaging | CI 安装 `just` 或脚本不再依赖它；两个 job 通过 |
+| T5 | 全量验证 | `verify-all.sh --container` 通过，并把依赖环境模型的步骤更新掉 |
+| T6 | 文档收口 | README / quickstart / 本文件 / `docs/design` 与新模型一致 |
+| T7 | 发布 dev122 | 用新库启动 → 冒烟 + 浏览器检查 + 恢复演练；旧镜像 `taboo:dev-6beaa0c` 保留可回滚 |
+
+建议顺序：T1–T5 → T7 → T6（T6 可与 T1–T5 并行）。
+
+### 7.4 CI 失败明细（2026-11-12）
+
+| job | 结果 | 原因 |
+|---|---|---|
+| go-test / web-build / smoke-go | 通过 | SQLite 与前端基线 |
+| postgres | 失败 | PG 下 locator 返回 `LOCATOR_NOT_FOUND`；同用例 SQLite 通过 |
+| consumers | 失败 | Node consumer 仍用旧 locator，`taboo set` 退化为 usage |
+| smoke-node | 失败 | Node MVP 参考后端仍是环境模型，且缺 rotation / scan 端点 |
+| federation / packaging | 失败 | runner 没有 `just`，webServer 与 GoReleaser hook 无法启动 |
+
+### 7.5 目录作用域修复（2026-11-13）
+
+`export` / `run` 之前忽略 locator 的文件夹，导出/注入整个项目。现在：
+
+- 默认只导出 locator 指向的目录，`--recursive` 才包含子目录；
+- 根目录默认只导出根目录，根目录 + `--recursive` 等价于整个项目；
+- 不带 `path` 的 `/projects/{pid}/export` 仍导出整个项目，兼容 SDK；
+- 不存在的目录返回 404，不再静默退回整项目；
+- `secrets.export` 审计记录目录与 `recursive`。
+
+服务端改动在 `internal/secret/secret.go` 的 `Export`，回归测试 `internal/server/export_test.go`；CLI 只增加 `--recursive` 参数。
+
+---
+
+## 总体延期清单（截至 Phase 7）
 
 - SAML、AuthZEN（无调用方/身份源要求）。
 - dev122 上真实 OIDC 身份源（Keycloak / Identity V2）联调。
 - Woodpecker CI、合并 `main`（待用户决定）。
-- 上面 Phase 6 “仍未解决”各项与 NPM real_ip 收窄。
+- Node MVP 的去向（T3）。
+- 备份异地拷贝、PG 多副本生产验证。
+- 上面 Phase 6 “仍未解决”各项与 NPM real_ip 收窄；其中“单人组织 prod 默认开审批”已随环境模型删除而失效，审批四眼/盲批需要按项目级重新评估。
 
 ---
 
@@ -377,6 +452,8 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 
 线上：`ssh dev122-root /var/snap/docker/common/swetcc-dev/taboo/taboo-ctl.sh smoke`（专用账号，21 项）+ `scripts/browser-check.mjs`（1280/390）。
 
+> Phase 7 备注：脚本与冒烟用例里仍有按环境模型写的步骤（如成员授权里的“项目 / 环境”），Phase 7 的 T5 一并更新后再作为发布门槛。线上冒烟与浏览器检查目前仍指向 2026-11-01 的旧部署，T7 更新。
+
 ## 需用户决定 / 风险
 
 1. ~~名称解析~~：已决定，主机名 `taboo-dev122.swetcc.com`，与其他 `*-dev122` 一样只用 `/etc/hosts`（不加 DNS 记录）；Mac 需用户用 sudo 添加 `10.0.30.122 taboo-dev122.swetcc.com`。
@@ -385,7 +462,10 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 4. Git：已决定每阶段 push 到 `origin/develop`；是否合并 `main`、是否启用 Woodpecker CI 待定。
 5. ~~架构差异~~：Phase 1 采用 dev122 原生构建（`deploy/dev122/deploy.sh`）。
 6. NPM 全局 real_ip 信任局域网 `X-Real-IP`（见 Phase 5 遗留风险），需 NPM/基础设施负责人决定是否收窄。
-7. 审批开关：是否禁止单个 admin 关闭 `approval_required`（四眼绕过），以及单人组织 prod 默认开审批是否保留（见 Phase 6）。
+7. 审批开关：是否禁止单个 admin 关闭项目级 `approval_required`（四眼绕过）、审批是否继续盲批；原“单人组织 prod 默认开审批”已随环境模型删除而失效，见 Phase 6 / Phase 7。
+8. dev122 新基线落库方式：清空/重建现有库，还是换新库名与旧库并存；旧目录 `/home/cloudzh/taboo-dev122/`、旧镜像与升级前备份保留（见 Phase 7 的 T7）。
+9. Node MVP 是否继续维护到新模型，或只保留契约回归（见 Phase 7 的 T3）。
+10. Phase 7 收尾顺序：先修 CI 再部署，还是先部署再补 CI；建议前者。
 
 ## 状态
 
@@ -398,3 +478,4 @@ TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 | Phase 4 设计文档 Must 缺口 | 完成并部署（schema 16） | 2026-11-01 |
 | Phase 5 Should 能力与安全清单 | 完成并部署（schema 17，`taboo:dev-d1c0cc0`） | 2026-11-01 |
 | Phase 6 Could / 联邦 P1 | 完成并部署（schema 18，`taboo:dev-6beaa0c`）；SAML/AuthZEN 延期 | 2026-11-01 |
+| Phase 7 个人空间/组织模型 + 控制台重设计 | 代码完成并 push；CI / dev122 / 文档 / 全量验证未收口（schema 13/10） | 2026-11-12 |
