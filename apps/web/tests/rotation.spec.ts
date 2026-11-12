@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('fixed rotation is visible and opens the rotation drawer', async ({ page, request }) => {
+test('fixed rotation is visible and opens the rotation panel', async ({ page, request }) => {
   const email = `rotation-ui-${Date.now()}@example.test`;
   const body = { email, password: 'fixture-password', name: 'Rotation UI' };
   const res = await request.post('/api/v1/auth/register', { data: body });
@@ -63,20 +63,21 @@ test('generate run through the console creates and distributes a new value', asy
   }, account.tokens);
   await page.goto('/');
   await page.getByRole('button', { name: key, exact: true }).click();
-  const drawer = page.getByRole('dialog', { name: '密钥详情' });
-  await drawer.getByRole('tab', { name: '轮换', exact: true }).click();
-  await drawer.getByLabel('方式').selectOption('generate');
-  await drawer.getByRole('button', { name: '保存并启用', exact: true }).click();
-  await drawer.getByText('运行中', { exact: true }).first().waitFor();
+  const record = page.locator('.record');
+  await record.getByRole('tab', { name: /轮换/ }).click();
+  await record.getByRole('button', { name: '设置轮换策略', exact: true }).click();
+  await record.getByLabel('方式').selectOption('generate');
+  await record.getByRole('button', { name: '保存并启用', exact: true }).click();
+  await record.getByText('运行中', { exact: true }).first().waitFor();
 
-  await drawer.getByRole('button', { name: '立即运行', exact: true }).click();
-  await drawer.getByText('已创建轮换轮次。').waitFor();
-  await drawer.getByRole('button', { name: '查看', exact: true }).first().click();
-  await drawer.getByRole('button', { name: '生成新值', exact: true }).click();
-  await drawer.getByText('新值（仅此屏显示一次）').waitFor();
-  const value = await drawer.locator('.once-secret .mono').innerText();
+  await record.getByRole('button', { name: '立即运行', exact: true }).click();
+  await record.getByText(/已创建轮次；不会自动替换上游凭据。/).waitFor();
+  await record.getByRole('button', { name: '详情', exact: true }).first().click();
+  await record.getByRole('button', { name: '生成新值', exact: true }).click();
+  await record.getByText('新值（仅此屏显示一次）').waitFor();
+  const value = await record.locator('.once-secret .mono').innerText();
   expect(value.length).toBe(32);
-  await drawer.getByRole('button', { name: '完成分发', exact: true }).click();
-  await drawer.getByText('已完成', { exact: true }).first().waitFor();
+  await record.getByRole('button', { name: '完成分发', exact: true }).click();
+  await record.getByText('已完成', { exact: true }).first().waitFor();
   expect(errors).toEqual([]);
 });

@@ -163,10 +163,10 @@ export default function SecretRecord({ meta, orgSlug, projectId, projectSlug, ca
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (document.querySelector('dialog[open]')) return;
+      if (compare !== null) { event.preventDefault(); setCompare(null); return; }
       const target = event.target as HTMLElement | null;
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
       event.preventDefault();
-      if (compare !== null) { setCompare(null); return; }
       onClose();
     };
     window.addEventListener('keydown', onKey);

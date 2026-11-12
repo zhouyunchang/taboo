@@ -24,10 +24,22 @@ test.beforeAll(async ({ request }) => {
   const headers = { Authorization: `Bearer ${owner.tokens.access}` };
   const list = await (await request.get('/api/v1/orgs/a/oidc', { headers })).json();
   for (const provider of list.providers) await request.delete(`/api/v1/orgs/a/oidc/${provider.id}`, { headers });
-  const create = await request.post('/api/v1/orgs/a/oidc', { headers, data: {
+  const provider = {
     name: 'Standard OIDC', issuer, client_id: 'taboo-test', client_secret: 'fixture-secret', scopes: 'openid', autocreate: true, default_role: 'viewer', role_map: {},
-  }});
-  expect(create.status()).toBe(201); providerID = (await create.json()).id;
+  };
+  const create = await request.post('/api/v1/orgs/a/oidc', { headers, data: provider });
+  if (create.status() === 409) {
+    // A previous failed worker can leave a provider with the same issuer behind;
+    // reuse and normalise it instead of failing the whole file in beforeAll.
+    const existing = (await (await request.get('/api/v1/orgs/a/oidc', { headers })).json()).providers
+      .find((item: { issuer: string }) => item.issuer === issuer);
+    expect(existing, await create.text()).toBeTruthy();
+    providerID = existing.id;
+    expect((await request.patch(`/api/v1/orgs/a/oidc/${providerID}`, { headers, data: { ...provider, enabled: true } })).ok()).toBe(true);
+  } else {
+    expect(create.status(), await create.text()).toBe(201);
+    providerID = (await create.json()).id;
+  }
 });
 
 /** 首次外部登录会先落到「落款」页；已确认用户名的会话直接进控制台。 */

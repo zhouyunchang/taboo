@@ -1,5 +1,5 @@
 // 本地账号回归（不需要 Keycloak）。覆盖 federation.spec.ts 中除 OIDC 之外的全部界面交互，
-// 并补上本轮重构新增的界面：详情抽屉、密钥面、治理面板、成员操作授权、工作负载。
+// 并补上本轮重构新增的界面：密钥记录页、密钥面、治理面板、成员操作授权、工作负载。
 // 断言的可访问名与旧版一致——它们是产品与浏览器之间的契约，不随视觉重构变化。
 import { expect, test } from '@playwright/test';
 
@@ -211,7 +211,7 @@ test('组织管理页：空间列表、创建组织、进入并切回个人空�
   expect(errors).toEqual([]);
 });
 
-test('本地账号：新建/显示/隐藏/编辑/删除密钥，版本抽屉，窄屏不溢出', async ({ page, request }) => {
+test('本地账号：新建/显示/隐藏/编辑/删除密钥，版本记录页，窄屏不溢出', async ({ page, request }) => {
   const owner = await account(request, 'local-owner@example.test', '本地 owner');
   const headers = { Authorization: `Bearer ${owner.tokens.access}` };
   const projects = await (await request.get('/api/v1/orgs/local-owner/projects', { headers })).json();
@@ -242,21 +242,23 @@ test('本地账号：新建/显示/隐藏/编辑/删除密钥，版本抽屉，�
   await expect(row).toContainText('v2');
   await expect(row).not.toContainText(next);
 
-  // 详情抽屉：版本时间线 + 掩码对比 + Escape 归还焦点
+  // 记录页：版本时间线 + 掩码对比 + Escape 先回版本章、再回列表
   const opener = page.getByRole('button', { name: key, exact: true });
   await opener.click();
-  const drawer = page.getByRole('dialog', { name: '密钥详情' });
-  await expect(drawer).toBeVisible();
-  await expect(drawer.getByText('v2')).toBeVisible();
-  await drawer.getByRole('button', { name: '对比', exact: true }).click();
-  await expect(drawer.getByText('值已掩码')).toBeVisible();
-  await expect(drawer).not.toContainText(secret);
-  await expect(drawer).not.toContainText(next);
+  const record = page.locator('.record');
+  await expect(record).toBeVisible();
+  await expect(record.getByRole('heading', { name: key, level: 1 })).toBeVisible();
+  await expect(record.getByText('v2')).toBeVisible();
+  await record.getByRole('button', { name: '对比版本', exact: true }).click();
+  await expect(record.getByText('值已掩码')).toBeVisible();
+  await expect(record).not.toContainText(secret);
+  await expect(record).not.toContainText(next);
   await page.setViewportSize({ width: 390, height: 844 });
-  expect(await drawer.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.keyboard.press('Escape');
-  await expect(drawer).toBeHidden();
+  await expect(record.getByText('值已掩码')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(record).toHaveCount(0);
   await expect(opener).toBeFocused();
 
   // 删除（浏览器原生确认）
