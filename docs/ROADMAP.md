@@ -419,6 +419,12 @@ OpenAPI、`apps/web/src/api-types.ts` 与 chi 路由一起更新。schema 18 增
 
 服务端改动在 `internal/secret/secret.go` 的 `Export`，回归测试 `internal/server/export_test.go`；CLI 只增加 `--recursive` 参数。
 
+### 7.6 Agent skill（2026-11-13）
+
+新增 `skills/taboo/SKILL.md` 与安装说明，覆盖 CLI / MCP 接入、locator、read / reveal / write、`export` / `run` 目录语义，以及“不把明文带进对话、日志、提交”的硬性规则。已 symlink 到 `~/.agents/skills/taboo` 与 `~/.claude/skills/taboo`；DSH 当前会话已能通过 `skill` 加载。
+
+验证：Kimi 按 skill 只列 key 不取值；`run` 注入成功且不打印值；只读身份 reveal 返回 403 后不换身份、不绕路；MCP + skill 只列 `/team/` 的 key。
+
 ---
 
 ## 总体延期清单（截至 Phase 7）

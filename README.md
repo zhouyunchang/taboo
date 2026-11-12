@@ -49,6 +49,7 @@
 - [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export / import、引用展开、扫描报告、folders；`examples/basic` 集成示例已对真实服务跑通
 - [x] **Node SDK（`packages/sdk-node`，`@taboo/sdk`）与 Python SDK（`packages/sdk-python`）**：与 Go SDK 相同的方法、幂等键、机器身份和 OAuth client credentials；消费者测试三种语言一起跑
 - [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份按项目 scope 限定（read 只读掩码，reveal 才取明文；无环境维度）、吊销立即断连；10 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档见 [apps/mcp/README.md](apps/mcp/README.md)
+- [x] **Agent skill（`skills/taboo`）**：CLI + MCP 的 Agent 操作规则（默认只读、reveal 需显式、`export` / `run` 默认精确目录、禁止把明文带进对话/日志）；安装见 [skills/taboo/README.md](skills/taboo/README.md)
 - [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 与 MySQL 动态引擎 —— 机器身份申请短期只读账号 lease（`taboo_` 前缀随机用户名）。PostgreSQL 使用 `CREATE USER … VALID UNTIL`；MySQL 使用 `CREATE USER … PASSWORD EXPIRE`（粒度是天），精确到期仍由 worker DROP。到期/吊销自动回收（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请
 - [x] 标准身份联邦 P0：OIDC BFF、独立 OAuth 工作负载、显式秘密动作授权、PostgreSQL 18/RLS、事务审计及持久任务、控制台治理和公开迁移恢复。Secret Sync、Webhooks 与审计导出支持外部 owner 治理。
 
@@ -123,6 +124,8 @@ taboo/                       # 根 workspace（private）
 ├── package.json             # workspaces: ["apps/*"] + 统一脚本
 ├── justfile                 # 构建/运行入口（just build / start / web / smoke）
 ├── doc/                     # 设计文档（OpenVault 功能与详细设计）
+├── skills/
+│   └── taboo/               # Agent skill：CLI + MCP 操作规则（SKILL.md）
 ├── apps/
 │   ├── server/              # @taboo/server — API 服务（Node MVP，契约参考实现）
 │   ├── server-go/           # Go 后端（M1 起主推）：cmd/server + internal/*（auth/crypto/org/secret/identity/folder/store…）
