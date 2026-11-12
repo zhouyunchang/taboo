@@ -14,7 +14,8 @@
       "directAccessGrantsEnabled": false,
       "redirectUris": [
         "http://127.0.0.1:18888/api/v1/auth/oidc/a/callback",
-        "http://127.0.0.1:18888/api/v1/auth/oidc/b/callback"
+        "http://127.0.0.1:18888/api/v1/auth/oidc/b/callback",
+        "http://127.0.0.1:18888/api/v1/auth/oidc/federation-shared/callback"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
