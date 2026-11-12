@@ -209,8 +209,9 @@ test('identity replacement proves both sign-ins and preserves membership and sec
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await enterConsole(page);
-  await expect(page.getByRole('button', { name: '登录身份', exact: true })).toBeVisible();
+  await expectSignedIn(page);
   const original = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()));
+  await page.getByRole('button', { name: '账户菜单' }).click();
   await page.getByRole('button', { name: '登录身份', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '更换登录身份' });
   await dialog.getByLabel('新的身份连接').selectOption(replacement);
@@ -266,14 +267,16 @@ test('external owner manages standard governance and safely retries a lost write
   await binding.getByLabel('名称',{exact:true}).fill('Fixture workload');await binding.getByLabel('Subject',{exact:true}).fill('fixture-service-subject');await binding.getByLabel('Client ID',{exact:true}).fill('fixture-service');await binding.getByRole('button',{name:'创建绑定',exact:true}).click();await expect(binding).not.toBeVisible();
   await page.getByRole('button',{name:'操作授权',exact:true}).click();
   await expect(grants.getByLabel('查看目录',{exact:true})).toBeVisible();await grants.getByLabel('查看目录',{exact:true}).check();await grants.getByRole('button',{name:'保存授权',exact:true}).click();await expect(grants).not.toBeVisible();
-  await expect(page.getByText('1 项 · 启用',{exact:true})).toBeVisible();
+  const workloadRow = page.getByRole('row').filter({ hasText: 'Fixture workload' });
+  await expect(workloadRow).toContainText('启用');
+  await expect(workloadRow).toContainText('1 项授权');
   await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.screenshot({path:'/tmp/taboo-workload-governance-mobile.png'});
   await page.getByRole('button',{name:'用户源 / SSO',exact:true}).click();await page.getByRole('button',{name:'会话策略',exact:true}).first().click();
   await expect(page.getByRole('dialog',{name:'登录会话安全策略'}).getByLabel('会话有效期（秒）')).toBeVisible();await page.keyboard.press('Escape');
   await page.getByRole('button',{name:'登录策略',exact:true}).click();await expect(page.getByLabel('允许的登录方式')).toHaveValue('LOCAL_OR_EXTERNAL');
+  await page.getByRole('button',{name:'账户菜单'}).click();
   await page.getByRole('button',{name:'切换组织',exact:true}).click();await expect(page.getByRole('dialog',{name:'切换组织',exact:true})).toBeVisible();await page.keyboard.press('Escape');
-  await page.getByRole('button',{name:'dev',exact:true}).click();
   await page.getByRole('button',{name:'＋ 新建密钥',exact:true}).click();await page.getByLabel('Key',{exact:true}).fill('LOST_RESPONSE');await page.getByLabel('值',{exact:true}).fill('public-retry-fixture');
   const receipts:string[]=[];
   await page.route('**/secrets?**',async route=>{
