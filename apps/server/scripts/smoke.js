@@ -34,6 +34,7 @@ let creds = null;
 if (process.env.TABOO_SMOKE_CREDENTIALS) creds = JSON.parse(readFileSync(process.env.TABOO_SMOKE_CREDENTIALS, 'utf8'));
 else if (process.env.TABOO_SMOKE_EMAIL) creds = { email: process.env.TABOO_SMOKE_EMAIL, password: process.env.TABOO_SMOKE_PASSWORD };
 const loginMode = !!creds;
+const nodeBackend = process.env.TABOO_SMOKE_BACKEND === 'node';
 const runId = Date.now();
 const email = loginMode ? creds.email : `smoke-${runId}@taboo.dev`;
 const password = loginMode ? creds.password : 'smoke-pass-123';
@@ -41,6 +42,7 @@ const password = loginMode ? creds.password : 'smoke-pass-123';
 const KEY = loginMode ? `SMOKE_${runId}` : 'DB_PASS';
 
 console.log(`== taboo smoke test (${loginMode ? 'login: dedicated account' : 'register: throwaway account'}) ==`);
+if (nodeBackend) console.log('  i Node reference backend: rotation, scan reports, Doppler preview and secret deletion are Go-only; skipped here.');
 let token;
 if (loginMode) {
   const li = await call('POST', '/api/v1/auth/login', { body: { email, password } });
@@ -83,6 +85,7 @@ const exp = await call('GET', `/api/v1/projects/${projectId}/export`, { token, r
 const expText = await exp.text();
 check('export .env format', expText.includes(`${KEY}=s3cret-v1`), expText);
 
+if (!nodeBackend) {
 const imported = await call('POST', `/api/v1/projects/${projectId}/import`, { token, body: { format: 'doppler', preview: true, content: '{"SMOKE_DOPPLER":"preview-only","DOPPLER_PROJECT":"demo"}' } });
 check('doppler preview does not require strategy', imported.status === 200 && imported.data?.created === 1 && !(imported.data?.entries || []).some((e) => e.key?.startsWith('DOPPLER_')), JSON.stringify(imported.data));
 const rotation = await call('PUT', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation`, { token, body: { status: 'active', mode: 'manual', interval_seconds: 86400 } });
@@ -93,6 +96,7 @@ const scanDetail = await call('GET', `/api/v1/orgs/${orgSlug}/scan-reports/${sca
 check('scan detail drops match', scanDetail.status === 200 && scanDetail.data?.findings?.[0]?.alg === 'hmac-sha256' && !JSON.stringify(scanDetail.data).includes('smoke-secret-value'), JSON.stringify(scanDetail.data));
 const scanDel = await call('DELETE', `/api/v1/orgs/${orgSlug}/scan-reports/${scan.data?.id}`, { token });
 check('scan report deleted', scanDel.status === 200, JSON.stringify(scanDel.data));
+}
 const cache = await fetch(BASE + `/api/v1/projects/${projectId}/secrets`, { headers: { Authorization: `Bearer ${token}` } });
 check('cache-control no-store', cache.headers.get('cache-control') === 'no-store');
 await cache.json().catch(() => {});
@@ -106,7 +110,7 @@ const noauth = await call('GET', `/api/v1/projects/${projectId}/secrets`);
 check('unauth rejected 401', noauth.status === 401);
 
 // 清理：删除本次创建的密钥；注册模式提示停用一次性账号
-if (projectId && token && process.env.TABOO_SMOKE_KEEP !== '1') {
+if (!nodeBackend && projectId && token && process.env.TABOO_SMOKE_KEEP !== '1') {
   await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}/rotation`, { token });
   const del = await call('DELETE', `/api/v1/projects/${projectId}/secrets/${KEY}?expectedVersion=3`, { token });
   check('cleanup: smoke secret deleted', del.status === 200 || del.status === 204, `status=${del.status} ${JSON.stringify(del.data)}`);

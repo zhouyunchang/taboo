@@ -63,7 +63,9 @@ jobs:
           done
           npm run smoke
 
-  # Node 版 server 契约回归（同一套 14 项冒烟检查）
+  # Node 版参考 server 契约回归：只覆盖两种后端都支持的 API；
+  # rotation / scan / Doppler preview / secret deletion 是 Go server 专属面，
+  # 由 smoke-go 覆盖，不在 Node MVP 上伪装成已实现。
   smoke-node:
     runs-on: ubuntu-latest
     steps:
@@ -74,6 +76,8 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - name: start server & smoke
+        env:
+          TABOO_SMOKE_BACKEND: node
         run: |
           npm run start:node &
           SRV=$!
@@ -95,6 +99,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - uses: extractions/setup-just@v3
       - run: npm exec --workspace=@taboo/web -- playwright install --with-deps chromium
       - run: npm run types && git diff --exit-code -- apps/web/src/api-types.ts
       - run: npm exec --workspace=@taboo/web -- tsc --noEmit
@@ -136,6 +141,7 @@ jobs:
         with: { go-version-file: apps/server-go/go.mod }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      - uses: extractions/setup-just@v3
       - name: Validate release configuration
         uses: goreleaser/goreleaser-action@v6
         with:
