@@ -61,7 +61,7 @@
     'Hiragino Sans GB', 'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei', system-ui, sans-serif;
   --font-mono: ui-monospace, 'SFMono-Regular', 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Consolas,
     'Liberation Mono', monospace;
-  --font-cjk-display: 'Songti SC', 'STSong', 'Source Han Serif SC', 'Noto Serif CJK SC', 'SimSun', serif;
+  --font-cjk-display: 'Songti SC', 'STSong', 'SimSun', 'Noto Serif CJK SC', 'Source Han Serif SC', serif;
 
   --fs-11: 11px;
   --fs-12: 12px;
@@ -558,26 +558,34 @@ button.key-link:focus-visible { outline: 2px solid var(--vermilion-hi); outline-
 .rotation-policy h4 { margin: 0 0 8px; }
 
 /* ---------- 登录 ---------- */
+/* 左页开门，右页是那道禁制本身：一册摊开的书，左为门、右为文。 */
 .auth-shell {
-  min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 460px);
+  min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: 'form lead';
   background:
-    radial-gradient(900px 600px at 8% 18%, rgb(212 67 46 / 9%), transparent 62%),
-    radial-gradient(760px 520px at 88% 92%, rgb(212 67 46 / 5%), transparent 60%);
+    radial-gradient(880px 620px at 12% 16%, rgb(212 67 46 / 8%), transparent 62%),
+    radial-gradient(720px 620px at 76% 46%, rgb(212 67 46 / 7%), transparent 62%);
 }
-.auth-lead { display: flex; flex-direction: column; justify-content: space-between; padding: 44px 52px; gap: 40px; min-height: 100vh; }
+/* 启动面还没有门内门外之分：单张卡居中。 */
+.auth-shell > .auth-card { grid-column: 1 / -1; grid-row: 1; justify-self: center; align-self: center; }
+
+.auth-aside {
+  grid-area: form; display: flex; align-items: center; justify-content: center;
+  padding: 32px 28px; min-height: 100vh;
+}
 .auth-brand { display: flex; align-items: center; gap: 14px; }
 .auth-wordmark { display: flex; flex-direction: column; }
 .auth-wordmark .zh { font-family: var(--font-cjk-display); font-size: var(--fs-26); letter-spacing: 0.14em; line-height: 1.1; }
 .auth-wordmark .en { font-size: var(--fs-11); letter-spacing: 0.32em; text-transform: uppercase; color: var(--faint); }
-.auth-principle { max-width: 42ch; font-size: var(--fs-17); line-height: 1.7; color: var(--porcelain-dim); }
-.auth-principle strong { color: var(--fg); font-weight: 560; }
-.auth-covenants { display: flex; flex-direction: column; gap: 10px; list-style: none; padding: 0; margin: 0; font-size: var(--fs-12); color: var(--faint); }
-.auth-covenants li { display: flex; align-items: center; gap: 10px; }
-.auth-covenants .icon { color: var(--vermilion); }
-.auth-aside { display: flex; align-items: center; justify-content: center; padding: 32px 28px; border-left: 1px solid var(--border-soft); min-height: 100vh; }
 .auth-card { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 14px; }
 .auth-card .card-block { display: flex; flex-direction: column; gap: 14px; }
 .auth-card h2 { font-size: var(--fs-20); }
+.auth-aside .auth-card h2 { font-size: var(--fs-26); }
+.auth-aside .auth-card h2 .cjk { font-family: var(--font-cjk-display); font-size: 0.9em; letter-spacing: 0.02em; }
+/* 登录页品牌印：60×60，与 26px 字标同高 */
+.auth-aside .brand .seal-mark { width: 60px; height: 60px; font-size: 34px; border-radius: var(--r-md); }
+.auth-aside .brand { gap: 16px; }
+.auth-aside .brand .seal-mark::after { inset: 6px; }
 .auth-card .auth-sub { font-size: var(--fs-12); color: var(--faint); }
 .auth-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: var(--fs-11); color: var(--faint); }
 .sso-block { display: flex; flex-direction: column; gap: 8px; }
@@ -594,7 +602,75 @@ button.key-link:focus-visible { outline: 2px solid var(--vermilion-hi); outline-
 .sso-advanced summary { cursor: pointer; font-size: var(--fs-11); color: var(--faint); }
 .switch { cursor: pointer; text-align: center; margin: 0; background: none; border: 0; color: var(--faint); font-size: var(--fs-12); padding: 4px; }
 .switch:hover { color: var(--porcelain); }
-.auth-caps { font-size: var(--fs-11); letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); }
+
+/* 右页：整块右半屏就是一页书 —— 版框贴住右半屏，题签在左，界行贯穿整页；
+   竖排正文排在题签之后的左起几列，右侧留成空界行（卷末留白）。 */
+.auth-lead { grid-area: lead; min-height: 100vh; }
+.auth-book {
+  --book-pitch: 50px;
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--ink-900);
+}
+.auth-book::after { content: ''; position: absolute; inset: 4px; border: 1px solid var(--border-soft); pointer-events: none; }
+
+/* 题签：书名、印记、副题，自上而下；末行是部署形态，压到书脚 */
+.auth-book-spine {
+  flex: none; width: 184px;
+  font-family: var(--font-cjk-display);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 42px 0 26px;
+  border-right: 1px solid var(--border);
+}
+.auth-book-spine-top { display: block; text-align: center; }
+.auth-book-line { display: block; margin: 0 0 22px; line-height: 1.2; }
+.auth-book-line:last-child { margin-bottom: 0; }
+.auth-book-line > span { display: inline-block; vertical-align: top; writing-mode: vertical-lr; white-space: nowrap; }
+.auth-book-title { text-orientation: upright; font-family: var(--font-cjk-display); font-size: var(--fs-34); line-height: 1.08; letter-spacing: 0.16em; color: var(--fg); }
+.auth-book-imprint { text-orientation: mixed; font-size: var(--fs-12); letter-spacing: 0.34em; color: var(--faint); }
+.auth-book-motto { text-orientation: upright; font-size: var(--fs-13); letter-spacing: 0.3em; color: var(--porcelain-faint); }
+.auth-book-kicker { margin-top: auto; writing-mode: vertical-lr; text-orientation: upright; white-space: nowrap; font-size: var(--fs-12); letter-spacing: 0.2em; color: var(--faint); }
+
+/* 卷末印：落在正文之后的空白界行里 */
+.auth-book-seal { position: absolute; right: 48px; bottom: 40px; }
+.seal-mark.auth-book-seal { width: 60px; height: 60px; font-size: 34px; border-radius: var(--r-md); box-shadow: inset 0 0 0 1px rgb(255 246 234 / 22%); }
+.seal-mark.auth-book-seal::after { inset: 6px; }
+
+/* 正文：竖排文本流；line-height 即界行间距，界行铺满整页宽度 */
+.auth-book-body {
+  writing-mode: vertical-lr;
+  text-orientation: mixed;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 40px 0 110px;
+  font-family: var(--font-cjk-display);
+  font-size: var(--fs-17);
+  line-height: var(--book-pitch);
+  letter-spacing: 0.02em;
+  color: var(--porcelain-dim);
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0 calc(var(--book-pitch) - 1px),
+    var(--border) calc(var(--book-pitch) - 1px) var(--book-pitch)
+  );
+  background-origin: border-box;
+  background-clip: border-box;
+}
+.auth-book-text { margin: 0; line-height: var(--book-pitch); }
+.auth-book-principle { font-size: var(--fs-34); color: var(--porcelain); }
+.auth-book-principle strong { color: var(--fg); font-weight: 560; }
+.auth-book-principle strong, .auth-book-item strong { word-break: keep-all; }
+.auth-book-item { font-size: var(--fs-20); color: var(--faint); }
+.auth-book-item strong { font-size: var(--fs-20); color: var(--porcelain); font-weight: 560; }
+.auth-book-num { font-size: var(--fs-20); color: var(--porcelain-dim); }
+.auth-book-note { color: var(--faint); }
+.auth-book-prose { font-size: var(--fs-17); color: var(--faint); }
+.auth-book-colophon { margin: 0; font-size: var(--fs-13); line-height: var(--book-pitch); letter-spacing: 0.04em; color: var(--faint); }
 
 /* ---------- 版本标识 ---------- */
 .version-tag { margin: 0; font-size: var(--fs-11); overflow-wrap: anywhere; color: var(--faint); font-family: var(--font-mono); letter-spacing: -0.02em; }
@@ -968,10 +1044,67 @@ button.key-link:focus-visible { outline: 2px solid var(--vermilion-hi); outline-
   .audit-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* 两栏变窄、或高度不够时：书页收紧一档（题签、界行、字号同步收小），
+   保证正文列数不会撑破版框。 */
+@media (max-width: 1200px), (min-width: 1201px) and (max-height: 735px) {
+  .auth-book { --book-pitch: 40px; }
+  .auth-book-spine { width: 148px; padding: 32px 0 22px; }
+  .auth-book-line { margin-bottom: 18px; }
+  .auth-book-title { font-size: var(--fs-26); }
+  .auth-book-imprint { font-size: var(--fs-11); }
+  .auth-book-motto { font-size: var(--fs-12); }
+  .auth-book-kicker { font-size: var(--fs-11); }
+  .auth-book-body { padding: 28px 0 96px; }
+  .auth-book-principle { font-size: var(--fs-26); }
+  .auth-book-item { font-size: var(--fs-17); }
+  .auth-book-item strong { font-size: var(--fs-20); }
+  .auth-book-num { font-size: var(--fs-20); }
+  .auth-book-prose { font-size: var(--fs-15); display: block; }
+  .auth-book-colophon { font-size: var(--fs-12); }
+  .auth-book-seal { right: 40px; bottom: 34px; }
+  .seal-mark.auth-book-seal { width: 48px; height: 48px; font-size: 28px; }
+  .seal-mark.auth-book-seal::after { inset: 5px; }
+}
+
+/* 屏太矮：再收一档 */
+@media (max-height: 680px) {
+  .auth-book { --book-pitch: 32px; }
+  .auth-book-spine { width: 128px; padding: 24px 0 18px; }
+  .auth-book-line { margin-bottom: 14px; }
+  .auth-book-body { padding: 22px 0 84px; }
+  .auth-book-item { font-size: var(--fs-15); }
+  .auth-book-item strong { font-size: var(--fs-17); }
+  .auth-book-num { font-size: var(--fs-17); }
+  .auth-book-prose { font-size: var(--fs-14); }
+  .auth-book-seal { right: 30px; bottom: 26px; }
+  .seal-mark.auth-book-seal { width: 38px; height: 38px; font-size: 22px; }
+  .seal-mark.auth-book-seal::after { inset: 4px; }
+}
+
+/* 极矮窗口：再收一档，防止正文列数超过版框宽度 */
+@media (max-height: 560px) {
+  .auth-book { --book-pitch: 28px; }
+  .auth-book-spine { width: 112px; padding: 18px 0 14px; }
+  .auth-book-line { margin-bottom: 10px; }
+  .auth-book-body { padding: 18px 0 66px; }
+  .auth-book-principle { font-size: var(--fs-20); }
+  .auth-book-item { font-size: var(--fs-13); }
+  .auth-book-item strong { font-size: var(--fs-15); }
+  .auth-book-num { font-size: var(--fs-15); }
+  .auth-book-prose { font-size: var(--fs-12); }
+  .auth-book-colophon { font-size: var(--fs-11); }
+  .auth-book-seal { right: 26px; bottom: 22px; }
+  .seal-mark.auth-book-seal { width: 34px; height: 34px; font-size: 20px; }
+  .seal-mark.auth-book-seal::after { inset: 4px; }
+}
+@media (max-width: 1024px) {
+  .auth-aside .auth-card h2 { font-size: var(--fs-20); }
+}
+
 @media (max-width: 900px) {
-  .auth-shell { grid-template-columns: minmax(0, 1fr); }
+  .auth-shell { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'form'; }
   .auth-lead { display: none; }
-  .auth-aside { border-left: 0; padding: 40px 20px; min-height: 100vh; }
+  .auth-aside { border-right: 0; padding: 40px 20px; min-height: 100vh; }
   .main { padding: 18px 14px 96px; }
   .stage { gap: 16px; }
 }
@@ -1095,3 +1228,10 @@ button.key-link:focus-visible { outline: 2px solid var(--vermilion-hi); outline-
   cursor: pointer; transition: color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
 }
 .version-diff button:not([class*='btn']):hover { color: var(--fg); border-color: var(--ink-600); }
+
+
+
+
+
+
+

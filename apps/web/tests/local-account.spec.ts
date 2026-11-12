@@ -41,6 +41,11 @@ test('本地账号：登录页 → 注册即进入控制台，退出回到登录
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
+  // 门面：左边是开门的表单，右边是仿古籍竖排书页；列从左向右，字从上到下。
+  const gate = await page.locator('.auth-aside').boundingBox();
+  const leaf = await page.locator('.auth-lead').boundingBox();
+  expect(gate && leaf && gate.x + gate.width <= leaf.x + 1).toBe(true);
+  await expect(page.locator('.auth-book-body')).toHaveCSS('writing-mode', 'vertical-lr');
   await page.getByLabel('邮箱').fill(email);
   await page.getByLabel('密码').fill(password);
   await page.getByRole('button', { name: '登录', exact: true }).click();
