@@ -52,7 +52,7 @@ Contrast floor: body and placeholder ≥ 4.5:1, large text ≥ 3:1. Secondary te
 
 - Scale 2 / 4 / 8 / 12 / 16 / 20 / 24 / 32 / 48. `.main` is 24px × `--pad`, stage gap 20px.
 - Radii: `--r-sm` 3px (chips, keycaps), `--r-md` 5px (controls), `--r-lg` 8px (panels, dialogs' inner blocks), `--r-xl` 14px (dialogs, cards). Pills are round only for avatars and dots.
-- **Depth is a seam, not a shadow.** 1px borders divide regions. Shadows exist only where something is lifted out of the page: `.popover`, `.modal`, `.detail-dialog`, `.flash-dialog` (`--shadow-pop`, `--shadow-dialog`). A bordered element with a wide soft shadow is wrong in this world.
+- **Depth is a seam, not a shadow.** 1px borders divide regions. Shadows exist only where something is lifted out of the page: `.popover`, `.modal`, `.flash-dialog` (`--shadow-pop`, `--shadow-dialog`). A bordered element with a wide soft shadow is wrong in this world.
 - Every browser surface is themed: selection is vermilion on `--on-seal`, scrollbars are `--scrollbar-thumb` on the page field, focus is `2px --vermilion-hi` with 2px offset, `caret-color` is vermilion.
 
 ## Components (the vocabulary)
@@ -63,8 +63,19 @@ Primitives live in `src/design/primitives.tsx`; styles are their matching rules 
 - **Field / Input / Select / Textarea / Check** — native controls, styled; `.field` owns label + control + `.field-hint`. Forms stack in `.form-stack`, pair in `.form-row`, close in `.form-actions`.
 - **Pill** — `.pill` with `ok` / `bad` / `warn` / `muted` / `accent`; state only.
 - **PageHead / Section / EmptyState / Notice / Skeleton / MetaList / TableWrap** — the page skeleton. `.empty` teaches; loading uses `.skeleton` lines, never a centred spinner.
-- **Modal** — native `<dialog class="modal">` (title bar with close, sticky head, inert background, Escape, focus restore). **Drawer** — native `<dialog class="detail-dialog">` for a record that stays open beside the list (a secret's versions, diff, rotation).
+- **Modal** — native `<dialog class="modal">` (title bar with close, sticky head, inert background, Escape, focus restore). **Record page** — the secret's 卷宗, in the stage rather than a dialog: `.record` → `.record-sheet`, left `.record-left` (seal + archive), right `.chapters` / `.chapter` (版本 / 轮换 / 痕迹). It replaces the old `.detail-dialog` drawer.
 - **App shell** — `.appbar` (seal, wordmark, `.appbar-ctx` context switcher + `.popover`, session `.status-chip`, `.avatar-btn`), `.rail` (grouped `.rail-group` with `.rail-link`, `.rail-foot` with the current project and version), `.mobile-nav` bottom bar ≤760px, `.stage` for content.
+
+## The secret record (卷宗)
+
+The secret detail is not a drawer. It is a page-sized 卷宗 in the stage: a left leaf that fixes **what the secret is** and a right leaf that holds **what happened to it**, separated by one seam. The list unmounts while it is open; 返回密钥, the rail's 密钥 item and the mobile 密钥 tab return to it.
+
+- **Left leaf — 封印与档案.** The seal chamber shows `.cipher` at mid density until an explicit 显示明文; after reveal/hide the mask carries the shown length. The archive is three or four `.ledger-row`s (位置 / 标签 / 备注 / 轮换). Rotation is a one-line status + next link, never the policy form. 删除密钥 sits at the leaf foot behind a seam.
+- **Right leaf — 版本 / 轮换 / 痕迹.** `.chapters` is the index; exactly one `.chapter` is visible and the index sticks below the appbar. 版本 is the timeline plus 最近读取; 轮换 owns the policy summary, runs, form and fixed state; 痕迹 is the per-secret audit, day-banded, filterable and load-more.
+- **Compare is a subview of 版本.** `.compare-bar` selects two versions; the default is masked with fixed 12-dot plates, never a fabricated length. 显示明文 fetches both historical values, audits the reads, and renders a character diff (single line) or a numbered line diff (multiline). 失焦 clears it.
+- **Truth over the comp.** The real API does not return value lengths or version lengths until a value is read. The live page therefore omits the per-version character counts and masked counts that the static comp explored; the mask is a nominal shape, and all length/diff numbers appear only after an explicit reveal.
+- **Focus.** Opening focuses the record `h1`; closing restores the row key button (or search). Escape closes the record only when no native dialog is open and focus is not in a text field; native modals keep their own Escape/focus behaviour.
+- **Narrow.** ≤1040px the two leaves become 封印 → chapters → 档案 in one column; `.chapters` stays sticky. ≤900px the header becomes 返回 / 标题＋编辑图标 / 元信息. The bottom 密钥 tab is the long-page exit.
 
 ## The login leaf (门面)
 
@@ -99,13 +110,13 @@ A confirmed username is a sealed act, so it is not a notice bar inside the conso
 
 - **Ciphertext carries length.** `.cipher` renders ● segments sized to the value's length (`cipher-xs|sm|mid|md|lg|xl`); unseen values render at mid density, never a fabricated length. A revealed value is `.cipher-value` — a vermilion-tinted chip that enters with one `unseal` clip+blur ease. Re-sealing is instant.
 - **Row actions are quiet until needed.** `.action-fade` sits at 0.5 opacity and rises on hover, on `focus-within`, and is always fully visible on touch layouts.
-- **Records are timelines.** Version history is `.timeline` with a current node in vermilion; audit is `.audit-list` with day bands, action glyphs coloured by kind (reveal/export amber, write jade, delete/revoke vermilion) and mono resources.
+- **Records are timelines.** Version history is `.version-list` with a current node in vermilion; the per-secret audit is `.trace-*` with day bands and action glyphs coloured by kind (reveal amber, write jade, delete/rollback vermilion) and mono resources; the organisation-wide `.audit-list` remains the second timeline.
 - **Once-only secrets** are `.once-secret` — a sealed credential block that must be dismissed by the operator, never a toast.
-- **Motion** is state change only, 140–260ms, exponential ease-out: `modal-in`, `drawer-in`, `pop-in`, `unseal`, `flash-in`, `skeleton`. One authored moment per transition, never an entrance choreography. `prefers-reduced-motion` collapses all of it to 1ms.
+- **Motion** is state change only, 140–260ms, exponential ease-out: `modal-in`, `record-in`, `pop-in`, `unseal`, `flash-in`, `skeleton`. One authored moment per transition, never an entrance choreography. `prefers-reduced-motion` collapses all of it to 1ms.
 
 ## Responsive rules
 
-Structural, not fluid type. ≤1100px the rail narrows and the audit column stacks; the login book page steps down at ≤1200px width (or ≤735px height): 40px 界行, 148px 题签, `--fs-26` opening line; at ≤680px height it takes 32px 界行 / 128px 题签, and at ≤560px height 28px 界行 / 112px 题签 with `--fs-13` notes; ≤900px the login loses its lead column; ≤760px the rail becomes `.mobile-nav`, the appbar hides the wordmark, settings nav becomes a scroll row, tables scroll inside `TableWrap`; ≤640px the secrets table becomes `data-mobile="cards"` rows (key + version / value + tags / date + actions) and card tables drop to a single column. `document.documentElement.scrollWidth ≤ innerWidth` holds at every tab from 390px up.
+Structural, not fluid type. ≤1100px the rail narrows and the audit column stacks; the login book page steps down at ≤1200px width (or ≤735px height): 40px 界行, 148px 题签, `--fs-26` opening line; at ≤680px height it takes 32px 界行 / 128px 题签, and at ≤560px height 28px 界行 / 112px 题签 with `--fs-13` notes; ≤900px the login loses its lead column; ≤1040px the secret record stacks its two leaves and pins `.chapters`; ≤900px the record header becomes a 返回 / title＋编辑 / meta grid; ≤760px the rail becomes `.mobile-nav`, the appbar hides the wordmark and the session chip, settings nav becomes a scroll row, tables scroll inside `TableWrap`; ≤640px the secrets table becomes `data-mobile="cards"` rows (key + version / value + tags / date + actions) and card tables drop to a single column. `document.documentElement.scrollWidth ≤ innerWidth` holds at every tab from 390px up.
 
 ## Accessibility commitments
 
@@ -113,7 +124,7 @@ Keyboard-operable everywhere; native `<dialog>` focus containment and Escape; `r
 
 ## Scope and migration ledger
 
-Replaced: the GitHub-dark palette (`#0d1117` / `#58a6ff` / `#7c3aed`), the topbar + flat sidebar shell, `.card`-per-panel composition, emoji and text-glyph icons, native `window.alert`-styled confirmations, and the Modal-based version history (now the drawer). The login's stacked lead list (brand block + three-icon covenant bullets + MIT footer) was replaced by the single 古籍 leaf above.
+Replaced: the GitHub-dark palette (`#0d1117` / `#58a6ff` / `#7c3aed`), the topbar + flat sidebar shell, `.card`-per-panel composition, emoji and text-glyph icons, native `window.alert`-styled confirmations, and the Modal-based version history (now the secret record page). The narrow drawer that squeezed value, versions, diff and rotation into one column was replaced by the 卷宗 record page on 2026-11-13. The login's stacked lead list (brand block + three-icon covenant bullets + MIT footer) was replaced by the single 古籍 leaf above.
 
 Preserved because the product depends on it: session/CSRF/BFF behaviour in `api.ts`, organization-bound workspace lifetimes, `taboo:permissions-refresh` and `taboo:verification-unavailable` listeners, blur-clears-revealed-value and the 20-second clipboard wipe, server-side authorization as the only truth, and every accessible name the browser suite asserts (`显示`, `隐藏`, `复制`, `编辑`, `删除`, `＋ 新建密钥`, `保存（产生新版本）`, `回滚到此`, `对比`, `版本历史`, `添加身份连接`, `当前组织`, `退出`, heading `taboo · 禁制`).
 

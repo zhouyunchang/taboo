@@ -13,7 +13,7 @@ import type { IconName } from '../design/Icon';
 
 /** 封印的长度就是值的长短：已显示过的值按字符数决定封条宽度（4 段），未显示过时用中档。
     长度是密文自带的形状信息——私钥不该长得像密码。 */
-function mask(valueLen: number | null) {
+export function mask(valueLen: number | null) {
   const len = valueLen;
   if (len === null) return { dots: '••••••••', cls: 'cipher cipher-mid' };
   if (len < 8) return { dots: '•••', cls: 'cipher cipher-xs' };
@@ -183,7 +183,7 @@ export function SecretRow({ s, projectId, canWrite, onChanged, onEdit, onDetail,
   return (
     <tr className={active ? 'open' : ''} onDoubleClick={(e) => { if (!(e.target as HTMLElement).closest('button')) onDetail(); }}>
         <td className="col-key">
-          <button type="button" className="secret-key-btn" onClick={onDetail} title="查看版本历史">
+          <button type="button" className="secret-key-btn" onClick={onDetail} title="查看密钥记录">
             <Icon name={keyGlyph(s.key)} />
             <span>{s.key}</span>
           </button>

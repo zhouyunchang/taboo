@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>taboo · 密钥记录 · 高保真原型</title>
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="record.css">
+</head>
+<body>
+  <div class="layout">
+    <header class="appbar">
+      <div class="appbar-brand">
+        <span class="seal-mark" aria-hidden="true">禁</span>
+        <span class="appbar-wordmark"><span class="en">taboo</span><span class="zh">禁制</span></span>
+      </div>
+
+      <div class="appbar-ctx" style="position: relative">
+        <button type="button" class="ctx-btn" id="ctx-button" aria-expanded="false" aria-haspopup="menu">
+          <span data-icon="folder-open"></span>
+          <span class="ctx-name"><span class="ctx-owner" style="color: var(--faint)">个人 / </span>payments</span>
+          <span data-icon="chevron-down"></span>
+        </button>
+        <div class="popover wide" id="ctx-menu" hidden>
+          <div class="pop-head">项目</div>
+          <ul class="pop-list">
+            <li>
+              <button type="button" class="pop-item active" aria-current="true" data-proto="原型只包含 payments 项目">
+                <span data-icon="folder-open"></span>
+                <span class="pop-item-main"><span class="pop-item-name">payments</span><span class="pop-item-sub">payments · 支付与结算</span></span>
+                <span class="check" data-icon="check"></span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="pop-item" data-proto="原型只包含 payments 项目">
+                <span data-icon="folder"></span>
+                <span class="pop-item-main"><span class="pop-item-name">demo-app</span><span class="pop-item-sub">demo-app · 示例应用</span></span>
+              </button>
+            </li>
+          </ul>
+          <div class="pop-sep"></div>
+          <div class="pop-foot"><span class="pop-head" style="padding:0 8px">原型只演示 payments</span></div>
+        </div>
+      </div>
+
+      <div class="appbar-spacer"></div>
+      <div class="appbar-actions">
+        <span class="status-chip" title="本地账号会话">
+          <span class="dot warn" aria-hidden="true"></span>
+          <span>本地会话</span>
+          <span class="label-long">· owner</span>
+        </span>
+        <button type="button" class="avatar-btn" aria-label="账户菜单" data-proto="账户菜单不在本次原型范围">云</button>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside class="rail" aria-label="主导航">
+        <div class="rail-owner">
+          <span class="rail-owner-name" title="个人">个人</span>
+          <span class="rail-owner-meta">
+            <span class="pill pill-muted">个人空间</span>
+            <span class="mono">owner</span>
+          </span>
+        </div>
+
+        <div class="rail-group">
+          <div class="rail-label">密钥面</div>
+          <button type="button" class="rail-link active" id="rail-secrets" aria-current="page"><span data-icon="key"></span><span>密钥</span></button>
+        </div>
+
+        <div class="rail-group">
+          <div class="rail-label">治理</div>
+          <button type="button" class="rail-link" data-proto="机器身份页不在本次原型范围"><span data-icon="robot"></span><span>机器身份</span></button>
+          <button type="button" class="rail-link" data-proto="动态密钥页不在本次原型范围"><span data-icon="db"></span><span>动态密钥</span></button>
+          <button type="button" class="rail-link" data-proto="轮换总览页不在本次原型范围"><span data-icon="refresh"></span><span>轮换</span></button>
+        </div>
+
+        <div class="rail-group">
+          <div class="rail-label">印记</div>
+          <button type="button" class="rail-link" data-proto="审计日志页不在本次原型范围"><span data-icon="audit"></span><span>审计日志</span></button>
+          <button type="button" class="rail-link" data-proto="扫描报告页不在本次原型范围"><span data-icon="scan"></span><span>扫描报告</span></button>
+        </div>
+
+        <div class="rail-group">
+          <div class="rail-label">设置</div>
+          <button type="button" class="rail-link" data-proto="个人设置页不在本次原型范围"><span data-icon="settings"></span><span>个人设置</span></button>
+        </div>
+
+        <div class="rail-foot">
+          <button type="button" class="rail-project" data-proto="项目切换使用顶部上下文">
+            <span class="rail-project-label">当前项目</span>
+            <span class="rail-project-name"><span data-icon="folder-open"></span>payments</span>
+            <span class="rail-project-path">payments</span>
+          </button>
+          <div class="proto-stamp">prototype · 合成数据</div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="stage">
+          <!-- ───────────── 列表：进入记录的现场 ───────────── -->
+          <section class="panel" id="list-view" aria-labelledby="list-title">
+            <header class="page-head">
+              <div class="page-head-main">
+                <h1 id="list-title" tabindex="-1">payments</h1>
+                <p class="page-meta">
+                  <span>归属于个人</span><span aria-hidden="true">·</span>
+                  <span class="mono">支付与结算</span><span aria-hidden="true">·</span>
+                  <span>合成演示数据</span>
+                </p>
+              </div>
+              <div class="page-actions">
+                <button type="button" class="btn btn-quiet" data-proto="轮换总览页不在本次原型范围"><span data-icon="refresh"></span><span class="btn-label">轮换</span></button>
+                <button type="button" class="btn btn-primary" data-proto="新建密钥流程不在本次原型范围"><span data-icon="plus"></span><span class="btn-label">新建密钥</span></button>
+              </div>
+            </header>
+
+            <div class="secret-toolbar">
+              <div class="search">
+                <span data-icon="search"></span>
+                <input type="search" id="secret-search" aria-label="搜索密钥" placeholder="搜索 Key / 备注 / 标签" autocomplete="off">
+              </div>
+              <div class="toolbar-actions">
+                <button type="button" class="btn btn-quiet" data-proto="文件夹创建不在本次原型范围"><span data-icon="folder"></span><span class="btn-label">新建文件夹</span></button>
+                <button type="button" class="btn btn-default" data-proto="导入流程不在本次原型范围"><span data-icon="upload"></span><span class="btn-label">导入 .env</span></button>
+              </div>
+            </div>
+
+            <div class="path-bar">
+              <span data-icon="folder-open"></span>
+              <span id="path-crumbs" style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap"></span>
+              <span class="spacer"></span>
+              <span class="cell-sub mono" id="list-count"></span>
+            </div>
+
+            <div class="split">
+              <aside class="folder-tree" aria-label="文件夹">
+                <ul class="tree">
+                  <li>
+                    <div class="tree-item" data-tree-folder="/">
+                      <button type="button" class="tree-label"><span data-icon="folder"></span><span class="tree-name">根目录</span></button>
+                    </div>
+                  </li>
+                  <li>
+                    <div class="tree-item active" data-tree-folder="/prod/">
+                      <button type="button" class="tree-label"><span data-icon="folder-open"></span><span class="tree-name">prod</span></button>
+                    </div>
+                  </li>
+                  <li>
+                    <div class="tree-item" data-tree-folder="/staging/">
+                      <button type="button" class="tree-label"><span data-icon="folder"></span><span class="tree-name">staging</span></button>
+                    </div>
+                  </li>
+                  <li>
+                    <div class="tree-item" data-tree-folder="/shared/">
+                      <button type="button" class="tree-label"><span data-icon="folder"></span><span class="tree-name">shared</span></button>
+                    </div>
+                  </li>
+                </ul>
+              </aside>
+              <div class="grow" id="secret-list-region"></div>
+            </div>
+          </section>
+
+          <!-- ───────────── 记录：一枚密钥的卷宗 ───────────── -->
+          <section class="record" id="record-view" hidden aria-labelledby="record-title">
+            <header class="record-head">
+              <div class="record-head-main">
+                <button type="button" class="record-back" id="record-back">
+                  <span data-icon="arrow-left"></span>返回密钥
+                </button>
+                <div class="record-title-row">
+                  <h1 class="record-title" id="record-title" tabindex="-1">STRIPE_SECRET_KEY</h1>
+                  <span class="pill pill-accent" id="record-current-pill">v4 当前</span>
+                </div>
+                <p class="record-meta">
+                  <span class="mono" id="record-path">payments / prod</span>
+                  <span class="dot-sep" aria-hidden="true">·</span>
+                  <span id="record-updated">最后写入 2026-11-13 02:00:54</span>
+                  <span class="dot-sep" aria-hidden="true">·</span>
+                  <span id="record-version-count">4 个版本</span>
+                  <span class="dot-sep proto-sep" aria-hidden="true">·</span>
+                  <span class="proto-note">合成演示数据</span>
+                </p>
+              </div>
+              <div class="record-head-actions">
+                <button type="button" class="btn btn-default" id="record-edit" aria-label="编辑"><span data-icon="pencil"></span><span class="btn-label">编辑</span></button>
+              </div>
+            </header>
+
+            <div class="record-sheet">
+              <div class="record-left">
+                <!-- 封印 -->
+                <section class="seal-chamber" id="seal-chamber" data-revealed="false" aria-labelledby="seal-label">
+                  <div class="seal-chamber-head">
+                    <span class="chamber-label" id="seal-label">封印</span>
+                    <span class="chamber-state" id="seal-state">已封印</span>
+                  </div>
+                  <div class="seal-value" id="seal-value">
+                    <span class="seal-cipher" id="seal-cipher" aria-label="密文，长度约 33 字符">••••••••••••••••••</span>
+                  </div>
+                  <div class="seal-wm" aria-hidden="true">禁</div>
+                  <div class="seal-sub" id="seal-sub">
+                    <span id="seal-length">33 字符</span>
+                    <span class="sep" aria-hidden="true">·</span>
+                    <span>AES-256-GCM</span>
+                  </div>
+                  <div class="seal-actions">
+                    <button type="button" class="btn btn-default" id="seal-reveal"><span data-icon="eye"></span><span class="btn-label">显示明文</span></button>
+                    <button type="button" class="btn btn-primary" id="seal-copy"><span data-icon="copy"></span><span class="btn-label">复制</span></button>
+                  </div>
+                  <p class="seal-hint" id="seal-hint">明文只在此处停留，失焦即收回。复制后 20 秒清空剪贴板。</p>
+                </section>
+
+                <!-- 档案 -->
+                <section class="register" aria-labelledby="register-label">
+                  <div class="block-head">
+                    <h2 id="register-label">档案</h2>
+                    <span class="block-hint">随版本写入</span>
+                  </div>
+                  <dl class="ledger">
+                    <div class="ledger-row"><dt>位置</dt><dd class="mono" id="record-location">payments / prod</dd></div>
+                    <div class="ledger-row"><dt>标签</dt><dd><span class="tag-row" id="record-tags"></span></dd></div>
+                    <div class="ledger-row"><dt>备注</dt><dd id="record-comment">—</dd></div>
+                    <div class="ledger-row"><dt>轮换</dt><dd id="record-rotation">—</dd></div>
+                  </dl>
+                </section>
+
+                <!-- 敏感动作放在卷末 -->
+                <div class="danger-zone">
+                  <button type="button" class="danger-btn" id="delete-secret"><span data-icon="trash"></span>删除密钥</button>
+                  <p class="danger-note" id="delete-secret-note">版本历史与轮换记录会一并删除，不可恢复。</p>
+                </div>
+              </div>
+
+              <div class="record-main">
+                <div class="chapters" role="tablist" aria-label="密钥卷宗章节">
+                  <button type="button" class="chapter-tab" id="tab-versions" role="tab" aria-selected="true" aria-controls="chapter-versions" data-chapter="versions">
+                    版本 <span class="chapter-count" id="count-versions">4</span>
+                  </button>
+                  <button type="button" class="chapter-tab" id="tab-rotation" role="tab" aria-selected="false" aria-controls="chapter-rotation" tabindex="-1" data-chapter="rotation">
+                    轮换 <span class="chapter-dot" id="rotation-dot" aria-hidden="true"></span><span class="sr-only" id="rotation-dot-text">运行中</span>
+                  </button>
+                  <button type="button" class="chapter-tab" id="tab-traces" role="tab" aria-selected="false" aria-controls="chapter-traces" tabindex="-1" data-chapter="traces">
+                    痕迹 <span class="chapter-count" id="count-traces">9</span>
+                  </button>
+                </div>
+
+                <!-- 版本 -->
+                <div class="chapter" id="chapter-versions" role="tabpanel" aria-labelledby="tab-versions" tabindex="0">
+                  <div class="chapter-notice" id="versions-notice" role="status" aria-live="polite"></div>
+                  <div id="versions-view">
+                    <header class="chapter-head">
+                      <div class="chapter-head-main">
+                        <h2>版本历史</h2>
+                        <p class="chapter-hint">每次写入产生新版本；回滚同样产生新版本，旧版本不删除。</p>
+                      </div>
+                      <div class="chapter-actions">
+                        <button type="button" class="btn btn-default" id="compare-open"><span data-icon="arrow-right"></span><span class="btn-label">对比版本</span></button>
+                      </div>
+                    </header>
+                    <ol class="version-list" id="version-list"></ol>
+                    <div id="version-teach" hidden></div>
+                    <div class="chapter-foot">
+                      <span id="versions-foot">版本由服务端按写入顺序编号。</span>
+                      <span class="mono" id="versions-range"></span>
+                    </div>
+                    <section class="recent-reads" id="recent-reads" aria-labelledby="recent-reads-label"></section>
+                  </div>
+
+                  <div id="compare-view" hidden>
+                    <div class="compare-head">
+                      <button type="button" class="back-btn" id="compare-back"><span data-icon="arrow-left"></span>版本历史</button>
+                      <div class="compare-title"><h2>对比版本</h2><span class="mono" id="compare-range"></span></div>
+                    </div>
+                    <div class="compare-bar">
+                      <label class="field">
+                        <span class="field-label">基准</span>
+                        <select id="compare-left" aria-label="基准版本"></select>
+                      </label>
+                      <span class="compare-arrow" aria-hidden="true"><span data-icon="arrow-right"></span></span>
+                      <label class="field">
+                        <span class="field-label">对比</span>
+                        <select id="compare-right" aria-label="对比版本"></select>
+                      </label>
+                      <button type="button" class="btn btn-quiet btn-sm" id="compare-swap" aria-label="交换基准与对比版本" title="交换"><span data-icon="swap"></span></button>
+                      <span class="spacer"></span>
+                      <button type="button" class="btn btn-default" id="compare-reveal"><span data-icon="eye"></span><span class="btn-label">显示明文</span></button>
+                    </div>
+                    <p class="compare-note" id="compare-note">值默认掩码。显示明文只作用于本屏，失焦即收回。</p>
+                    <div class="compare-summary" id="compare-summary"></div>
+                    <div id="compare-body"></div>
+                    <div class="compare-actions">
+                      <button type="button" class="btn btn-quiet" id="compare-back-2"><span data-icon="arrow-left"></span><span class="btn-label">返回版本历史</span></button>
+                      <span class="cell-sub">对比读的是历史值；不会写入新版本。</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 轮换 -->
+                <div class="chapter" id="chapter-rotation" role="tabpanel" aria-labelledby="tab-rotation" tabindex="0" hidden>
+                  <div class="chapter-notice" id="rotation-notice" role="status" aria-live="polite"></div>
+                  <header class="chapter-head">
+                    <div class="chapter-head-main">
+                      <h2>轮换策略</h2>
+                      <p class="chapter-hint">到期只创建待办与通知；生成新值不等于分发完成，外部真源仍要在上游更新。</p>
+                    </div>
+                    <div class="chapter-actions" id="rotation-actions"></div>
+                  </header>
+                  <div id="policy-region"></div>
+                </div>
+
+                <!-- 痕迹 -->
+                <div class="chapter" id="chapter-traces" role="tabpanel" aria-labelledby="tab-traces" tabindex="0" hidden>
+                  <div class="chapter-notice" id="traces-notice" role="status" aria-live="polite"></div>
+                  <header class="chapter-head">
+                    <div class="chapter-head-main">
+                      <h2>此密钥的痕迹</h2>
+                      <p class="chapter-hint">显示、写入、回滚与轮换都会留下记录；审计链 append-only，不可修改。</p>
+                    </div>
+                    <div class="trace-filters" id="trace-filters" role="group" aria-label="筛选痕迹"></div>
+                  </header>
+                  <div id="trace-list"></div>
+                  <div class="chapter-foot">
+                    <span id="traces-foot">只显示与这把密钥相关的记录。</span>
+                    <span class="mono">append-only</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <nav class="mobile-nav" aria-label="主导航（窄屏）">
+      <button type="button" class="active" id="mobile-secrets" aria-current="page"><span data-icon="key"></span><span>密钥</span></button>
+      <button type="button" data-proto="机器身份页不在本次原型范围"><span data-icon="robot"></span><span>机器身份</span></button>
+      <button type="button" data-proto="审计日志页不在本次原型范围"><span data-icon="audit"></span><span>审计日志</span></button>
+      <button type="button" data-proto="个人设置页不在本次原型范围"><span data-icon="settings"></span><span>设置</span></button>
+    </nav>
+  </div>
+
+  <dialog class="flash-dialog" id="flash-dialog" aria-live="polite"><span role="status" id="flash-text"></span></dialog>
+
+  <dialog class="modal" id="app-dialog" aria-labelledby="dialog-title">
+    <header class="modal-head">
+      <h3 id="dialog-title">对话框</h3>
+      <button type="button" class="icon-btn" id="dialog-close" aria-label="关闭"><span data-icon="x"></span></button>
+    </header>
+    <div class="dialog-body form-stack" id="dialog-body"></div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

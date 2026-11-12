@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, hasBrowserSession, getBrowserSessionInfo } from '../api';
 import type { User, Org, Project, Folder, SecretMeta, AuditLog, Identity, CreatedIdentity, IdentityScope, DynamicEngine, DynamicLease } from '../api';
 import SettingsPanel from './Settings';
-import SecretDetail from './SecretDetail';
+import SecretRecord from './SecretRecord';
 import { OrganizationSwitcher } from '../components/Governance';
 import IdentityReplacement from '../components/IdentityReplacement';
 import useSecretMutation from '../components/useSecretMutation';
@@ -283,7 +283,7 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
               <div className="rail-label">{group.label}</div>
               {group.items.map((item) => (
                 <button key={item.tab} type="button" className={`rail-link ${tab === item.tab ? 'active' : ''}`}
-                  aria-current={tab === item.tab ? 'page' : undefined} onClick={() => setTab(item.tab)}>
+                  aria-current={tab === item.tab ? 'page' : undefined} onClick={() => { if (item.tab === 'secrets') window.dispatchEvent(new Event('taboo:secrets-home')); setTab(item.tab); }}>
                   <Icon name={item.icon} size={15} />
                   <span>{item.label}</span>
                 </button>
@@ -309,7 +309,7 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
         <main className="main">
           <div className="stage">
             {tab === 'secrets'
-              ? project && <SecretsPanel key={project.id} projectId={project.id} projectSlug={project.slug} projectName={project.name} ownerLabel={ownerLabel} canWrite={org.role === 'developer' || canAdmin} onRotations={() => setTab('rotations')} />
+              ? project && <SecretsPanel key={project.id} projectId={project.id} projectSlug={project.slug} projectName={project.name} ownerLabel={ownerLabel} orgSlug={org.slug} canAudit={canAudit} canWrite={org.role === 'developer' || canAdmin} onRotations={() => setTab('rotations')} />
               : tab === 'identities'
                 ? <IdentitiesPanel orgSlug={org.slug} project={project} projects={projects} />
                 : tab === 'dynamic'
@@ -328,7 +328,7 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
       <nav className="mobile-nav" aria-label="主导航（窄屏）">
         {mobileItems.map((item) => (
           <button key={item.tab} type="button" className={navCurrent === item.tab ? 'active' : ''}
-            aria-current={navCurrent === item.tab ? 'page' : undefined} onClick={() => setTab(item.tab)}>
+            aria-current={navCurrent === item.tab ? 'page' : undefined} onClick={() => { if (item.tab === 'secrets') window.dispatchEvent(new Event('taboo:secrets-home')); setTab(item.tab); }}>
             <Icon name={item.icon} size={18} />
             <span>{item.label}</span>
           </button>
@@ -447,8 +447,8 @@ function TotpPanel({ onClose }: { onClose: () => void }) {
 
 /* ───────────────────────── 密钥面 ───────────────────────── */
 
-function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrite: legacyCanWrite, onRotations }: {
-  projectId: string; projectSlug: string; projectName: string; ownerLabel: string; canWrite: boolean; onRotations: () => void;
+function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, orgSlug, canAudit, canWrite: legacyCanWrite, onRotations }: {
+  projectId: string; projectSlug: string; projectName: string; ownerLabel: string; orgSlug: string; canAudit: boolean; canWrite: boolean; onRotations: () => void;
 }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [secrets, setSecrets] = useState<SecretMeta[]>([]);
@@ -458,6 +458,7 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
   const [editing, setEditing] = useState<string | null>(null);
   const [importing, setImporting] = useState(false); // key 或 '__new__'
   const [detail, setDetail] = useState<SecretMeta | null>(null);
+  const detailTrigger = useRef<HTMLElement | null>(null);
   const [query, setQuery] = useState('');
   const [permissions, setPermissions] = useState<{ write: boolean; delete: boolean; rollback: boolean; export: boolean } | null>(null);
   const canWrite = permissions?.write ?? (!hasBrowserSession() && legacyCanWrite);
@@ -473,7 +474,7 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
   const load = useCallback(() => {
     const started = ++listGeneration.current;
     api.get<{ secrets: SecretMeta[]; permissions?: { write: boolean; delete: boolean; rollback: boolean; export: boolean } }>(`/api/v1/projects/${projectId}/secrets?path=${encodeURIComponent(cur)}`)
-      .then((d) => { if (started !== listGeneration.current) return; setError(''); setSecrets(d.secrets); setPermissions(d.permissions ?? null); if (hasBrowserSession() && !d.permissions?.write) setEditing(null); })
+      .then((d) => { if (started !== listGeneration.current) return; setError(''); setSecrets(d.secrets); setPermissions(d.permissions ?? null); if (hasBrowserSession() && !d.permissions?.write) setEditing(null); setDetail((prev) => prev ? d.secrets.find((item) => item.id === prev.id) ?? null : null); })
       .catch((e) => { if (started !== listGeneration.current) return; setSecrets([]); setPermissions({ write: false, delete: false, rollback: false, export: false }); setEditing(null); setDetail(null); setError(e instanceof ApiError ? e.message : String(e)); });
   }, [projectId, cur]);
 
@@ -524,8 +525,44 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
   const canDeleteFolder = (permissions?.delete ?? (!hasBrowserSession() && canWrite)) && cur !== '/';
   const writableCount = secrets.filter((s) => s.canWrite !== false).length;
 
+  function openDetail(secret: SecretMeta) {
+    detailTrigger.current = document.activeElement as HTMLElement | null;
+    setDetail(secret);
+  }
+
+  function focusList(key?: string) {
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('.secret-key-btn'));
+    const target = (key && buttons.find((button) => button.textContent?.trim() === key)) || buttons[0];
+    (target ?? document.querySelector<HTMLInputElement>('input[aria-label="搜索密钥"]'))?.focus();
+  }
+
+  function closeDetail() {
+    const key = detail?.key;
+    setDetail(null);
+    requestAnimationFrame(() => requestAnimationFrame(() => focusList(key)));
+  }
+
+  function deleteDetail() {
+    setDetail(null);
+    load();
+    setNotice('已删除密钥；审计痕迹仍保留。');
+    requestAnimationFrame(() => requestAnimationFrame(() => focusList()));
+  }
+
+  // 桌面侧栏 / 手机底栏点「密钥」时，记录页要能回到列表。
+  useEffect(() => {
+    const home = () => { if (detail) closeDetail(); };
+    window.addEventListener('taboo:secrets-home', home);
+    return () => window.removeEventListener('taboo:secrets-home', home);
+  }, [detail]);
+
   return (
     <div className="panel">
+      {detail ? (
+        <SecretRecord meta={detail} orgSlug={orgSlug} projectId={projectId} projectSlug={projectSlug} canAudit={canAudit}
+          onClose={closeDetail} onEdit={() => setEditing(detail.key)} onChanged={load} onDeleted={deleteDetail} />
+      ) : (
+        <>
       <PageHead
         title={<h1 style={{ font: 'inherit', letterSpacing: 'inherit' }}>{projectSlug}</h1>}
         meta={<><span>归属于{ownerLabel}</span><span aria-hidden="true">·</span><span className="mono">{projectName}</span></>}
@@ -597,7 +634,7 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
                 <tbody>
                   {shown.map((s) => (
                     <SecretRow key={`${s.id}:${s.version}`} s={s} projectId={projectId} canWrite={canWrite && (s.canWrite !== false)}
-                      active={detail?.id === s.id} onChanged={load} onEdit={() => setEditing(s.key)} onDetail={() => setDetail(s)} />
+                      active={false} onChanged={load} onEdit={() => setEditing(s.key)} onDetail={() => openDetail(s)} />
                   ))}
                 </tbody>
               </table>
@@ -606,20 +643,18 @@ function SecretsPanel({ projectId, projectSlug, projectName, ownerLabel, canWrit
           {q && shown.length > 0 && <p className="section-hint">已在当前文件夹内按 Key / 备注 / 标签过滤，共 {shown.length} 把。</p>}
         </div>
       </div>
+        </>
+      )}
 
       {editing && (
         <SecretEditor projectId={projectId} path={cur}
           secretKey={editing === '__new__' ? '' : editing}
           expectedVersion={editing === '__new__' ? 0 : secrets.find((s) => s.key === editing)?.version}
+          initial={editing === '__new__' ? undefined : secrets.find((s) => s.key === editing)}
           onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />
       )}
       {importing && (
         <ImportEnv projectId={projectId} path={cur} onClose={() => setImporting(false)} onImported={load} />
-      )}
-      {detail && (
-        <SecretDetail projectId={projectId} projectSlug={projectSlug} meta={detail}
-          onChanged={load} onClose={() => setDetail(null)}
-          onEdit={() => { setEditing(detail.key); setDetail(null); }} />
       )}
     </div>
   );
@@ -644,14 +679,17 @@ function parentOf(path: string) {
   return i < 0 ? '/' : '/' + t.slice(0, i) + '/';
 }
 
-function SecretEditor({ projectId, path, secretKey, expectedVersion, onClose, onSaved }: {
-  projectId: string; path: string; secretKey: string; expectedVersion?: number; onClose: () => void; onSaved: () => void;
+function SecretEditor({ projectId, path, secretKey, expectedVersion, initial, onClose, onSaved }: {
+  projectId: string; path: string; secretKey: string; expectedVersion?: number;
+  initial?: Pick<SecretMeta, 'comment' | 'tags'>;
+  onClose: () => void; onSaved: () => void;
 }) {
   const mutate = useSecretMutation();
   const [key, setKey] = useState(secretKey);
   const [value, setValue] = useState('');
-  const [comment, setComment] = useState('');
-  const [tags, setTags] = useState('');
+  // 元数据沿用当前版本；明文不预填——编辑是写新版本，不是把旧值读进表单。
+  const [comment, setComment] = useState(initial?.comment ?? '');
+  const [tags, setTags] = useState((initial?.tags ?? []).join(', '));
   const [reason, setReason] = useState('');
   const [fixed, setFixed] = useState(false);
   const [err, setErr] = useState('');
@@ -793,7 +831,7 @@ function AuditPanel({ orgSlug, orgName }: { orgSlug: string; orgName: string }) 
 
   return (
     <div className="panel">
-      <PageHead
+            <PageHead
         title="审计日志"
         meta={<><span>append-only 哈希链 · {orgName}</span><span aria-hidden="true">·</span><span className="mono">org {orgSlug}</span></>}
         actions={<>

@@ -7,7 +7,7 @@ export type IconName =
   | 'eye' | 'eye-off' | 'copy' | 'check' | 'pencil' | 'trash' | 'clock' | 'history'
   | 'shield' | 'seal' | 'audit' | 'robot' | 'db' | 'settings' | 'users' | 'logout'
   | 'alert' | 'lock' | 'unlock' | 'arrow-right' | 'arrow-left' | 'x' | 'menu' | 'more'
-  | 'upload' | 'download' | 'refresh' | 'scan' | 'link' | 'terminal' | 'globe' | 'bell'
+  | 'upload' | 'download' | 'refresh' | 'scan' | 'link' | 'terminal' | 'globe' | 'bell' | 'swap'
   | 'chevron-left' | 'sliders' | 'file' | 'play';
 
 const paths: Record<IconName, string> = {
@@ -54,6 +54,7 @@ const paths: Record<IconName, string> = {
   sliders: 'M2 4.6h3 M9 4.6h5 M2 11.4h5 M11 11.4h3 M5 2.6v4 M11 9.4v4',
   file: 'M3.6 2h5.2l3.6 3.6V14H3.6V2Z M8.6 2v3.8h3.8',
   play: 'M4.6 2.6 13 8l-8.4 5.4V2.6Z',
+  swap: 'M2.5 5.5h9 M9 3l2.5 2.5L9 8 M13.5 10.5h-9 M7 8l-2.5 2.5L7 13',
 };
 
 export default function Icon({ name, size = 16, className = '', strokeWidth = 1.5 }: {
