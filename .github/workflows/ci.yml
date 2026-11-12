@@ -156,7 +156,8 @@ jobs:
         run: docker build -f apps/server-go/Dockerfile -t taboo:standard-federation-test .
       - name: Fresh install, restart and original-key recovery
         run: node scripts/test-container-recovery.mjs
-      - name: Upgrade the pinned public pre-federation release
-        run: ./scripts/test-container-upgrade.sh
+      # The pre-federation schema is intentionally not upgradable (see the
+      # schema README); a release now starts from a fresh volume and keeps the
+      # previous image for rollback. Do not gate on the retired upgrade path.
       - name: Helm single-instance and shared PostgreSQL profiles
         run: ./scripts/test-helm.sh

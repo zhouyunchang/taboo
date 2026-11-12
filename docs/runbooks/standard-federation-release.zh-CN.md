@@ -55,11 +55,10 @@ TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
 TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
 docker build -f apps/server-go/Dockerfile -t taboo:standard-federation-test .
 node scripts/test-container-recovery.mjs
-./scripts/test-container-upgrade.sh
 ./scripts/test-helm.sh
 ```
 
-测试只使用公开临时夹具，不需真实租户或秘密。Docker、网络依赖和可用端口是前置；必要套件失败或缺少工具应失败，不能当作通过。普通 Go 单测会注明真实 OP/PG/消费者测试未启用，CI 中上述专用 job 显式启用。
+旧 pre-federation 数据库不迁移；升级流程从空卷开始，旧镜像只用于回滚。测试只使用公开临时夹具，不需真实租户或秘密。Docker、网络依赖和可用端口是前置；必要套件失败或缺少工具应失败，不能当作通过。普通 Go 单测会注明真实 OP/PG/消费者测试未启用，CI 中上述专用 job 显式启用。
 
 
 发行流水线用 GoReleaser 2.18.0 生成含 `taboo-server` 的 Linux、macOS（amd64/arm64）压缩包；发布镜像当前为 Linux amd64，从已编译二进制的专用 Dockerfile 打包。直接从源码构建的主 Dockerfile 仍由宿主目标平台决定架构。公共 CI 验证配置和不发布快照；tag 发布需 GHCR 登录、syft 与 GitHub OIDC 签名权限。校验和使用 cosign sign-blob，容器使用 digest 签名；这两类签名不能混用。配置依据 [GoReleaser 制品签名](https://goreleaser.com/customization/sign/sign/) 和 [容器签名](https://goreleaser.com/customization/sign/docker_sign/)。本次未执行上传、远端签名或 tag 发布。
