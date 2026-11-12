@@ -3,18 +3,18 @@ import type { FormEvent } from 'react';
 import { api, ApiError } from '../api';
 import type { User, Org } from '../api';
 import Icon from '../design/Icon';
+import { codeIssue, normalizeCode } from '../pathcode';
 
 // 与 server-go/internal/pathcode 的规则保持一致：定位符第一段是小写字母、
 // 数字和中划线，首尾不能是中划线；保留词不能用作第一段。
-const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
-const RESERVED = new Set(['api', 'invite', 'login', 'settings', 'new']);
-
 function handleProblem(handle: string): string {
-  if (!handle) return '用户名不能为空。';
-  if (handle.length > 39) return '用户名最多 39 个字符。';
-  if (!HANDLE_RE.test(handle)) return '只能用小写字母、数字和中划线，首尾不能是中划线。';
-  if (RESERVED.has(handle)) return `「${handle}」是保留字，换一个。`;
-  return '';
+  switch (codeIssue(handle)) {
+    case 'empty': return '用户名不能为空。';
+    case 'long': return '用户名最多 39 个字符。';
+    case 'reserved': return `「${handle}」是保留字，换一个。`;
+    case 'chars': return '只能用小写字母、数字和中划线，首尾不能是中划线。';
+    default: return '';
+  }
 }
 
 function describeError(err: unknown, handle: string): string {
@@ -36,13 +36,13 @@ interface Props {
 
 /** 入府前落款：注册后、进入控制台前，先让用户确认自己的用户名（定位符第一段）。 */
 export default function UsernameSetup({ user, onDone, onLogout, logoutError }: Props) {
-  const initial = (user.handle ?? '').toLowerCase();
+  const initial = normalizeCode(user.handle ?? '');
   const [value, setValue] = useState(initial);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const handle = value.trim().toLowerCase();
+  const handle = normalizeCode(value);
   const problem = handleProblem(handle);
   const dirty = handle !== initial;
   const shown = handle || 'username';
