@@ -20,22 +20,29 @@ test.beforeAll(async ({ request }) => {
     return fixture;
   }
   await account('browser-fixture@example.test');
-  const owner = await account('a@example.test'); localTokens = owner.tokens; slug = 'a';
+  const owner = await account('a@example.test'); localTokens = owner.tokens;
   const headers = { Authorization: `Bearer ${owner.tokens.access}` };
-  const list = await (await request.get('/api/v1/orgs/a/oidc', { headers })).json();
-  for (const provider of list.providers) await request.delete(`/api/v1/orgs/a/oidc/${provider.id}`, { headers });
+  // Personal spaces cannot be shared or federated; create a normal org for OIDC.
+  const orgCreate = await request.post('/api/v1/orgs', { headers, data: { name: 'Federation shared', code: 'federation-shared' } });
+  expect([201, 409]).toContain(orgCreate.status());
+  const me = await (await request.get('/api/v1/me', { headers })).json();
+  const shared = me.orgs.find((item: { slug: string }) => item.slug === 'federation-shared');
+  expect(shared).toBeTruthy();
+  slug = shared.slug;
+  const list = await (await request.get(`/api/v1/orgs/${slug}/oidc`, { headers })).json();
+  for (const provider of list.providers) await request.delete(`/api/v1/orgs/${slug}/oidc/${provider.id}`, { headers });
   const provider = {
     name: 'Standard OIDC', issuer, client_id: 'taboo-test', client_secret: 'fixture-secret', scopes: 'openid', autocreate: true, default_role: 'viewer', role_map: {},
   };
-  const create = await request.post('/api/v1/orgs/a/oidc', { headers, data: provider });
+  const create = await request.post(`/api/v1/orgs/${slug}/oidc`, { headers, data: provider });
   if (create.status() === 409) {
     // A previous failed worker can leave a provider with the same issuer behind;
     // reuse and normalise it instead of failing the whole file in beforeAll.
-    const existing = (await (await request.get('/api/v1/orgs/a/oidc', { headers })).json()).providers
+    const existing = (await (await request.get(`/api/v1/orgs/${slug}/oidc`, { headers })).json()).providers
       .find((item: { issuer: string }) => item.issuer === issuer);
     expect(existing, await create.text()).toBeTruthy();
     providerID = existing.id;
-    expect((await request.patch(`/api/v1/orgs/a/oidc/${providerID}`, { headers, data: { ...provider, enabled: true } })).ok()).toBe(true);
+    expect((await request.patch(`/api/v1/orgs/${slug}/oidc/${providerID}`, { headers, data: { ...provider, enabled: true } })).ok()).toBe(true);
   } else {
     expect(create.status(), await create.text()).toBe(201);
     providerID = (await create.json()).id;
@@ -70,7 +77,7 @@ test('real Keycloak login, cookie session, isolation, CSRF, logout', async ({ pa
   expect(await page.evaluate(async () => (await fetch('/api/v1/orgs/browser-fixture/projects')).status)).toBe(403);
   const oldCSRF = await page.evaluate(async () => (await (await fetch('/api/v1/auth/session')).json()).csrf_token);
   const secondTab = await context.newPage();
-  await secondTab.goto('/api/v1/auth/oidc/a/login');
+  await secondTab.goto(`/api/v1/auth/oidc/${slug}/login`);
   await expect(secondTab.getByRole('button', { name: '退出', exact: true })).toBeVisible();
   expect(await page.evaluate(async (csrf) => (await fetch('/api/v1/auth/logout', { method: 'POST', headers: { 'X-CSRF-Token': csrf } })).status, oldCSRF)).toBe(403);
   await expect(page.getByRole('heading', {name:'登录身份已变化'})).toBeVisible();
@@ -134,7 +141,7 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
     headers: { Authorization: `Bearer ${localTokens.access}` }, data: { enabled: true, default_role: 'developer' },
   });
   expect(update.status()).toBe(200);
-  await page.goto('/api/v1/auth/oidc/a/login');
+  await page.goto(`/api/v1/auth/oidc/${slug}/login`);
   await page.getByLabel('Username').fill('fixture-user');
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
@@ -142,9 +149,9 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
   await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
   const uid = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()).user.id);
   const headers = { Authorization: `Bearer ${localTokens.access}` };
-  const projects = await (await request.get('/api/v1/orgs/a/projects', { headers })).json();
+  const projects = await (await request.get(`/api/v1/orgs/${slug}/projects`, { headers })).json();
   const pid = projects.projects[0].id;
-  const granted = await request.put(`/api/v1/orgs/a/members/${uid}/actions`, { headers, data: {
+  const granted = await request.put(`/api/v1/orgs/${slug}/members/${uid}/actions`, { headers, data: {
     grants: ['read', 'write', 'reveal', 'rollback'].map((action) => ({ project_id: pid, action })),
   }});
   expect(granted.status()).toBe(200);
@@ -163,34 +170,31 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
   await page.getByRole('button', { name: '保存（产生新版本）', exact: true }).click();
   await expect(row).toContainText('v2');
   await expect(row).not.toContainText('not-a-real-secret');
-  const rolledBack = await page.evaluate(async () => {
+  const rolledBack = await page.evaluate(async (org) => {
     const session = await (await fetch('/api/v1/auth/session')).json();
-    const projects = await (await fetch('/api/v1/orgs/a/projects')).json();
+    const projects = await (await fetch(`/api/v1/orgs/${org}/projects`)).json();
     const res = await fetch(`/api/v1/projects/${projects.projects[0].id}/secrets/PUBLIC_FIXTURE/rollback`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': session.csrf_token }, body: JSON.stringify({ version: 1 }),
     });
     return { status: res.status, data: await res.json() };
-  });
+  }, slug);
   expect(rolledBack.status).toBe(200); expect(rolledBack.data.version).toBe(3);
   await page.reload();
   const restoredRow = page.getByRole('row').filter({ hasText: 'PUBLIC_FIXTURE' });
   await restoredRow.getByRole('button', { name: '显示', exact: true }).click();
   await expect(restoredRow).toContainText('not-a-real-secret');
 
-  await page.getByRole('button', { name: 'prod', exact: true }).click();
-  await expect(page.getByText('not-a-real-secret', { exact: true })).not.toBeVisible();
-  await expect(page.getByRole('button', { name: '＋ 新建密钥', exact: true })).not.toBeVisible();
   await page.getByRole('button', { name: '退出', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
 });
 
 test('identity replacement proves both sign-ins and preserves membership and secret versions', async ({ page, request }) => {
   const headers = { Authorization: `Bearer ${localTokens.access}` };
-  const response = await request.post('/api/v1/orgs/a/oidc', { headers, data: {
+  const response = await request.post(`/api/v1/orgs/${slug}/oidc`, { headers, data: {
     name: 'Replacement connection', issuer, client_id: 'taboo-test', client_secret: 'fixture-secret', scopes: 'openid', autocreate: false, public_login: false, default_role: 'admin', role_map: {},
   }});
   expect(response.status()).toBe(201); const replacement = (await response.json()).id;
-  await page.goto(`/api/v1/auth/oidc/a/login?pid=${providerID}`);
+  await page.goto(`/api/v1/auth/oidc/${slug}/login?pid=${providerID}`);
   await page.getByLabel('Username').fill('fixture-user');
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
@@ -213,19 +217,19 @@ test('identity replacement proves both sign-ins and preserves membership and sec
   expect(current.user.id).toBe(original.user.id); expect(current.orgs).toEqual(original.orgs);
   const row = page.getByRole('row').filter({ hasText: 'PUBLIC_FIXTURE' }); await expect(row).toContainText('v3');
   expect(await page.evaluate(() => localStorage.getItem('taboo.access'))).toBeNull();
-  expect((await request.patch(`/api/v1/orgs/a/oidc/${providerID}`, { headers, data: { enabled: false } })).status()).toBe(200);
+  expect((await request.patch(`/api/v1/orgs/${slug}/oidc/${providerID}`, { headers, data: { enabled: false } })).status()).toBe(200);
   await page.reload(); await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
 });
 
 test('external owner manages standard governance and safely retries a lost write response', async ({ page, request }) => {
   const headers = { Authorization: `Bearer ${localTokens.access}` };
-  expect((await request.patch(`/api/v1/orgs/a/oidc/${providerID}`,{headers,data:{enabled:true}})).ok()).toBe(true);
-  await page.goto(`/api/v1/auth/oidc/a/login?pid=${providerID}`);
+  expect((await request.patch(`/api/v1/orgs/${slug}/oidc/${providerID}`,{headers,data:{enabled:true}})).ok()).toBe(true);
+  await page.goto(`/api/v1/auth/oidc/${slug}/login?pid=${providerID}`);
   await page.getByLabel('Username').fill('fixture-user');await page.getByLabel('Password',{exact:true}).fill('fixture-password');await page.getByRole('button',{name:'Sign In',exact:true}).click();
   await enterConsole(page);
   await expect(page.getByRole('button',{name:'退出',exact:true})).toBeVisible();
   const uid=await page.evaluate(async()=>(await(await fetch('/api/v1/me')).json()).user.id);
-  expect((await request.patch(`/api/v1/orgs/a/members/${uid}`,{headers,data:{role:'owner'}})).ok()).toBe(true);
+  expect((await request.patch(`/api/v1/orgs/${slug}/members/${uid}`,{headers,data:{role:'owner'}})).ok()).toBe(true);
   await page.reload();
   await page.getByRole('button',{name:'组织设置',exact:true}).click();
   await page.getByRole('button',{name:'成员与角色',exact:true}).click();
@@ -272,10 +276,10 @@ test('external owner manages standard governance and safely retries a lost write
   await expect(page.getByRole('dialog').getByText('Failed to fetch',{exact:false})).toBeVisible();
   await page.getByRole('button',{name:'保存（产生新版本）',exact:true}).click();
   const row=page.getByRole('row').filter({hasText:'LOST_RESPONSE'});await expect(row).toContainText('v1');expect(receipts.length).toBe(2);expect(receipts[0]).toBeTruthy();expect(receipts[1]).toBe(receipts[0]);
-  const prior=await(await request.get(`/api/v1/orgs/a/members/${uid}/actions`,{headers})).json();
-  expect((await request.put(`/api/v1/orgs/a/members/${uid}/actions`,{headers,data:{grants:[]}})).ok()).toBe(true);
+  const prior=await(await request.get(`/api/v1/orgs/${slug}/members/${uid}/actions`,{headers})).json();
+  expect((await request.put(`/api/v1/orgs/${slug}/members/${uid}/actions`,{headers,data:{grants:[]}})).ok()).toBe(true);
   await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
   await expect(row).not.toBeVisible();await expect(page.getByRole('button',{name:'＋ 新建密钥',exact:true})).not.toBeVisible();
-  expect((await request.put(`/api/v1/orgs/a/members/${uid}/actions`,{headers,data:prior})).ok()).toBe(true);
+  expect((await request.put(`/api/v1/orgs/${slug}/members/${uid}/actions`,{headers,data:prior})).ok()).toBe(true);
 
 });

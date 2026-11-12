@@ -248,7 +248,7 @@ test('本地账号：新建/显示/隐藏/编辑/删除密钥，版本记录页�
   const record = page.locator('.record');
   await expect(record).toBeVisible();
   await expect(record.getByRole('heading', { name: key, level: 1 })).toBeVisible();
-  await expect(record.getByText('v2')).toBeVisible();
+  await expect(record.locator('.version-num').filter({ hasText: 'v2' })).toBeVisible();
   await record.getByRole('button', { name: '对比版本', exact: true }).click();
   await expect(record.getByText('值已掩码')).toBeVisible();
   await expect(record).not.toContainText(secret);
