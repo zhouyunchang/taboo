@@ -59,6 +59,16 @@ async function enterConsole(page: import('@playwright/test').Page) {
   }
 }
 
+/** 外部会话也在账户菜单里退出；控制台本身不再有裸「退出」按钮。 */
+async function expectSignedIn(page: import('@playwright/test').Page) {
+  await expect(page.getByRole('button', { name: '账户菜单' })).toBeVisible();
+}
+
+async function logout(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: '账户菜单' }).click();
+  await page.getByRole('button', { name: '退出', exact: true }).click();
+}
+
 test('real Keycloak login, cookie session, isolation, CSRF, logout', async ({ page, context }) => {
   const errors: string[] = []; page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');
@@ -67,7 +77,7 @@ test('real Keycloak login, cookie session, isolation, CSRF, logout', async ({ pa
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await enterConsole(page);
-  await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  await expectSignedIn(page);
   await expect(page.getByText('外部登录 · 当前组织：', { exact: false })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('taboo.access'))).toBeNull();
   expect(await page.evaluate(() => localStorage.getItem('taboo.refresh'))).toBeNull();
@@ -78,15 +88,15 @@ test('real Keycloak login, cookie session, isolation, CSRF, logout', async ({ pa
   const oldCSRF = await page.evaluate(async () => (await (await fetch('/api/v1/auth/session')).json()).csrf_token);
   const secondTab = await context.newPage();
   await secondTab.goto(`/api/v1/auth/oidc/${slug}/login`);
-  await expect(secondTab.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  await expectSignedIn(secondTab);
   expect(await page.evaluate(async (csrf) => (await fetch('/api/v1/auth/logout', { method: 'POST', headers: { 'X-CSRF-Token': csrf } })).status, oldCSRF)).toBe(403);
   await expect(page.getByRole('heading', {name:'登录身份已变化'})).toBeVisible();
   await secondTab.close();
-  await page.reload(); await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  await page.reload(); await expectSignedIn(page);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: '/tmp/taboo-federation-mobile.png' });
-  await page.getByRole('button', { name: '退出', exact: true }).click();
+  await logout(page);
   await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
   expect((await context.cookies()).find((c) => c.name === 'taboo.session')).toBeUndefined();
   expect(errors).toEqual([]);
@@ -118,7 +128,7 @@ test('provider disable invalidates an existing browser session', async ({ page, 
   await page.getByLabel('Username').fill('fixture-user'); await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await enterConsole(page);
-  await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  await expectSignedIn(page);
   expect((await request.patch(`/api/v1/orgs/${slug}/oidc/${providerID}`, { headers: { Authorization: `Bearer ${localTokens.access}` }, data: { enabled: false } })).status()).toBe(200);
   await page.reload(); await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('taboo.access'))).toBeNull();
@@ -146,7 +156,7 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await enterConsole(page);
-  await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  await expectSignedIn(page);
   const uid = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()).user.id);
   const headers = { Authorization: `Bearer ${localTokens.access}` };
   const projects = await (await request.get(`/api/v1/orgs/${slug}/projects`, { headers })).json();
@@ -184,7 +194,7 @@ test('explicitly granted developer can write and reveal dev secrets with BFF CSR
   await restoredRow.getByRole('button', { name: '显示', exact: true }).click();
   await expect(restoredRow).toContainText('not-a-real-secret');
 
-  await page.getByRole('button', { name: '退出', exact: true }).click();
+  await logout(page);
   await expect(page.getByRole('heading', { name: 'taboo · 禁制' })).toBeVisible();
 });
 
@@ -212,13 +222,13 @@ test('identity replacement proves both sign-ins and preserves membership and sec
   await page.getByLabel('Password', { exact: true }).fill('fixture-password');
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await enterConsole(page);
-  await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  await expectSignedIn(page);
   const current = await page.evaluate(async () => (await (await fetch('/api/v1/me')).json()));
   expect(current.user.id).toBe(original.user.id); expect(current.orgs).toEqual(original.orgs);
   const row = page.getByRole('row').filter({ hasText: 'PUBLIC_FIXTURE' }); await expect(row).toContainText('v3');
   expect(await page.evaluate(() => localStorage.getItem('taboo.access'))).toBeNull();
   expect((await request.patch(`/api/v1/orgs/${slug}/oidc/${providerID}`, { headers, data: { enabled: false } })).status()).toBe(200);
-  await page.reload(); await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible();
+  await page.reload(); await expectSignedIn(page);
 });
 
 test('external owner manages standard governance and safely retries a lost write response', async ({ page, request }) => {
@@ -227,7 +237,7 @@ test('external owner manages standard governance and safely retries a lost write
   await page.goto(`/api/v1/auth/oidc/${slug}/login?pid=${providerID}`);
   await page.getByLabel('Username').fill('fixture-user');await page.getByLabel('Password',{exact:true}).fill('fixture-password');await page.getByRole('button',{name:'Sign In',exact:true}).click();
   await enterConsole(page);
-  await expect(page.getByRole('button',{name:'退出',exact:true})).toBeVisible();
+  await expectSignedIn(page);
   const uid=await page.evaluate(async()=>(await(await fetch('/api/v1/me')).json()).user.id);
   expect((await request.patch(`/api/v1/orgs/${slug}/members/${uid}`,{headers,data:{role:'owner'}})).ok()).toBe(true);
   await page.reload();
