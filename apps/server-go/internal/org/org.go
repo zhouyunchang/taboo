@@ -34,6 +34,7 @@ type Service struct {
 	DataDir         string // M5 #14：审计导出文件落盘目录（空 = 禁用异步导出）
 	DisableRegister bool
 	DisablePassword bool
+	LoginRate       int // 每 IP 每窗口的本地登录上限（0 → 5）
 }
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
@@ -73,8 +74,12 @@ func slugify(s string) string {
 func (s *Service) PublicRoutes(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/register", s.Register)
-		// 登录限流：5 次/分钟/IP（设计文档 §8）
-		r.With(auth.LoginRateLimit(s.DB, time.Minute, 5)).Post("/login", s.Login)
+		limit := s.LoginRate
+		if limit <= 0 {
+			limit = 5
+		}
+		// 登录限流：默认 5 次/分钟/IP（设计文档 §8），可由部署配置提高。
+		r.With(auth.LoginRateLimit(s.DB, time.Minute, limit)).Post("/login", s.Login)
 		r.Post("/refresh", s.Refresh)
 	})
 }

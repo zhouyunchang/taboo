@@ -152,6 +152,7 @@ func New(d *Deps) *chi.Mux {
 	if loginRate <= 0 {
 		loginRate = 5
 	}
+	orgs.LoginRate = loginRate
 	wctx := d.WorkerCtx
 	if wctx == nil {
 		wctx = context.Background()

@@ -57,7 +57,8 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 				return
 			}
 			path := r.URL.Path
-			if path == "/api/v1/me" || path == "/api/v1/auth/session" || path == "/api/v1/auth/logout" {
+			if path == "/api/v1/me" || path == "/api/v1/me/handle" || path == "/api/v1/me/handle/confirm" ||
+				path == "/api/v1/auth/session" || path == "/api/v1/auth/logout" {
 				next.ServeHTTP(w, r)
 				return
 			}
