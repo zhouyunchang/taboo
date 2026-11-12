@@ -190,10 +190,6 @@ export default function Login({ onSuccess }: Props) {
                 <p className="notice notice-warn">未配置外部用户源，且已关闭密码登录。请联系管理员配置身份连接。</p>
               )}
 
-              {mode === 'register' && showPassword && (
-                <p className="auth-sub">注册即建个人组织，并自动生成默认项目的 dev / staging / prod 三个环境。</p>
-              )}
-
               {showRegisterToggle && (
                 <button type="button" className="switch" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
                   {mode === 'login' ? '没有账号？注册' : '已有账号？去登录'}
