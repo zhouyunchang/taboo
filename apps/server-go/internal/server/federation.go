@@ -20,6 +20,13 @@ func federatedScope(db *sql.DB) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Locator access is a reviewed cross-project surface: scopedHTTP
+			// resolves the locator's org and secret.Access enforces project
+			// visibility and action grants, so federated workloads may use it.
+			if r.URL.Path == "/api/v1/access" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if a.WorkloadBinding != "" {
 				parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/"), "/")
 				if len(parts) >= 3 && parts[0] == "orgs" && parts[2] == "scan-reports" {

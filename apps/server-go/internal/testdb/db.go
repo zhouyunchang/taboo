@@ -42,6 +42,13 @@ func Open(t *testing.T) *sql.DB {
 		bootstrap.Close()
 		t.Fatal(err)
 	}
+	// The production migrations grant the runtime role USAGE on public. A test
+	// fixture owns a private schema instead, so grant the same schema visibility
+	// here; the per-table grants in 00012/00014 resolve through search_path.
+	if _, err = bootstrap.Exec(`GRANT USAGE ON SCHEMA ` + pq.QuoteIdentifier(name) + ` TO taboo_runtime`); err != nil {
+		bootstrap.Close()
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { bootstrap.Exec(`DROP SCHEMA ` + pq.QuoteIdentifier(name) + ` CASCADE`); bootstrap.Close() })
 	q := u.Query()
 	q.Set("search_path", name)
@@ -49,6 +56,17 @@ func Open(t *testing.T) *sql.DB {
 	db, err := store.OpenPostgres(context.Background(), u.String(), "taboo_runtime")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// 00013 grants every table in public; a fresh test schema needs the same
+	// table/sequence grants after migrations have created them.
+	for _, grant := range []string{
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` + pq.QuoteIdentifier(name) + ` TO taboo_runtime`,
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ` + pq.QuoteIdentifier(name) + ` TO taboo_runtime`,
+	} {
+		if _, err = bootstrap.Exec(grant); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(func() { db.Close() })
 	return db

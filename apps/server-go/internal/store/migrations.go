@@ -42,7 +42,7 @@ var sqliteMigrations embed.FS
 const (
 	// SchemaVersionPostgres / SchemaVersionSQLite 是当前二进制期望的迁移版本，
 	// 等于该方言最后一个脚本的编号。
-	SchemaVersionPostgres = 14
+	SchemaVersionPostgres = 15
 	SchemaVersionSQLite   = 11
 
 	// migrationsTable 是 goose 的版本表名。
