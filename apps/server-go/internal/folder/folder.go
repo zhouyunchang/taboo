@@ -1,9 +1,9 @@
 // 多级文件夹服务（M2 #5）—— 物化路径 /a/b/，对齐设计文档 §4 / §9
 //
-//	GET    /projects/:pid/folders?env=            平铺列表（前端建树）
-//	POST   /projects/:pid/folders?env= {path}     创建（自动补中间节点）
-//	DELETE /projects/:pid/folders?env=&path=      删除（仅空文件夹：无子目录且无密钥）
-//	POST   /projects/:pid/folders/move?env= {from,to}  移动/重命名（级联更新子路径）
+//	GET    /projects/:pid/folders                 平铺列表（前端建树）
+//	POST   /projects/:pid/folders {path}          创建（自动补中间节点）
+//	DELETE /projects/:pid/folders?path=           删除（仅空文件夹：无子目录且无密钥）
+//	POST   /projects/:pid/folders/move {from,to}  移动/重命名（级联更新子路径）
 package folder
 
 import (
@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/apperr"
@@ -21,6 +23,17 @@ import (
 
 type Service struct {
 	DB *sql.DB
+	// ControlDB 是 PostgreSQL 下的非租户连接：审计链必须由 schema owner 推进
+	// （runtime 角色没有 audit_logs 的 SELECT 权限）。SQLite 下留空，沿用 DB。
+	ControlDB *sql.DB
+}
+
+// control returns the connection that may advance the audit chain.
+func (s *Service) control() *sql.DB {
+	if s.ControlDB != nil {
+		return s.ControlDB
+	}
+	return s.DB
 }
 
 type Folder struct {
@@ -39,7 +52,9 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, e *apperr.Error) { writeJSON(w, e.Status, e) }
 
-// NormalizePath 规范化物化路径：/a/b/（拒绝 .. 与空段）
+// NormalizePath 规范化物化路径：/a/b/（拒绝 ..、空段、空白与控制字符）。
+// 路径段同时是定位符（归属/项目/目录）的一部分，CLI、MCP 与 SDK 都按 / 切分，
+// 含空白的段会让同一把密钥在不同客户端解析成不同位置，因此这里一律拒绝。
 func NormalizePath(p string) (string, error) {
 	p = strings.Trim(p, "/")
 	if p == "" {
@@ -48,13 +63,29 @@ func NormalizePath(p string) (string, error) {
 	segs := strings.Split(p, "/")
 	clean := make([]string, 0, len(segs))
 	for _, s := range segs {
-		s = strings.TrimSpace(s)
 		if s == "" || s == "." || s == ".." {
 			return "", apperr.New(400, "INVALID", "invalid folder path")
+		}
+		if !ValidSegment(s) {
+			return "", apperr.New(400, "INVALID", "folder name must not contain spaces or control characters")
 		}
 		clean = append(clean, s)
 	}
 	return "/" + strings.Join(clean, "/") + "/", nil
+}
+
+// ValidSegment 报告一个文件夹名能否出现在定位符里。
+// 允许中日韩等非 ASCII 字符与 - _ . 等常规符号，拒绝空白、/ 与控制字符。
+func ValidSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		if r == '/' || unicode.IsSpace(r) || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func parentPathOf(path string) string {
@@ -76,15 +107,23 @@ func nameOf(path string) string {
 }
 
 // ResolveID 解析路径 → folder id；create=true 时逐级创建（含根）
-func ResolveID(db *sql.DB, envID, path string, create bool) (string, error) {
+type folderDB interface {
+	Exec(string, ...any) (sql.Result, error)
+	QueryRow(string, ...any) *sql.Row
+}
+
+func ResolveID(db folderDB, projectID, path string, create bool) (string, error) {
 	path, err := NormalizePath(path)
 	if err != nil {
 		return "", err
 	}
 	var id string
-	err = db.QueryRow(`SELECT id FROM folders WHERE env_id = ? AND path = ?`, envID, path).Scan(&id)
+	err = db.QueryRow(`SELECT id FROM folders WHERE project_id = ? AND path = ?`, projectID, path).Scan(&id)
 	if err == nil {
 		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", err
 	}
 	if !create {
 		return "", apperr.NotFound
@@ -92,29 +131,23 @@ func ResolveID(db *sql.DB, envID, path string, create bool) (string, error) {
 	if path == "/" {
 		// 根目录：parent 为 NULL，直接插入，勿递归（parentPathOf("/") 仍是 "/"，会自引用爆栈）
 		id = tc.NewID()
-		if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/')`,
-			id, envID); err != nil {
+		if _, err := db.Exec(`INSERT INTO folders (id, project_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/')`,
+			id, projectID); err != nil {
 			return "", err
 		}
 		return id, nil
 	}
 	// 逐级创建
-	parentID, err := ResolveID(db, envID, parentPathOf(path), true)
+	parentID, err := ResolveID(db, projectID, parentPathOf(path), true)
 	if err != nil {
 		return "", err
 	}
 	id = tc.NewID()
-	if _, err := db.Exec(`INSERT INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, ?, ?, ?)`,
-		id, envID, parentID, nameOf(path), path); err != nil {
+	if _, err := db.Exec(`INSERT INTO folders (id, project_id, parent_id, name, path) VALUES (?, ?, ?, ?, ?)`,
+		id, projectID, parentID, nameOf(path), path); err != nil {
 		return "", err
 	}
 	return id, nil
-}
-
-func (s *Service) envIDOf(projectID, envSlug string) (string, error) {
-	var envID string
-	err := s.DB.QueryRow(`SELECT id FROM environments WHERE project_id = ? AND slug = ?`, projectID, envSlug).Scan(&envID)
-	return envID, err
 }
 
 // Routes 挂载 /projects/:pid/folders（ProjectCtx 由上层注入）
@@ -125,30 +158,21 @@ func (s *Service) Routes(r chi.Router) {
 	r.Post("/folders/move", s.Move)
 }
 
-func (s *Service) envOf(w http.ResponseWriter, r *http.Request, action string) (string, project.Ctx, bool) {
+func (s *Service) projectScope(w http.ResponseWriter, r *http.Request, action string) (project.Ctx, bool) {
 	p := project.Of(r)
-	envSlug := r.URL.Query().Get("env")
-	if envSlug == "" {
-		envSlug = "dev"
+	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, action, "") {
+		return p, false
 	}
-	if !auth.Require(s.DB, w, r, p.OrgID, p.ID, action, envSlug) {
-		return "", p, false
-	}
-	envID, err := s.envIDOf(p.ID, envSlug)
-	if err != nil {
-		writeErr(w, apperr.New(404, "NOT_FOUND", "env not found"))
-		return "", p, false
-	}
-	return envID, p, true
+	return p, true
 }
 
-// List GET /folders?env=
+// List GET /folders
 func (s *Service) List(w http.ResponseWriter, r *http.Request) {
-	envID, _, ok := s.envOf(w, r, "read")
+	p, ok := s.projectScope(w, r, "read")
 	if !ok {
 		return
 	}
-	rows, err := s.DB.Query(`SELECT id, COALESCE(parent_id, ''), name, path FROM folders WHERE env_id = ? ORDER BY path`, envID)
+	rows, err := s.DB.Query(`SELECT id, COALESCE(parent_id, ''), name, path FROM folders WHERE project_id = ? ORDER BY path`, p.ID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -163,9 +187,9 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"folders": out})
 }
 
-// Create POST /folders?env= {path}
+// Create POST /folders {path}
 func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
-	envID, p, ok := s.envOf(w, r, "write")
+	p, ok := s.projectScope(w, r, "write")
 	if !ok {
 		return
 	}
@@ -181,18 +205,25 @@ func (s *Service) Create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err.(*apperr.Error))
 		return
 	}
-	id, err := ResolveID(s.DB, envID, path, true)
+	tx, started := auth.BeginMutation(s.control(), w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
+	id, err := ResolveID(tx, p.ID, path, true)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.create", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path, nil)
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "folders.create", "project/"+p.Slug+"/folder/"+path, nil) {
+		return
+	}
 	writeJSON(w, 201, map[string]any{"id": id, "path": path})
 }
 
-// Delete DELETE /folders?env=&path= —— 仅空文件夹（无子目录、无直接密钥）
+// Delete DELETE /folders?path= —— 仅空文件夹（无子目录、无直接密钥）
 func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
-	envID, p, ok := s.envOf(w, r, "write")
+	p, ok := s.projectScope(w, r, "delete")
 	if !ok {
 		return
 	}
@@ -201,29 +232,42 @@ func (s *Service) Delete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "cannot delete root folder"))
 		return
 	}
+	tx, started := auth.BeginMutation(s.control(), w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
 	var id string
-	if err := s.DB.QueryRow(`SELECT id FROM folders WHERE env_id = ? AND path = ?`, envID, path).Scan(&id); err != nil {
+	if err := tx.QueryRow(`SELECT id FROM folders WHERE project_id = ? AND path = ?`, p.ID, path).Scan(&id); err != nil {
 		writeErr(w, apperr.NotFound)
 		return
 	}
 	var children, secretsN int
-	_ = s.DB.QueryRow(`SELECT COUNT(*) FROM folders WHERE parent_id = ?`, id).Scan(&children)
-	_ = s.DB.QueryRow(`SELECT COUNT(*) FROM secrets WHERE folder_id = ?`, id).Scan(&secretsN)
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM folders WHERE parent_id = ?`, id).Scan(&children); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM secrets WHERE folder_id = ?`, id).Scan(&secretsN); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
+		return
+	}
 	if children > 0 || secretsN > 0 {
 		writeErr(w, apperr.New(400, "NOT_EMPTY", "folder is not empty"))
 		return
 	}
-	if _, err := s.DB.Exec(`DELETE FROM folders WHERE id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM folders WHERE id = ?`, id); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.delete", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+path, nil)
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "folders.delete", "project/"+p.Slug+"/folder/"+path, nil) {
+		return
+	}
 	writeJSON(w, 200, map[string]any{"deleted": path})
 }
 
-// Move POST /folders/move?env= {from, to} —— 移动/重命名，级联更新子孙路径
+// Move POST /folders/move {from, to} —— 移动/重命名，级联更新子孙路径
 func (s *Service) Move(w http.ResponseWriter, r *http.Request) {
-	envID, p, ok := s.envOf(w, r, "write")
+	p, ok := s.projectScope(w, r, "write")
 	if !ok {
 		return
 	}
@@ -249,45 +293,41 @@ func (s *Service) Move(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(400, "INVALID", "cannot move into itself"))
 		return
 	}
+	tx, started := auth.BeginMutation(s.control(), w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
 	var id, parentID string
-	if err := s.DB.QueryRow(`SELECT id, COALESCE(parent_id, '') FROM folders WHERE env_id = ? AND path = ?`, envID, from).
+	if err := tx.QueryRow(`SELECT id, COALESCE(parent_id, '') FROM folders WHERE project_id = ? AND path = ?`, p.ID, from).
 		Scan(&id, &parentID); err != nil {
 		writeErr(w, apperr.NotFound)
 		return
 	}
-	newParentID, err := ResolveID(s.DB, envID, parentPathOf(to), true)
+	newParentID, err := ResolveID(tx, p.ID, parentPathOf(to), true)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	defer tx.Rollback()
 	// 级联更新：本节点 + 所有子孙的物化路径前缀替换
 	if _, err := tx.Exec(`UPDATE folders SET path = ? || substr(path, ?), parent_id = ?, name = ? WHERE id = ?`,
-		to, len(from)+1, newParentID, nameOf(to), id); err != nil {
+		to, utf8.RuneCountInString(from)+1, newParentID, nameOf(to), id); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if _, err := tx.Exec(`UPDATE folders SET path = ? || substr(path, ?) WHERE path LIKE ? AND env_id = ?`,
-		to, len(from)+1, from+"%", envID); err != nil {
+	if _, err := tx.Exec(`UPDATE folders SET path = ? || substr(path, ?) WHERE substr(path,1,?)=? AND project_id = ?`,
+		to, utf8.RuneCountInString(from)+1, utf8.RuneCountInString(from), from, p.ID); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
 	// secrets.folder 冗余列同步（folder_id 不变，仅展示列）
-	if _, err := tx.Exec(`UPDATE secrets SET folder = ? || substr(folder, ?) WHERE env_id = ? AND folder LIKE ?`,
-		to, len(from)+1, envID, from+"%"); err != nil {
+	if _, err := tx.Exec(`UPDATE secrets SET folder = ? || substr(folder, ?) WHERE project_id = ? AND substr(folder,1,?)=?`,
+		to, utf8.RuneCountInString(from)+1, p.ID, utf8.RuneCountInString(from), from); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "folders.move", "project/"+p.Slug+"/folder/"+from, map[string]any{"to": to}) {
 		return
 	}
-	_ = auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "folders.move", "project/"+p.Slug+"/env/"+r.URL.Query().Get("env")+"/folder/"+from,
-		map[string]any{"to": to})
 	writeJSON(w, 200, map[string]any{"from": from, "to": to})
 }

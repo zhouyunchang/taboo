@@ -56,7 +56,7 @@ const hook = await req('POST', `/api/v1/orgs/${slug}/webhooks`, {
 }, token);
 ok('webhook create (secret returned once)', hook.status === 201 && !!hook.data.secret);
 
-await req('POST', `/api/v1/projects/${project.id}/secrets?env=dev`, { key: 'M5_KEY', value: 'm5-value' }, token);
+await req('POST', `/api/v1/projects/${project.id}/secrets`, { key: 'M5_KEY', value: 'm5-value' }, token);
 await new Promise((r) => setTimeout(r, 6500)); // 等投递 worker（5s 轮询）
 ok('webhook delivered', received.length >= 1, `${received.length} delivery(ies)`);
 
@@ -81,7 +81,7 @@ const target = await req('POST', `/api/v1/orgs/${slug}/sync/targets`, {
   config: { token: 'fake', owner: 'o', repo: 'r' },
 }, token);
 ok('sync target create', target.status === 201, target.data.id);
-await req('POST', `/api/v1/projects/${project.id}/secrets?env=dev`, { key: 'M5_SYNC_KEY', value: 'sync-me' }, token);
+await req('POST', `/api/v1/projects/${project.id}/secrets`, { key: 'M5_SYNC_KEY', value: 'sync-me' }, token);
 await new Promise((r) => setTimeout(r, 12000));
 const runs = await req('GET', `/api/v1/orgs/${slug}/sync/runs`, null, token);
 const run = (runs.data.runs || []).find((x) => x.secret_key === 'M5_SYNC_KEY');

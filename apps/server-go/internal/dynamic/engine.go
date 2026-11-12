@@ -6,6 +6,7 @@ package dynamic
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -22,11 +23,24 @@ type Engine interface {
 	Revoke(ctx context.Context, username string) error
 }
 
-// EngineFactory 由连接串构造引擎（postgres: postgres://user:pass@host:5432/db?sslmode=disable）
-type EngineFactory func(connString string) (Engine, error)
+// EngineFactory 按引擎类型和连接串构造引擎。
+// postgres: postgres://user:pass@host:5432/db?sslmode=disable
+// mysql:    mysql://user:pass@host:3306/db
+type EngineFactory func(engineType, connString string) (Engine, error)
 
-// Factory 可替换（mock 注入）；默认 PostgreSQL
-var Factory EngineFactory = PostgresFactory
+func defaultFactory(engineType, connString string) (Engine, error) {
+	switch engineType {
+	case "", "postgres":
+		return PostgresFactory(connString)
+	case "mysql":
+		return MySQLFactory(connString)
+	default:
+		return nil, errors.New("unsupported engine")
+	}
+}
+
+// Factory 可替换（mock 注入）；默认按 type 选择 PostgreSQL 或 MySQL。
+var Factory EngineFactory = defaultFactory
 
 func PostgresFactory(connString string) (Engine, error) {
 	db, err := sql.Open("postgres", connString)
@@ -39,7 +53,7 @@ func PostgresFactory(connString string) (Engine, error) {
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("postgres ping: %w", err)
+		return nil, errors.New("database connection failed")
 	}
 	return &Postgres{db: db, database: databaseName(connString)}, nil
 }
@@ -68,10 +82,12 @@ type Postgres struct {
 	database string
 }
 
+func (p *Postgres) Close() error { return p.db.Close() }
+
 func (p *Postgres) Type() string { return "postgres" }
 
 func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
-func quoteLit(s string) string { return `'` + strings.ReplaceAll(s, `'`, `''`) + `'` }
+func quoteLit(s string) string   { return `'` + strings.ReplaceAll(s, `'`, `''`) + `'` }
 
 func (p *Postgres) Grant(ctx context.Context, username, password string, ttl time.Duration) error {
 	validUntil := time.Now().Add(ttl).UTC().Format("2006-01-02 15:04:05")
@@ -88,11 +104,11 @@ func (p *Postgres) Grant(ctx context.Context, username, password string, ttl tim
 			if strings.Contains(err.Error(), "already exists") {
 				alt := fmt.Sprintf(`ALTER USER %s WITH PASSWORD %s VALID UNTIL %s`, quoteIdent(username), quoteLit(password), quoteLit(validUntil))
 				if _, err2 := p.db.ExecContext(ctx, alt); err2 != nil {
-					return fmt.Errorf("alter user: %w", err2)
+					return errors.New("database role update failed")
 				}
 				continue
 			}
-			return fmt.Errorf("grant stmt %q: %w", s, err)
+			return errors.New("database grant failed")
 		}
 	}
 	return nil
@@ -116,11 +132,11 @@ func (p *Postgres) Revoke(ctx context.Context, username string) error {
 			_, err = p.db.ExecContext(ctx, s)
 		}
 		if err != nil && !strings.Contains(err.Error(), "does not exist") {
-			return fmt.Errorf("revoke pre %q: %w", s, err)
+			return errors.New("database revoke failed")
 		}
 	}
 	if _, err := p.db.ExecContext(ctx, fmt.Sprintf(`DROP USER IF EXISTS %s`, u)); err != nil {
-		return fmt.Errorf("drop user: %w", err)
+		return errors.New("database role deletion failed")
 	}
 	return nil
 }

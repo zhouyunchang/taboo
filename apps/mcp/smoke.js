@@ -59,11 +59,11 @@ const me = await api('GET', '/api/v1/me', { token });
 const orgSlug = me.data.orgs[0].slug;
 const projects = await api('GET', `/api/v1/orgs/${orgSlug}/projects`, { token });
 const pid = projects.data.projects[0].id;
-await api('POST', `/api/v1/projects/${pid}/secrets?env=dev`, { token, body: { key: 'MCP_DEMO', value: 'mcp-secret-value', tags: ['mcp'] } });
+await api('POST', `/api/v1/projects/${pid}/secrets`, { token, body: { key: 'MCP_DEMO', value: 'mcp-secret-value', tags: ['mcp'] } });
 
-// 机器身份：read scope，限 dev
+// 机器身份：reveal scope（新模型里 reveal 覆盖读取，list 与掩码 get 都可）
 const ident = await api('POST', `/api/v1/orgs/${orgSlug}/identities`, {
-  token, body: { name: 'mcp-agent', token_ttl: 900, scopes: [{ project_id: pid, env: 'dev', permission: 'read' }] },
+  token, body: { name: 'mcp-agent', token_ttl: 900, scopes: [{ project_id: pid, permission: 'reveal' }] },
 });
 check('identity created', ident.status === 201 && !!ident.data.client_secret, JSON.stringify(ident.data));
 
@@ -72,7 +72,6 @@ const mcpEnv = {
   TABOO_CLIENT_ID: ident.data.client_id,
   TABOO_CLIENT_SECRET: ident.data.client_secret,
   TABOO_PROJECT_ID: pid,
-  TABOO_ENV: 'dev',
 };
 const mcp = startMcp(mcpEnv);
 
@@ -91,19 +90,14 @@ check('list ok no values', !list.result?.isError && list.result?.content?.[0]?.t
 
 // 3. secrets.get：默认掩码
 const getMasked = await mcp.call('tools/call', { name: 'secrets.get', arguments: { key: 'MCP_DEMO' } });
-check('get masked by default', !getMasked.result?.isError && getMasked.result?.content?.[0]?.text?.includes('mc••••••••••••ue')
+check('get masked by default', !getMasked.result?.isError && getMasked.result?.content?.[0]?.text?.includes('MCP_DEMO=••••')
   && !getMasked.result.content[0].text.includes('mcp-secret-value'), getMasked.result?.content?.[0]?.text);
 
 // 4. secrets.get reveal=true：明文 + 审计
 const getReveal = await mcp.call('tools/call', { name: 'secrets.get', arguments: { key: 'MCP_DEMO', reveal: true } });
 check('get reveal returns plaintext', !getReveal.result?.isError && getReveal.result?.content?.[0]?.text?.includes('mcp-secret-value'));
 
-// 5. 越权探测：身份 scope 限定 dev → 访问 prod 必须拒绝
-const prodDenied = await mcp.call('tools/call', { name: 'secrets.list', arguments: { env: 'prod' } });
-check('dev-scoped identity prod denied 403', prodDenied.result?.isError === true
-  && prodDenied.result?.content?.[0]?.text?.includes('access denied'), prodDenied.result?.content?.[0]?.text);
-
-// 6. 吊销 identity → 下一次调用必须失败，且服务端留审计
+// 5. 吊销 identity → 下一次调用必须失败，且服务端留审计
 const revoke = await api('POST', `/api/v1/orgs/${orgSlug}/identities/${ident.data.id}/revoke`, { token });
 check('identity revoked', revoke.status === 200);
 const afterRevoke = await mcp.call('tools/call', { name: 'secrets.list', arguments: {} });
@@ -114,7 +108,7 @@ const audit = await api('GET', `/api/v1/orgs/${orgSlug}/audit?limit=300`, { toke
 const actorHit = audit.data.logs.some((l) => (l.actor_name || '').startsWith('identity:') || (l.actor_type === 'identity'));
 const revealHit = audit.data.logs.some((l) => l.action === 'secrets.reveal');
 check('audit has identity actor', actorHit);
-check('audit has secrets.reveal (masked list) / reveal attempt', revealHit, audit.data.logs.map((l) => l.action).slice(0, 10).join(','));
+check('audit has secrets.reveal', revealHit, audit.data.logs.map((l) => l.action).slice(0, 10).join(','));
 
 mcp.child.kill();
 console.log(failures ? `\nFAILED: ${failures} check(s)` : '\nALL MCP CHECKS PASSED');

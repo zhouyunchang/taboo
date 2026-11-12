@@ -48,22 +48,22 @@ func main() {
 		log.Fatalf("project: %v", err)
 	}
 
-	if _, err := c.CreateFolder(ctx, proj.ID, "dev", "/demo/"); err != nil {
+	if _, err := c.CreateFolder(ctx, proj.ID, "/demo/"); err != nil {
 		log.Fatalf("folder: %v", err)
 	}
-	v, err := c.UpsertSecret(ctx, proj.ID, "dev", "/demo/", "HELLO", "world", "sdk example", []string{"sdk"})
+	v, err := c.UpsertSecret(ctx, proj.ID, "/demo/", "HELLO", "world", "sdk example", []string{"sdk"})
 	if err != nil {
 		log.Fatalf("upsert: %v", err)
 	}
 	fmt.Printf("upserted HELLO v%d in /demo/\n", v)
 
-	sv, err := c.GetSecret(ctx, proj.ID, "dev", "/demo/", "HELLO")
+	sv, err := c.GetSecret(ctx, proj.ID, "/demo/", "HELLO")
 	if err != nil {
 		log.Fatalf("get: %v", err)
 	}
 	fmt.Printf("reveal HELLO=%s (v%d)\n", sv.Value, sv.Version)
 
-	envText, err := c.ExportSecrets(ctx, proj.ID, "dev")
+	envText, err := c.ExportSecrets(ctx, proj.ID)
 	if err != nil {
 		log.Fatalf("export: %v", err)
 	}

@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/cluster"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/httpx"
 )
 
 type DBTX interface {
@@ -45,11 +46,28 @@ func FromRequest(r *http.Request, orgID, actorID, actorName, actorType, action, 
 }
 
 func Record(db DBTX, rec Rec) error {
+	if pool, ok := db.(*sql.DB); ok {
+		tx, err := pool.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err = Record(tx, rec); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	// A row lock serializes the chain for this organization across processes.
+	if _, err := db.Exec(`INSERT INTO audit_heads(org_id,revision) VALUES(?,1) ON CONFLICT(org_id) DO UPDATE SET revision=audit_heads.revision+1`, rec.OrgID); err != nil {
+		slog.Error("audit head bump failed", "org", rec.OrgID, "action", rec.Action, "err", err)
+		return err
+	}
+
 	if rec.Metadata == nil {
 		rec.Metadata = map[string]any{}
 	}
 	if rec.ActorID == "" {
-		rec.ActorID, rec.ActorName, rec.ActorType = "system", rec.ActorName, "user"
+		rec.ActorID, rec.ActorType = "system", "user"
 	}
 	if rec.ActorType == "" {
 		rec.ActorType = "user"
@@ -169,6 +187,10 @@ func StartCheckpointWorker(ctxDone <-chan struct{}, db *sql.DB, masterKey []byte
 			case <-ctxDone:
 				return
 			case <-t.C:
+				ok, err := cluster.Acquire(db, "audit-checkpoint", every*2)
+				if err != nil || !ok {
+					continue
+				}
 				rows, err := db.Query(`SELECT DISTINCT org_id FROM audit_logs WHERE entry_hash != ''`)
 				if err != nil {
 					continue

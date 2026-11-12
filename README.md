@@ -10,7 +10,7 @@
 
 修仙小说里，藏有重宝的洞府必有禁制：外人不可见、不可触，擅动者必被察觉。密钥管理的本质一样——**高价值数据 + 严格访问控制 + 全程留痕**。
 
-## 当前状态：v1.0（Go 后端，功能全量落地）
+## 当前状态：Go 后端与标准身份联邦 P0
 
 > 当前版本为 **Go 后端 + React 前端**（设计文档 §3 目标架构），单二进制 embed.FS 交付；
 > Node MVP 保留在 `apps/server` 仅作契约回归参考。v1.0 发布说明见 [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md)。
@@ -20,27 +20,40 @@
 - [x] 信封加密三层结构：Root Key (KEK) → 组织 DEK → Secret Value（AES-256-GCM，nonce 12B 随机不复用）
 - [x] 密钥 CRUD + 版本历史 + 回滚 + reveal 分离（RBAC 二次校验 + 审计）
 - [x] 机器身份（client_credentials + 显式 scope）、TOTP 2FA、多级文件夹
-- [x] CLI / Go SDK / MCP Server / OpenAPI 3.1 契约（含路由漂移检查）
-- [x] 动态密钥：PostgreSQL 短期账号 lease（到期自动回收）
+- [x] CLI / Go、Node、Python SDK / MCP Server / OpenAPI 3.1 契约（含路由漂移检查）
+- [x] 密钥引用 `${env:KEY}`、`${project:env:KEY}`：只在 reveal/export 且 `resolve=true` 时展开，逐跳鉴权，循环和缺失有明确错误
+- [x] 导入：`.env`、Doppler JSON、1Password `op` JSON。预览、`skip`/`overwrite`、CLI `import --format`、控制台对话框；文件夹和密钥在同一个事务里写入
+- [x] 版本对比（默认掩码）和扫描报告。上传时的命中原文只用于计算组织 HMAC，不落库；升级前的报告仍以 `sha256` 标出。owner/admin 可删除报告
+- [x] 动态密钥：PostgreSQL（`VALID UNTIL`）和 MySQL（`PASSWORD EXPIRE`，到期 `DROP USER`）短期只读账号
+- [x] 轮换：独立 worker、轮次/负责人/宽限期/逾期、fixed 不轮换、存储级 CSPRNG 随机生成、外部 Webhook 回写
+- [x] 审批：项目可要求写入、删除、回滚先经另一名管理员批准；默认关闭，可在项目设置里开启
+- [x] 限时访问：申请 reveal/export/write/delete/rollback，到期立刻失效
+- [x] SCIM 2.0 用户和组、OIDC Back-Channel Logout、CLI `login --browser` / `login --device`
+- [x] PostgreSQL 多副本：outbox 认领、行租约和 `cluster_leases`；登录限流在库里，失败时拒绝
+- [x] 请求日志脱敏（`password`/`secret`/`token`/`value`/`match` 等为 `[REDACTED]`）、机器身份可选 IP/CIDR 白名单、响应 `Cache-Control: no-store`
 - [x] M5：Secret Sync（GitHub/Vercel/Cloudflare）、Webhooks（HMAC 签名）、OIDC SSO（JIT 入组）、审计导出 CSV/JSONL、Docker/Helm/GoReleaser 发布
-- [x] 注册即建个人组织 + 默认项目 + dev/staging/prod 三环境；组织/项目/环境模型
+- [x] 注册即建个人空间 + 默认项目；组织按需创建；owner / project / folder 模型
 - [x] 密钥 CRUD + 版本历史 + 回滚（`secret_versions` 只追加）
 - [x] 用户认证：**Argon2id**（m=64MB,t=3,p=4）密码哈希（旧 scrypt 登录透明迁移）+ JWT 15min + refresh 旋转 + 登录限流 5 次/分钟/IP
 - [x] 外部用户源：OIDC Realm（Keycloak 等），登录页一键跳转、`sub` 绑定、组角色同步、PKCE
 - [x] RBAC-lite：owner / admin / developer / viewer；**reveal（取明文）与 read（看元数据）分离**；developer 禁写 prod
 - [x] 审计日志：append-only，谁何时对哪个密钥做了什么（读/写/删/回滚/导出）
 - [x] REST API：`/api/v1/auth/*`、`/orgs/*`、`/projects/*/secrets`、`export`、`/audit`
-- [x] Web Dashboard：登录注册、项目/环境切换、密钥表（掩码/显示/复制 20s 自清除）、版本抽屉+回滚、审计筛选
-- [x] CLI：`login / set / get / list / export / run`（`run` 对齐设计文档 §7.1 注入流程）+ `scan` 泄漏扫描（151 条规则，含 .tabooignore / 行内 taboo:ignore / baseline 抑制、--staged、--json、pre-commit 钩子安装）
+- [x] Web Dashboard：登录注册、项目切换、密钥表（掩码/显示/复制 20s 自清除）、版本抽屉+回滚、审计筛选
+- [x] CLI：`login / set / get / list / export / import / run`（`get`、`export`、`run` 默认展开引用，`--raw` 保留原文；`export` / `run` 默认只处理 locator 目录，`--recursive` 含子目录）+ `scan` 泄漏扫描（151 条规则，含 .tabooignore / 行内 taboo:ignore / baseline 抑制、--staged、--json、--upload、pre-commit 钩子安装）
 - [x] **Go 后端（apps/server-go，M1）**：Chi 路由、模块化单体（internal/{config,server,auth,secret,crypto,org,store,apperr}）、`embed.FS` 单二进制、同一套 14 项冒烟测试全过
-- [x] **机器身份（M2 #3，Go 版）**：client_credentials 换短期 JWT（TTL 可配 ≤1h，临期 CLI 自动重换）；scope 显式 (项目+环境+read|write) **禁止通配**；吊销立即生效；审计 actor 标识 `identity:xxx`；Web 管理页（创建向导/一次性 secret 展示/吊销）+ 22 项专项冒烟全过
+- [x] **机器身份（M2 #3，Go 版）**：client_credentials 换短期 JWT（TTL 可配 ≤1h，临期 CLI 自动重换）；scope 显式 (项目 + read|reveal|write) **禁止通配**；吊销立即生效；审计 actor 标识 `identity:xxx`；Web 管理页（创建向导/一次性 secret 展示/吊销）+ 22 项专项冒烟全过
 - [x] **多级文件夹（M2 #5，Go 版）**：物化路径 `/a/b/`、`folders` 表 + `secrets.folder_id`（存量幂等迁移）；创建自动补中间节点、移动/重命名级联子孙、仅空目录可删、根目录保护、路径穿越拒绝；密钥按目录隔离（同 key 不同目录互不冲突）；前端文件夹树 + 面包屑 + 目录过滤；24 项专项冒烟全过
 - [x] **TOTP 2FA（M2 #4，Go 版）**：RFC 6238（SHA1/30s/6 位，stdlib 实现）+ otpauth 二维码；登录 `totp_required` → 5min challenge 二次验证换 token；secret 加密落库、时间窗防重放（last_step 单调）；10 个恢复码（仅存哈希、用后即废）；disable 需密码确认；前端登录 2FA 步 + 设置抽屉（扫码/密钥/恢复码）；23 项专项冒烟全过
 - [x] **OpenAPI 3.1 契约（M3 #7）**：`api/openapi.yaml` 为 REST 唯一事实源（auth/TOTP/orgs/identities/folders/secrets 全量端点 + `{code,message,details}` 错误模型）；前端 TS 类型由契约生成（`npm run types -w @taboo/web`）；Go 契约漂移测试（chi 路由表 vs 契约，漂移即失败）；Scalar 文档页 `/api/docs`
-- [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export、folders；`examples/basic` 集成示例已对真实服务跑通
-- [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份 scope 限定（dev 身份访问 prod 即拒）、吊销立即断连；11 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档
-- [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 动态引擎 —— 机器身份申请短期账号 lease（`taboo_` 前缀随机用户名，CREATE USER … VALID UNTIL + 最小只读授权），到期/吊销自动 DROP（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请；17 项 mock 冒烟 + **10 项真实 PostgreSQL 联调全过**（podman 容器 `taboo-pg-test`，pg_roles 侧验证创建/登录/续期/DROP；修复 lib/pq 无占位语句误传参导致回收失败的问题）
-- [ ] Secret Sync、Webhooks、OIDC → 见路线图
+- [x] **Go SDK（M3 #8，`packages/sdk-go`）**：原生手写薄封装 —— 登录/2FA 二次验证/refresh 旋转、机器身份 token 临期自动重换、secrets CRUD / reveal / versions / rollback / export / import、引用展开、扫描报告、folders；`examples/basic` 集成示例已对真实服务跑通
+- [x] **Node SDK（`packages/sdk-node`，`@taboo/sdk`）与 Python SDK（`packages/sdk-python`）**：与 Go SDK 相同的方法、幂等键、机器身份和 OAuth client credentials；消费者测试三种语言一起跑
+- [x] **MCP Server（M4 #10，`apps/mcp`）**：stdio JSON-RPC 最小实现，仅暴露 `secrets.list` / `secrets.get` 两 Tool（默认掩码、显式 reveal 记审计）；机器身份按项目 scope 限定（read 只读掩码，reveal 才取明文；无环境维度）、吊销立即断连；10 项验收冒烟全过（含吊销后拒绝 + 审计留痕）；Claude Code / Kimi / Cursor 接入文档见 [apps/mcp/README.md](apps/mcp/README.md)
+- [x] **Agent skill（`skills/taboo`）**：CLI + MCP 的 Agent 操作规则（默认只读、reveal 需显式、`export` / `run` 默认精确目录、禁止把明文带进对话/日志）；安装见 [skills/taboo/README.md](skills/taboo/README.md)
+- [x] **动态密钥（M4 #9，Go 版）**：PostgreSQL 与 MySQL 动态引擎 —— 机器身份申请短期只读账号 lease（`taboo_` 前缀随机用户名）。PostgreSQL 使用 `CREATE USER … VALID UNTIL`；MySQL 使用 `CREATE USER … PASSWORD EXPIRE`（粒度是天），精确到期仍由 worker DROP。到期/吊销自动回收（worker 20s 扫描）；lease 明文密码仅此一次下发（库中 Master Key 加密）；身份吊销联动回收其活跃 lease；引擎连接串加密落库不回显；身份需在本项目有 scope 方可申请
+- [x] 标准身份联邦 P0：OIDC BFF、独立 OAuth 工作负载、显式秘密动作授权、PostgreSQL 18/RLS、事务审计及持久任务、控制台治理和公开迁移恢复。Secret Sync、Webhooks 与审计导出支持外部 owner 治理。
+
+当前范围和验证入口见 [P0 验收记录](docs/design/standard-federation-acceptance.zh-CN.md) 与 [升级恢复手册](docs/runbooks/standard-federation-release.zh-CN.md)。本地公开夹具验证不代表生产发布；SCIM、AuthZEN、Back-Channel Logout 保持独立 P1。
 
 ## 双后端说明
 
@@ -56,7 +69,7 @@
 
 ## 快速开始
 
-要求：Node.js ≥ 22.5（前端/CLI/workspace 管理）；默认 server 为 Go 版，另需 Go ≥ 1.22（Node 版 server 仍可通过 `npm run start:node` 使用，无需 Go）
+要求：Node.js ≥ 22.5（前端/CLI/workspace 管理）；[Just](https://just.systems)（构建入口，`winget install Casey.Just` / `brew install just`）；默认 server 为 Go 版，另需 Go ≥ 1.22（Node 版 server 仍可通过 `npm run start:node` 使用，无需 Go）
 
 ```bash
 npm install                       # 安装全部 workspace 依赖（一次即可）
@@ -69,8 +82,8 @@ npm run dev
 
 # 3. CLI
 npm run cli -- login you@example.com your-password
-npm run cli -- set DB_PASS s3cret --env dev
-npm run cli -- run -- npm run dev
+npm run cli -- set <归属/项目> DB_PASS s3cret
+npm run cli -- run <归属/项目> -- npm run dev
 ```
 
 冒烟测试（14 项端到端检查）：
@@ -90,11 +103,15 @@ npm run smoke
 | `TABOO_JWT_SECRET` | 随机（重启失效） | 生产必须显式设置 |
 | `TABOO_CORS_ORIGIN` | `*` | 开发跨域来源 |
 | `TABOO_LOGIN_RATE_LIMIT` | `5` | 登录类接口（login / totp/login / identities/token）每 IP 每窗口上限 |
-| `TABOO_OIDC_ISSUER` | 空 | 启动时自动登记 OIDC Realm（须与 CLIENT_ID/SECRET/ORG 同时设置） |
-| `TABOO_OIDC_CLIENT_ID` | 空 | Keycloak Confidential Client ID |
+| `TABOO_PUBLIC_ORIGIN` | 空 | 精确部署 origin；OIDC 必填，生产使用 HTTPS |
+| `TABOO_OIDC_SESSION_PROFILE` | 空 | 首批只接受显式 `BOUNDED`；最长 15 分钟，不宣称上游即时撤权 |
+| `TABOO_OIDC_ISSUER_ALLOWLIST` | 空 | 部署管理员允许的精确 issuer，多个用逗号分隔；空则拒绝外部登录 |
+| `TABOO_OIDC_AUTOCREATE` | `false` | 环境引导新连接时显式开启 JIT；已有配置不自动修改 |
+| `TABOO_OIDC_ISSUER` | 空 | 启动时自动登记 OIDC 连接（须与 CLIENT_ID/SECRET/ORG 同时设置） |
+| `TABOO_OIDC_CLIENT_ID` | 空 | 标准 OIDC Confidential Client ID |
 | `TABOO_OIDC_CLIENT_SECRET` | 空 | Client Secret（加密落库） |
 | `TABOO_OIDC_ORG` | 空 | 已有组织 slug（JIT 入组目标） |
-| `TABOO_OIDC_NAME` | `Keycloak` | 登录页按钮名称 |
+| `TABOO_OIDC_NAME` | `OpenID Connect` | 登录页按钮名称 |
 | `TABOO_DISABLE_REGISTER` | 关 | `1/true` 关闭邮箱注册 |
 | `TABOO_DISABLE_PASSWORD` | 关 | `1/true` 关闭密码登录，仅外部 Realm |
 
@@ -105,15 +122,20 @@ npm run smoke
 ```
 taboo/                       # 根 workspace（private）
 ├── package.json             # workspaces: ["apps/*"] + 统一脚本
+├── justfile                 # 构建/运行入口（just build / start / web / smoke）
 ├── doc/                     # 设计文档（OpenVault 功能与详细设计）
+├── skills/
+│   └── taboo/               # Agent skill：CLI + MCP 操作规则（SKILL.md）
 ├── apps/
 │   ├── server/              # @taboo/server — API 服务（Node MVP，契约参考实现）
 │   ├── server-go/           # Go 后端（M1 起主推）：cmd/server + internal/*（auth/crypto/org/secret/identity/folder/store…）
 │   ├── web/                 # @taboo/web — React 19 + TS + Vite Dashboard
-│   ├── cli/                 # @taboo/cli — bin: taboo（login/set/get/list/export/run/scan，支持机器身份）
+│   ├── cli/                 # @taboo/cli — bin: taboo（login/set/get/list/export/import/run/scan，支持机器身份）
 │   └── mcp/                 # MCP Server（M4 #10）：stdio JSON-RPC，secrets.list / secrets.get
 ├── packages/
-│   └── sdk-go/              # Go SDK（M3 #8）：原生手写薄封装 REST 契约 + examples/basic
+│   ├── sdk-go/              # Go SDK：手写薄封装 + examples/basic
+│   ├── sdk-node/            # Node SDK @taboo/sdk，方法对齐 Go SDK
+│   └── sdk-python/          # Python SDK taboo.py，方法对齐 Go SDK
 ├── api/
 │   └── openapi.yaml         # OpenAPI 3.1 契约（M3 #7，前后端与 SDK 唯一事实源）
 └── README.md
@@ -123,7 +145,7 @@ taboo/                       # 根 workspace（private）
 
 ```bash
 npm install          # 一次安装全部 workspace 依赖（提升到根 node_modules）
-npm start            # = Go server（默认）：make build（含前端 embed）后运行 bin/taboo-server，起 API + 托管 web/dist（:7100）
+npm start            # = just start：前端 embed + 编译后运行 bin/taboo-server（:7100）
 npm run start:node   # Node 版 server 启动（apps/server）
 npm run dev          # 全栈开发模式：Go server（go run, :7100）+ web（Vite, :5173）同时启动，Ctrl-C 一起退出
 npm run dev:server   # 只起 Go server 开发模式（go run ./cmd/server）
@@ -143,11 +165,11 @@ npm run cli -- login you@example.com your-password
 | 阶段 | 内容 |
 |---|---|
 | **M0（已完成）** | Node.js MVP：验证加密架构、API 契约、RBAC、审计 |
-| **M1（进行中）** | Go 后端已落地（Chi + modernc.org/sqlite、Argon2id、embed.FS 单二进制，冒烟全过）；剩余：sqlc 代码生成、PostgreSQL 主模式 |
+| **M1（已实现）** | Go 后端、SQLite 与 PostgreSQL 18、Argon2id、embed.FS 单二进制；当前仓储采用参数化 SQL，未引入 sqlc |
 | M2 | 机器身份（✅ #3）、文件夹多级路径（✅ #5）、TOTP 2FA（✅ #4）—— **M2 全部完成** |
-| M3 | CLI 全命令（scan ✅ #6，Dashboard 报告页遗留）、OpenAPI 契约（✅ #7）、Go SDK（✅ #8）；Python/Node SDK 待 OpenAPI 生成器接入 |
+| M3 | CLI 全命令（scan ✅ #6，扫描报告页 ✅）、OpenAPI 契约（✅ #7）、Go / Node / Python SDK（✅ #8） |
 | M4 | 动态密钥（✅ #9，PostgreSQL lease + worker 回收 + 身份联动）、MCP Server（✅ #10）—— **M4 全部完成** |
-| M5 | **全部完成**：Secret Sync（✅ #11）、Webhooks（✅ #12）、OIDC SSO（✅ #13）、审计导出 + Docker/Helm/GoReleaser（✅ #14）—— **v1.0 发布** |
+| M5 | **全部完成**：Secret Sync（✅ #11）、Webhooks（✅ #12）、OIDC SSO（✅ #13）、审计导出 + Docker/Helm/GoReleaser（✅ #14）；发行以实际 tag/发布记录为准 |
 
 ## 文档
 
@@ -175,3 +197,7 @@ docker compose up -d --build
 ## 许可
 
 MIT（v1.0 正式确定；当前代码以 MIT 精神完全开放，无付费墙）
+
+### 标准身份联邦 P0
+
+Go 版本已实现通用 OIDC BFF、PostgreSQL 多租户、标准 OAuth 工作负载及控制台治理。完成范围、公开夹具和未执行的生产边界见 [验收记录](docs/design/standard-federation-acceptance.zh-CN.md)；Node 参考后端保留原本地模式。

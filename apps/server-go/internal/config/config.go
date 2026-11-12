@@ -4,6 +4,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,23 +13,37 @@ import (
 )
 
 type Config struct {
-	Port            string // TABOO_PORT / PORT，默认 7100
-	DataDir         string // TABOO_DATA_DIR，默认 <exe>/../../data（开发期）或 cwd/data
-	MasterKey       string // TABOO_MASTER_KEY（hex/base64 32B）；空则读/生成 data/master.key
-	JWTSecret       string // TABOO_JWT_SECRET；空则随机（重启会话失效，并打印告警）
-	CORS            string // TABOO_CORS_ORIGIN，默认 *
-	WebDist         string // TABOO_WEB_DIST，默认 <module>/web（embed 优先）
-	LoginRate       int    // TABOO_LOGIN_RATE_LIMIT，每 IP 每窗口登录类请求上限，默认 5
-	DisableRegister bool   // TABOO_DISABLE_REGISTER：关闭邮箱注册（Keycloak 等外部用户源）
-	DisablePassword bool   // TABOO_DISABLE_PASSWORD：关闭密码登录，仅外部 Realm
+	DatabaseURL         string
+	DatabaseRuntimeRole string
+	PublicOrigin        string // Exact browser origin for OIDC callbacks.
+	IssuerAllowlist     []string
+	SessionProfile      string // Explicit BOUNDED profile; no implicit online assurance.
+	Port                string // TABOO_PORT / PORT，默认 7100
+	DataDir             string // TABOO_DATA_DIR，默认 <exe>/../../data（开发期）或 cwd/data
+	MasterKey           string // TABOO_MASTER_KEY（hex/base64 32B）；空则读/生成 data/master.key
+	JWTSecret           string // TABOO_JWT_SECRET；空则随机（重启会话失效，并打印告警）
+	CORS                string // TABOO_CORS_ORIGIN，默认 *
+	WebDist             string // TABOO_WEB_DIST，默认 <module>/web（embed 优先）
+	LoginRate           int    // TABOO_LOGIN_RATE_LIMIT，每 IP 每窗口登录类请求上限，默认 5
+	DisableRegister     bool   // TABOO_DISABLE_REGISTER：关闭邮箱注册（Keycloak 等外部用户源）
+	DisablePassword     bool   // TABOO_DISABLE_PASSWORD：关闭密码登录，仅外部 Realm
 }
 
 func Load() *Config {
+	if os.Getenv("TABOO_DATABASE_URL") != "" && (os.Getenv("TABOO_MASTER_KEY") == "" || os.Getenv("TABOO_JWT_SECRET") == "") {
+		log.Fatal("PostgreSQL requires explicit TABOO_MASTER_KEY and TABOO_JWT_SECRET shared by every instance")
+	}
+
 	c := &Config{
-		Port:      getenv("TABOO_PORT", getenv("PORT", "7100")),
-		DataDir:   getenv("TABOO_DATA_DIR", "data"),
-		CORS:      getenv("TABOO_CORS_ORIGIN", "*"),
-		LoginRate: 5,
+		DatabaseURL:         os.Getenv("TABOO_DATABASE_URL"),
+		DatabaseRuntimeRole: os.Getenv("TABOO_DATABASE_RUNTIME_ROLE"),
+		IssuerAllowlist:     strings.Split(os.Getenv("TABOO_ISSUER_ALLOWLIST")+","+os.Getenv("TABOO_OIDC_ISSUER_ALLOWLIST"), ","),
+		SessionProfile:      os.Getenv("TABOO_OIDC_SESSION_PROFILE"),
+		PublicOrigin:        os.Getenv("TABOO_PUBLIC_ORIGIN"),
+		Port:                getenv("TABOO_PORT", getenv("PORT", "7100")),
+		DataDir:             getenv("TABOO_DATA_DIR", "data"),
+		CORS:                getenv("TABOO_CORS_ORIGIN", "*"),
+		LoginRate:           5,
 	}
 	if v := os.Getenv("TABOO_LOGIN_RATE_LIMIT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -47,20 +62,11 @@ func Load() *Config {
 
 	c.MasterKey = os.Getenv("TABOO_MASTER_KEY")
 	if c.MasterKey == "" {
-		keyFile := filepath.Join(c.DataDir, "master.key")
-		raw, err := os.ReadFile(keyFile)
+		key, err := loadOrCreateMasterKey(c.DataDir)
 		if err != nil {
-			buf := make([]byte, 32)
-			if _, err := rand.Read(buf); err != nil {
-				log.Fatalf("generate master key: %v", err)
-			}
-			raw = []byte(hex.EncodeToString(buf))
-			if err := os.WriteFile(keyFile, raw, 0o600); err != nil {
-				log.Fatalf("write master key: %v", err)
-			}
-			log.Printf("[taboo] master key generated at %s (keep it safe, back it up)", keyFile)
+			log.Fatal(err)
 		}
-		c.MasterKey = string(raw)
+		c.MasterKey = key
 	}
 
 	c.JWTSecret = os.Getenv("TABOO_JWT_SECRET")
@@ -87,4 +93,37 @@ func envBool(k string) bool {
 	default:
 		return false
 	}
+}
+
+// Never replace root material when an existing database may depend on it.
+func loadOrCreateMasterKey(dir string) (string, error) {
+	keyFile := filepath.Join(dir, "master.key")
+	raw, err := os.ReadFile(keyFile)
+	if err == nil {
+		return string(raw), nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("original master key cannot be read")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "taboo.db")); err == nil || !os.IsNotExist(err) {
+		return "", fmt.Errorf("existing database requires its original master key; restore it or set TABOO_MASTER_KEY")
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	raw = []byte(hex.EncodeToString(buf))
+	f, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return "", err
+	}
+	_, err = f.Write(raw)
+	closed := f.Close()
+	if err != nil {
+		return "", err
+	}
+	if closed != nil {
+		return "", closed
+	}
+	return string(raw), nil
 }

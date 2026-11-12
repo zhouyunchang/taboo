@@ -1,5 +1,7 @@
 # OpenVault（代号）— 开源自部署密钥管理平台 · 功能与详细设计
 
+> 2026-09-27 身份集成更新：以 [标准身份联邦计划](../docs/plans/2026-09-27-standard-identity-federation-plan.zh-CN.md) 和 [P0 验收记录](../docs/design/standard-federation-acceptance.zh-CN.md) 为当前身份边界。业务组织、权限和秘密属于 taboo；提供方通过标准协议接入。历史路线图不是当前功能验收证明。
+
 > 定位：Infisical / HashiCorp Vault 的开源平替。**单一许可证完全开源（MIT/Apache 2.0）**，无 open-core 付费墙，Go 后端 + TypeScript/React 前端，可私有化部署。
 > 核心原则：密钥永不落盘明文、永不进 Git 仓库、全操作可审计。
 
@@ -56,6 +58,10 @@
 - 访问请求（Access Request）：临时申请某环境权限，到期自动回收
 - 密钥扫描的 Git 历史深度扫描 + pre-commit hook
 - 多副本高可用、读写分离
+
+### 已记录、暂不实现
+
+- **第三方登录**：人员侧第三方登录只采用 **GitHub**（GitHub OAuth 授权码）。登录入口为「使用 GitHub 登录」，不接 Google、微信或其他社交账号。它与已落地的组织级 OIDC SSO、以及把密钥推送到 GitHub Actions 的 Secret Sync 是不同需求。2026-10-31 只冻结这一选择，不排期，也不实现接口、页面或凭据配置。
 
 ---
 
@@ -143,7 +149,7 @@ openvault/
 ├── web/                      # React 前端（构建产物 embed 进二进制）
 ├── migrations/               # goose 迁移脚本
 ├── deploy/                   # Dockerfile、compose、helm
-└── Makefile
+└── justfile
 ```
 
 ---
@@ -274,7 +280,7 @@ Agent 申请 lease → 服务端连 PG 执行 CREATE USER (TTL 1h)
 
 | 页面 | 说明 |
 |---|---|
-| 登录/注册/2FA | 邮箱密码 + TOTP |
+| 登录/注册/2FA | 邮箱密码 + TOTP。第三方登录仅 GitHub，已记录、暂不实现 |
 | 组织/项目总览 | 卡片式项目列表 |
 | **密钥工作台**（核心页） | 左：环境 Tab + 文件夹树；中：密钥表格（key/值掩码/标签/更新时间）；右：详情抽屉（值、版本历史、回滚、审计片段） |
 | 版本对比 | 两版本 diff 视图 |
@@ -308,3 +314,16 @@ Agent 申请 lease → 服务端连 PG 执行 CREATE USER (TTL 1h)
 2. **open-core 诱惑**：本项目承诺完全开源，可持续模式靠托管云服务/商业支持，而非阉割自托管版。
 3. **范围控制**：v1 坚决不做 PKI/PAM，避免重蹈 Vault 复杂度覆辙；动态密钥留好 `SecretEngine` 接口即可。
 4. **多语言 SDK 维护成本**：v1 只做 Go SDK，Python/Node 用 OpenAPI 生成器产出，社区迭代。
+
+
+## 标准身份联邦 P0 当前实现（2026-09-27）
+
+本节覆盖历史路线图的身份、存储与可靠投递描述。Go 单体使用 schema 15，支持 SQLite 单实例与 PostgreSQL 18 的 FORCE RLS。领域组织和授权由 taboo 管理；人员 OIDC BFF、机器 OAuth 信任分别登记，严格校验公开协议身份。连接没有任何闭源 Identity 数据结构或 SDK 前置。
+
+外部成员按项目/环境明确授予 read/write/reveal/export/rollback/delete；映射角色不包含秘密明文权限，也不能成为 owner。owner 控制凭据委派、同步目标与身份连接。会话策略选择 bounded（至多 900 秒）或逐请求在线内省；RP logout 按公开能力启用。已证明旧、新身份后可替换登录关联，稳定本地 ID 和秘密密文保持不变。
+
+秘密 mutation、审计和 outbox 同事务；版本 CAS 与幂等收据支持响应丢失恢复。消费者任务先落库再确认，租约/fencing 防旧 worker 覆盖，多任务同步按组织序号推进。动态账号发放/续期先持久化回收责任，再调用数据库并发布密码；回收失败可重试/人工接管。
+
+Web、SDK、CLI、MCP 和 Docker/Helm 的实现及验收以 [验收矩阵](../docs/design/standard-federation-acceptance.zh-CN.md) 为准；运维按 [升级恢复手册](../docs/runbooks/standard-federation-release.zh-CN.md) 执行。SCIM/AuthZEN/Back-Channel 与具体部署投运保留为独立工作。
+
+人员第三方登录的提供方定为 GitHub OAuth。该条只更新需求，不进入当前实现。

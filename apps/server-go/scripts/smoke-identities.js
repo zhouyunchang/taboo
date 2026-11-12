@@ -36,7 +36,7 @@ const projects = await call('GET', `/api/v1/orgs/${orgSlug}/projects`, { token }
 const projectId = projects.data.projects[0].id;
 
 // 2. 准备一条 dev 密钥
-await call('POST', `/api/v1/projects/${projectId}/secrets?env=dev`, { token, body: { key: 'DB_PASS', value: 'dev-secret' } });
+await call('POST', `/api/v1/projects/${projectId}/secrets`, { token, body: { key: 'DB_PASS', value: 'dev-secret' } });
 
 // 3. 创建 read scope 机器身份
 const created = await call('POST', `/api/v1/orgs/${orgSlug}/identities`, {
@@ -52,26 +52,18 @@ check('token exchange 200', tk.status === 200 && typeof tk.data.access_token ===
 const itoken = tk.data.access_token;
 
 // 5. scope 内 reveal 允许（read → reveal）
-const reveal = await call('GET', `/api/v1/projects/${projectId}/secrets/DB_PASS?env=dev`, { token: itoken });
+const reveal = await call('GET', `/api/v1/projects/${projectId}/secrets/DB_PASS`, { token: itoken });
 check('identity reveal dev 200', reveal.status === 200 && reveal.data.value === 'dev-secret', JSON.stringify(reveal.data));
 
 // 6. scope 内列表允许（无值）
-const list = await call('GET', `/api/v1/projects/${projectId}/secrets?env=dev`, { token: itoken });
+const list = await call('GET', `/api/v1/projects/${projectId}/secrets`, { token: itoken });
 check('identity list dev 200 (no values)', list.status === 200 && list.data.secrets.length === 1 && list.data.secrets[0].value === undefined);
 
 // 7. read scope 禁写
-const write = await call('POST', `/api/v1/projects/${projectId}/secrets?env=dev`, { token: itoken, body: { key: 'X', value: 'y' } });
+const write = await call('POST', `/api/v1/projects/${projectId}/secrets`, { token: itoken, body: { key: 'X', value: 'y' } });
 check('read scope write 403', write.status === 403);
 
-// 8. 无 prod scope → 403
-const prodRead = await call('GET', `/api/v1/projects/${projectId}/secrets?env=prod`, { token: itoken });
-check('no prod scope 403', prodRead.status === 403);
-
-// 9. 项目级环境列表允许（项目内任一 scope）
-const envs = await call('GET', `/api/v1/projects/${projectId}/environments`, { token: itoken });
-check('identity env list 200', envs.status === 200 && envs.data.environments.length === 3);
-
-// 10. 错误 secret 统一 401
+// 8. 错误 secret 统一 401
 const bad = await call('POST', '/api/v1/identities/token', { body: { client_id, client_secret: 'wrong' } });
 check('bad secret 401', bad.status === 401);
 
@@ -80,12 +72,12 @@ const w = await call('POST', `/api/v1/orgs/${orgSlug}/identities`, {
   token, body: { name: 'ci-writer', scopes: [{ project_id: projectId, env: 'dev', permission: 'write' }] },
 });
 const wtk = await call('POST', '/api/v1/identities/token', { body: { client_id: w.data.client_id, client_secret: w.data.client_secret } });
-const wset = await call('POST', `/api/v1/projects/${projectId}/secrets?env=dev`, { token: wtk.data.access_token, body: { key: 'CI_KEY', value: 'ci-value' } });
+const wset = await call('POST', `/api/v1/projects/${projectId}/secrets`, { token: wtk.data.access_token, body: { key: 'CI_KEY', value: 'ci-value' } });
 check('write scope set 200', wset.status === 200 && wset.data.version === 1, JSON.stringify(wset.data));
 
 // 12. 吊销后 token 立即 401，且无法换新 token
 await call('POST', `/api/v1/orgs/${orgSlug}/identities/${w.data.id}/revoke`, { token });
-const afterRevoke = await call('GET', `/api/v1/projects/${projectId}/secrets/CI_KEY?env=dev`, { token: wtk.data.access_token });
+const afterRevoke = await call('GET', `/api/v1/projects/${projectId}/secrets/CI_KEY`, { token: wtk.data.access_token });
 check('revoked token 401 immediately', afterRevoke.status === 401);
 const reTk = await call('POST', '/api/v1/identities/token', { body: { client_id: w.data.client_id, client_secret: w.data.client_secret } });
 check('revoked identity token exchange 401', reTk.status === 401);

@@ -4,7 +4,6 @@
 //	TABOO_CLIENT_ID    机器身份 client_id（scope 须限定 项目+环境+read）
 //	TABOO_CLIENT_SECRET
 //	TABOO_PROJECT_ID   目标项目（scope 内）
-//	TABOO_ENV          默认环境，默认 dev
 package main
 
 import (
@@ -27,15 +26,7 @@ const (
 var (
 	client  *taboo.Client
 	project string
-	envDef  string
 )
-
-func mask(s string) string {
-	if len(s) <= 4 {
-		return "••••"
-	}
-	return s[:2] + strings.Repeat("•", len(s)-4) + s[len(s)-2:]
-}
 
 func dispatch(method string, params json.RawMessage) (any, *rpcError) {
 	switch method {
@@ -55,8 +46,7 @@ func dispatch(method string, params json.RawMessage) (any, *rpcError) {
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"env":  map[string]any{"type": "string", "description": "环境 slug，默认 " + envDef},
-						"path": map[string]any{"type": "string", "description": "文件夹物化路径 /a/b/，缺省整个环境"},
+						"path": map[string]any{"type": "string", "description": "文件夹物化路径 /a/b/，缺省整个项目"},
 					},
 				},
 			},
@@ -67,7 +57,6 @@ func dispatch(method string, params json.RawMessage) (any, *rpcError) {
 					"type": "object",
 					"properties": map[string]any{
 						"key":    map[string]any{"type": "string", "description": "密钥 key（必填）"},
-						"env":    map[string]any{"type": "string", "description": "环境 slug，默认 " + envDef},
 						"path":   map[string]any{"type": "string", "description": "文件夹物化路径，默认根目录 /"},
 						"reveal": map[string]any{"type": "boolean", "description": "显式请求明文（默认 false，返回掩码）"},
 					},
@@ -91,24 +80,19 @@ func callTool(p toolCallParams) (any, *rpcError) {
 	defer cancel()
 	var args struct {
 		Key    string `json:"key"`
-		Env    string `json:"env"`
 		Path   string `json:"path"`
 		Reveal bool   `json:"reveal"`
 	}
 	_ = json.Unmarshal(p.Arguments, &args)
-	e := args.Env
-	if e == "" {
-		e = envDef
-	}
 
 	switch p.Name {
 	case "secrets.list":
-		items, err := client.ListSecrets(ctx, project, e, args.Path)
+		items, err := client.ListSecrets(ctx, project, args.Path)
 		if err != nil {
 			return toolErr(err), nil
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "%d secret(s)%s\n", len(items), scopeNote(e, args.Path))
+		fmt.Fprintf(&b, "%d secret(s)%s\n", len(items), scopeNote(args.Path))
 		for _, s := range items {
 			fmt.Fprintf(&b, "- %s\tv%d\t%s\ttags=%v\n", s.Key, s.Version, s.Folder, s.Tags)
 		}
@@ -118,17 +102,27 @@ func callTool(p toolCallParams) (any, *rpcError) {
 		if args.Key == "" {
 			return errorResult("missing required argument: key"), nil
 		}
-		sv, err := client.GetSecret(ctx, project, e, args.Path, args.Key)
+		if !args.Reveal {
+			path := args.Path
+			if path == "" {
+				path = "/"
+			}
+			items, err := client.ListSecrets(ctx, project, path)
+			if err != nil {
+				return toolErr(err), nil
+			}
+			for _, item := range items {
+				if item.Key == args.Key {
+					return textResult(fmt.Sprintf("%s=••••\n# folder=%s v%d · value not requested (reveal=false)", item.Key, item.Folder, item.Version)), nil
+				}
+			}
+			return errorResult("secret not found"), nil
+		}
+		sv, err := client.GetSecret(ctx, project, args.Path, args.Key)
 		if err != nil {
 			return toolErr(err), nil
 		}
-		value := mask(sv.Value)
-		note := "masked (reveal=false)"
-		if args.Reveal {
-			value = sv.Value
-			note = "REVEALED — 已记审计"
-		}
-		return textResult(fmt.Sprintf("%s=%s\n# folder=%s v%d · %s", sv.Key, value, sv.Folder, sv.Version, note)), nil
+		return textResult(fmt.Sprintf("%s=%s\n# folder=%s v%d · REVEALED — 已记审计", sv.Key, sv.Value, sv.Folder, sv.Version)), nil
 
 	default:
 		return errorResult("unknown tool: %s", p.Name), nil
@@ -163,11 +157,11 @@ func asApiError(err error, target **taboo.ApiError) bool {
 	return false
 }
 
-func scopeNote(e, p string) string {
+func scopeNote(p string) string {
 	if p != "" {
-		return fmt.Sprintf(" env=%s path=%s", e, p)
+		return " path=" + p
 	}
-	return fmt.Sprintf(" env=%s", e)
+	return ""
 }
 
 func main() {
@@ -175,12 +169,24 @@ func main() {
 	cid := os.Getenv("TABOO_CLIENT_ID")
 	csec := os.Getenv("TABOO_CLIENT_SECRET")
 	project = os.Getenv("TABOO_PROJECT_ID")
-	envDef = getenv("TABOO_ENV", "dev")
 	if cid == "" || csec == "" || project == "" {
 		fmt.Fprintln(os.Stderr, "taboo-mcp: TABOO_CLIENT_ID / TABOO_CLIENT_SECRET / TABOO_PROJECT_ID are required")
 		os.Exit(2)
 	}
-	client = taboo.New(base).WithIdentity(cid, csec)
+	mode := getenv("TABOO_AUTH_MODE", "local")
+	if mode == "oauth" {
+		var err error
+		client, err = taboo.New(base).WithOAuthClientCredentials(taboo.OAuthCredentials{Issuer: os.Getenv("TABOO_OAUTH_ISSUER"), MetadataMode: getenv("TABOO_OAUTH_METADATA_MODE", "oauth"), ClientID: cid, ClientSecret: csec, Scopes: strings.Fields(os.Getenv("TABOO_OAUTH_SCOPES")), Resource: os.Getenv("TABOO_OAUTH_RESOURCE"), Organization: os.Getenv("TABOO_ORG"), TrustID: os.Getenv("TABOO_OAUTH_TRUST_ID")})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "taboo-mcp: invalid external OAuth configuration:", err)
+			os.Exit(2)
+		}
+	} else if mode == "local" && os.Getenv("TABOO_OAUTH_ISSUER") == "" {
+		client = taboo.New(base).WithIdentity(cid, csec)
+	} else {
+		fmt.Fprintln(os.Stderr, "taboo-mcp: explicitly select TABOO_AUTH_MODE=oauth for external OAuth")
+		os.Exit(2)
+	}
 	serveStdio(os.Stdin, os.Stdout, dispatch)
 }
 

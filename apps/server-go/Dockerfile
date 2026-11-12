@@ -22,17 +22,31 @@ WORKDIR /repo
 COPY apps/server-go/go.mod apps/server-go/go.sum apps/server-go/
 RUN cd apps/server-go && go mod download
 COPY apps/server-go/ apps/server-go/
-# 前端产物 + API 契约拷入 embed 目录（等价 Makefile 的 web 目标）
+# 前端产物 + API 契约拷入 embed 目录（等价 `just web`）
 COPY --from=web /repo/apps/web/dist/ apps/server-go/cmd/server/web/
 COPY api/openapi.yaml apps/server-go/cmd/server/web/
-RUN cd apps/server-go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/taboo-server ./cmd/server
+# 版本信息经 -X 注入（deploy/dev122/deploy.sh 传入；本地 docker build 缺省为 dev/unknown）
+ARG TABOO_VERSION=dev
+ARG TABOO_COMMIT=unknown
+ARG BUILD_TIME=
+RUN cd apps/server-go && BI=github.com/zhouyunchang/taboo/apps/server-go/internal/buildinfo \
+    && LDF="-s -w -X $BI.version=${TABOO_VERSION} -X $BI.commit=${TABOO_COMMIT} -X $BI.buildTime=${BUILD_TIME}" \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="$LDF" -o /out/taboo-server ./cmd/server
 
 # ---- 阶段 3：运行时 ----
 FROM alpine:3.21
+ARG TABOO_VERSION=dev
+ARG TABOO_COMMIT=unknown
+ARG BUILD_TIME=
+LABEL org.opencontainers.image.title="taboo" \
+      org.opencontainers.image.version="${TABOO_VERSION}" \
+      org.opencontainers.image.revision="${TABOO_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_TIME}" \
+      org.opencontainers.image.source="https://github.com/zhouyunchang/taboo"
 RUN apk add --no-cache curl \
     && adduser -D -u 10001 taboo \
     && mkdir -p /data && chown taboo:taboo /data
-COPY --from=server /out/taboo-server /usr/local/bin/taboo-server
+COPY --from=server /out/taboo-server /usr/local/bin/
 ENV TABOO_PORT=7100 \
     TABOO_DATA_DIR=/data \
     TABOO_CORS_ORIGIN=*

@@ -51,3 +51,13 @@ func TestOAuthScopes(t *testing.T) {
 		t.Fatalf("got %q", g)
 	}
 }
+
+func TestMapRoleExactDefaultsOnlyWithoutMatch(t *testing.T) {
+	claims := map[string]any{"groups": []any{"/tenant/restricted"}}
+	if got := MapRoleExact(claims, "groups", map[string]string{"/tenant/restricted": "viewer"}, "admin"); got != "viewer" {
+		t.Fatalf("matched low privilege must override fallback, got %s", got)
+	}
+	if got := MapRoleExact(claims, "groups", map[string]string{"restricted": "admin"}, "viewer"); got != "viewer" {
+		t.Fatalf("unconfigured basename matched: %s", got)
+	}
+}

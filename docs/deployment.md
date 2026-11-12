@@ -11,6 +11,29 @@
 - 前置 HTTPS 反向代理（Caddy/nginx），见设计文档 §8「传输：强制 TLS」
 - 限制 `/data` 目录权限（容器内以 uid 10001 运行）
 
+## 进程角色（PostgreSQL / 多副本）
+
+`TABOO_ROLE` 控制一个进程做什么：
+
+| 值 | HTTP / Web UI | 后台循环 | 适用 |
+|---|---|---|---|
+| `all`（默认） | 有 | 有 | 单二进制 / SQLite；也兼容单实例 PG |
+| `serve` | 有 | 无轮换/投递/同步/动态回收/审计检查点 | PG 多副本 API |
+| `worker` | 可选健康端口 | rotation + webhook + outbox + sync + dynamic + audit | PG 后台进程 |
+
+- SQLite 只支持 `all`；`serve`/`worker` 会拒绝启动。
+- `worker` 与 API 共用同一个 `TABOO_DATABASE_URL`、`TABOO_MASTER_KEY`、`TABOO_JWT_SECRET`。
+- worker 不暴露业务 API；需要探针时设置 `TABOO_WORKER_ADDR=:7101`，提供 `/healthz`、`/readyz`。
+- 轮换调度每 15 秒扫一次；心跳写入 `worker_heartbeats`，API 的 `/api/v1/orgs/{slug}/rotation/health` 读取它。
+- 迁移仍由第一个启动的新实例执行；如果要独立迁移 Job，目前需先新增 `schema up` 命令（现有 `schema` 只读）。
+
+```bash
+# API
+TABOO_ROLE=serve ./taboo-server
+# Worker
+TABOO_ROLE=worker TABOO_WORKER_ADDR=:7101 ./taboo-server
+```
+
 ## Keycloak（外部用户源）
 
 1. Keycloak 创建 Confidential Client，Standard flow；Valid redirect URI：
@@ -38,7 +61,7 @@ helm install taboo ./deploy/helm/taboo -n taboo \
 ```
 
 - Master Key / JWT Secret 经 K8s Secret 注入（`existingSecret` 必填，values 明文会被 `fail` 拦截）
-- 默认单副本：SQLite WAL 单写多读，事件 worker（Sync/Webhook/动态密钥/审计导出）为进程内轮询
+- 默认单副本。SQLite 不能水平扩展。PostgreSQL 可以把 `replicaCount` 调到 1 以上，前提是每个副本使用同一个 `TABOO_MASTER_KEY`、`TABOO_JWT_SECRET` 和 `TABOO_DATABASE_URL`，并且导出目录是共享卷。outbox、轮换、动态凭据和 webhook 用行租约；审计检查点和过期清扫用 `cluster_leases`。登录限流记在数据库里，数据库不可用时登录返回 503。发现文档和 DEK 缓存可以各进程一份
 - 数据卷 PVC 存 SQLite 与导出文件；liveness = `/api/v1/healthz`，readiness = `/api/v1/readyz`
 - 滚动更新：`terminationGracePeriodSeconds: 30`，`preStop` sleep 3s，进程 graceful drain 15s
 - 详细说明见 [deploy/helm/taboo/README.md](../deploy/helm/taboo/README.md)

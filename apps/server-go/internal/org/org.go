@@ -1,4 +1,4 @@
-// 组织/项目/环境 + 认证（注册/登录/refresh）+ 审计查询
+// 组织/项目 + 认证（注册/登录/refresh）+ 审计查询
 package org
 
 import (
@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -16,18 +17,24 @@ import (
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/audit"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/auth"
 	tc "github.com/zhouyunchang/taboo/apps/server-go/internal/crypto"
+	"github.com/zhouyunchang/taboo/apps/server-go/internal/pathcode"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/rbac"
 	"github.com/zhouyunchang/taboo/apps/server-go/internal/secret"
 )
 
 type Service struct {
+	// Exact local account lookup is only used after owner authorization in
+	// AddMember; tenant handlers cannot query the global identity directory.
+	LookupLocalUser func(string) (string, error)
 	DB              *sql.DB
+	ControlDB       *sql.DB // Unscoped connection used to create a new tenant.
 	MasterKey       []byte
 	JWTSecret       string
 	DEKs            *tc.DEKCache
 	DataDir         string // M5 #14：审计导出文件落盘目录（空 = 禁用异步导出）
 	DisableRegister bool
 	DisablePassword bool
+	LoginRate       int // 每 IP 每窗口的本地登录上限（0 → 5）
 }
 
 var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
@@ -67,14 +74,21 @@ func slugify(s string) string {
 func (s *Service) PublicRoutes(r chi.Router) {
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/register", s.Register)
-		// 登录限流：5 次/分钟/IP（设计文档 §8）
-		r.With(auth.LoginRateLimit(time.Minute, 5)).Post("/login", s.Login)
+		limit := s.LoginRate
+		if limit <= 0 {
+			limit = 5
+		}
+		// 登录限流：默认 5 次/分钟/IP（设计文档 §8），可由部署配置提高。
+		r.With(auth.LoginRateLimit(s.DB, time.Minute, limit)).Post("/login", s.Login)
 		r.Post("/refresh", s.Refresh)
 	})
 }
 
 func (s *Service) Routes(r chi.Router) {
 	r.Get("/me", s.Me)
+	r.Patch("/me/handle", s.UpdateHandle)
+	r.Post("/me/handle/confirm", s.ConfirmHandle)
+	r.Post("/orgs", s.CreateOrganization)
 	r.Post("/invites/{token}/accept", s.AcceptInvite)
 	r.Route("/orgs/{slug}", func(r chi.Router) {
 		r.Get("/projects", s.ListProjects)
@@ -84,6 +98,10 @@ func (s *Service) Routes(r chi.Router) {
 		r.Patch("/members/{userId}", s.PatchMember)
 		r.Delete("/members/{userId}", s.RemoveMember)
 		r.Put("/members/{userId}/grants", s.PutGrants)
+		r.Get("/members/{userId}/actions", s.ListActionGrants)
+		r.Put("/members/{userId}/actions", s.PutActionGrants)
+		r.Get("/security", s.Security)
+		r.Put("/security", s.PutSecurity)
 		r.Post("/invites", s.CreateInvite)
 		r.Get("/audit", s.Audit)
 		r.Get("/audit/verify", s.AuditVerify)
@@ -133,62 +151,53 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	userID := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO users (id, email, name, password_hash, auth_source) VALUES (?, ?, ?, ?, 'local')`,
-		userID, email, b.Name, hash); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
 		return
 	}
-	// 个人组织（DEK 经 Root Key 加密落库）+ 默认项目 + dev/staging/prod
-	orgID := tc.NewID()
-	slug := slugify(strings.Split(email, "@")[0])
-	for {
-		var x string
-		if err := s.DB.QueryRow(`SELECT id FROM orgs WHERE slug = ?`, slug).Scan(&x); err != nil {
-			break
-		}
-		slug += "-" + tc.NewID()[:4]
-	}
-	dek := randomBytes(tc.KeyLen)
-	dekPlain, _ := tc.Encrypt(s.MasterKey, hexEncode(dek))
-	if _, err := s.DB.Exec(`INSERT INTO orgs (id, name, slug, dek_encrypted) VALUES (?, ?, ?, ?)`,
-		orgID, email+"'s org", slug, dekPlain); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	defer tx.Rollback()
+	created, cerr := CreateLocalUser(tx, s.MasterKey, email, b.Name, hash)
+	if cerr != nil {
+		writeErr(w, cerr)
 		return
 	}
-	if _, err := s.DB.Exec(`INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')`, orgID, userID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	projectID := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, 'default', 'default')`, projectID, orgID); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	for i, env := range []string{"dev", "staging", "prod"} {
-		envID := tc.NewID()
-		prot := 0
-		if env == "prod" {
-			prot = 1
-		}
-		if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
-			envID, projectID, env, env, i, prot); err != nil {
-			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-			return
-		}
-		ensureRootFolder(s.DB, envID)
-	}
+	userID, orgID := created.UserID, created.OrgID
 	u := &auth.Actor{ID: userID, Email: email, Name: b.Name, Kind: auth.KindUser}
-	if err := auth.AuditReq(s.DB, r, orgID, u, "auth.register", "user/"+email, nil); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	tk, err := auth.IssueTokens(s.DB, s.JWTSecret, u)
+
+	tk, err := auth.IssueTokens(tx, s.JWTSecret, u)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
+	if !auth.CommitMutation(tx, w, r, orgID, u, "auth.register", "user/"+email, nil) {
+		return
+	}
 	writeJSON(w, 201, map[string]any{"user": u, "tokens": tk})
+}
+
+// NewLocalUser 是 CreateLocalUser 的结果。
+type NewLocalUser struct{ UserID, OrgID, Slug string }
+
+// CreateLocalUser 在调用方事务内创建本地账号和仅本人可用的个人空间（DEK、默认项目、
+// dev/staging/prod）。注册接口与运维 CLI（taboo-server user create）共用。组织要另外创建。
+func CreateLocalUser(tx *sql.Tx, masterKey []byte, email, name, passwordHash string) (NewLocalUser, *apperr.Error) {
+	userID := tc.NewID()
+	if _, err := tx.Exec(`INSERT INTO users (id, email, name, password_hash, auth_source) VALUES (?, ?, ?, ?, 'local')`,
+		userID, email, name, passwordHash); err != nil {
+		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
+	}
+	code, err := userHandle(tx, userID, email)
+	if err != nil {
+		if errors.Is(err, pathcode.ErrTaken) || errors.Is(err, pathcode.ErrInvalid) {
+			return NewLocalUser{}, apperr.New(409, "CODE_TAKEN", "this code is already used")
+		}
+		return NewLocalUser{}, apperr.New(500, "INTERNAL", err.Error())
+	}
+	orgID, slug, aerr := provisionTenant(tx, masterKey, personalLabel(name, email), code, KindPersonal, userID)
+	if aerr != nil {
+		return NewLocalUser{}, aerr
+	}
+	return NewLocalUser{UserID: userID, OrgID: orgID, Slug: slug}, nil
 }
 
 func randomBytes(n int) []byte {
@@ -198,9 +207,12 @@ func randomBytes(n int) []byte {
 }
 
 // ensureRootFolder 为环境补建根文件夹（幂等，已存在则忽略冲突）
-func ensureRootFolder(db *sql.DB, envID string) {
-	_, _ = db.Exec(`INSERT OR IGNORE INTO folders (id, env_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/')`,
-		tc.NewID(), envID)
+func ensureRootFolder(db interface {
+	Exec(string, ...any) (sql.Result, error)
+}, projectID string) error {
+	_, err := db.Exec(`INSERT INTO folders (id, project_id, parent_id, name, path) VALUES (?, ?, NULL, '/', '/') ON CONFLICT(project_id,path) DO NOTHING`,
+		tc.NewID(), projectID)
+	return err
 }
 
 func hexEncode(b []byte) string {
@@ -219,7 +231,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	email := strings.ToLower(strings.TrimSpace(b.Email))
 	var userID, name, hash, status string
-	err := s.DB.QueryRow(`SELECT id, name, password_hash, status FROM users WHERE email = ?`, email).
+	err := s.DB.QueryRow(`SELECT id, name, password_hash, status FROM users WHERE email = ? AND auth_source='local'`, email).
 		Scan(&userID, &name, &hash, &status)
 	ok, needsRehash := false, false
 	if err == nil {
@@ -227,6 +239,12 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || !ok {
 		_ = auth.AuditReq(s.DB, r, "-", nil, "auth.login.failed", "user/"+email, map[string]any{"reason": "bad_credentials"})
+		writeErr(w, apperr.BadCredentials)
+		return
+	}
+	if status != "active" {
+		// 停用账号：与密码错误同一响应，不泄露账号状态
+		_ = auth.AuditReq(s.DB, r, "-", nil, "auth.login.failed", "user/"+email, map[string]any{"reason": "account_" + status})
 		writeErr(w, apperr.BadCredentials)
 		return
 	}
@@ -280,7 +298,7 @@ func (s *Service) Refresh(w http.ResponseWriter, r *http.Request) {
 	_, _ = s.DB.Exec(`DELETE FROM refresh_tokens WHERE id = ?`, id) // 旋转
 	var u auth.Actor
 	u.Kind = auth.KindUser
-	if err := s.DB.QueryRow(`SELECT id, email, name FROM users WHERE id = ?`, userID).
+	if err := s.DB.QueryRow(`SELECT id, email, name FROM users WHERE id = ? AND auth_source='local' AND status='active'`, userID).
 		Scan(&u.ID, &u.Email, &u.Name); err != nil {
 		writeErr(w, apperr.InvalidRefresh)
 		return
@@ -301,11 +319,15 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		ID         string `json:"id"`
 		Name       string `json:"name"`
 		Slug       string `json:"slug"`
+		Kind       string `json:"kind"`
 		Role       string `json:"role"`
 		Restricted bool   `json:"restricted"`
 	}
-	rows, err := s.DB.Query(`SELECT o.id, o.name, o.slug, m.role, COALESCE(m.restricted,0) FROM orgs o
-		JOIN org_members m ON m.org_id = o.id WHERE m.user_id = ?`, u.ID)
+	// Organizations come first so a user who also has an empty personal space
+	// lands on the tenant that already holds shared keys.
+	rows, err := s.DB.Query(`SELECT o.id, o.name, o.slug, o.kind, m.role, COALESCE(m.restricted,0) FROM orgs o
+		JOIN org_members m ON m.org_id = o.id WHERE m.user_id = ?
+		ORDER BY CASE WHEN o.kind = 'organization' THEN 0 ELSE 1 END, o.created_at, o.id`, u.ID)
 	if err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
@@ -315,11 +337,147 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var o orgRow
 		var rest int
-		_ = rows.Scan(&o.ID, &o.Name, &o.Slug, &o.Role, &rest)
+		_ = rows.Scan(&o.ID, &o.Name, &o.Slug, &o.Kind, &o.Role, &rest)
 		o.Restricted = rest == 1
+		if u.OrganizationID != "" && u.OrganizationID != o.ID {
+			continue
+		}
 		orgs = append(orgs, o)
 	}
-	writeJSON(w, 200, map[string]any{"user": u, "orgs": orgs, "totp_enabled": totpEnabledOf(s.DB, u.ID)})
+	rows.Close() // release the single SQLite connection before the next query
+	visible := orgs[:0]
+	for _, o := range orgs {
+		if auth.OrganizationLoginAllowed(s.DB, u, o.ID) {
+			visible = append(visible, o)
+		}
+	}
+	orgs = visible
+	handle, confirmed := handleOf(s.DB, u.ID)
+	writeJSON(w, 200, map[string]any{"user": meUser{Actor: *u, Handle: handle, HandleConfirmed: confirmed}, "orgs": orgs, "totp_enabled": totpEnabledOf(s.DB, u.ID)})
+}
+
+type meUser struct {
+	auth.Actor
+	Handle          string `json:"handle"`
+	HandleConfirmed bool   `json:"handle_confirmed"`
+}
+
+func handleOf(db *sql.DB, userID string) (string, bool) {
+	var handle string
+	var confirmed int
+	if err := db.QueryRow(`SELECT COALESCE(handle,''), COALESCE(handle_confirmed,0) FROM users WHERE id=?`, userID).Scan(&handle, &confirmed); err != nil {
+		return "", false
+	}
+	return handle, confirmed == 1
+}
+
+func (s *Service) UpdateHandle(w http.ResponseWriter, r *http.Request) {
+	u := auth.From(r)
+	if u == nil || u.Kind != auth.KindUser {
+		writeErr(w, apperr.Forbidden)
+		return
+	}
+	var b struct {
+		Handle string `json:"handle"`
+	}
+	if jsonDecode(r, &b) != nil {
+		writeErr(w, apperr.InvalidInput)
+		return
+	}
+	code := strings.ToLower(strings.TrimSpace(b.Handle))
+	if !pathcode.Valid(code) {
+		writeErr(w, apperr.New(400, "INVALID_CODE", "code must be 1-39 lowercase letters, digits, or inner hyphens"))
+		return
+	}
+	tx, started := auth.BeginMutation(s.controlDB(), w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
+	var current string
+	var confirmed int
+	if err := tx.QueryRow(`SELECT COALESCE(handle,''), COALESCE(handle_confirmed,0) FROM users WHERE id=?`, u.ID).Scan(&current, &confirmed); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if confirmed == 1 {
+		writeErr(w, apperr.New(409, "HANDLE_LOCKED", "the username is confirmed and can no longer change"))
+		return
+	}
+	if current != code {
+		if err := pathcode.Claim(tx, code, pathcode.KindUser, u.ID); err != nil {
+			if errors.Is(err, pathcode.ErrTaken) {
+				writeErr(w, apperr.New(409, "CODE_TAKEN", "this code is already used"))
+				return
+			}
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		if _, err := tx.Exec(`UPDATE users SET handle=? WHERE id=?`, code, u.ID); err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		if _, err := tx.Exec(`UPDATE orgs SET slug=? WHERE kind='personal' AND owner_user_id=?`, code, u.ID); err != nil {
+			if isUnique(err) {
+				writeErr(w, apperr.New(409, "CODE_TAKEN", "this code is already used"))
+				return
+			}
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		if current != "" {
+			if err := pathcode.Release(tx, current); err != nil {
+				writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+				return
+			}
+		}
+	}
+	orgID := personalOrgID(tx, u.ID)
+	if !auth.CommitMutation(tx, w, r, orgID, u, "user.handle", "user/"+u.ID, map[string]any{"handle": code}) {
+		return
+	}
+	writeJSON(w, 200, map[string]any{"handle": code, "handle_confirmed": false})
+}
+
+func (s *Service) ConfirmHandle(w http.ResponseWriter, r *http.Request) {
+	u := auth.From(r)
+	if u == nil || u.Kind != auth.KindUser {
+		writeErr(w, apperr.Forbidden)
+		return
+	}
+	tx, started := auth.BeginMutation(s.controlDB(), w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
+	var handle string
+	var confirmed int
+	if err := tx.QueryRow(`SELECT COALESCE(handle,''), COALESCE(handle_confirmed,0) FROM users WHERE id=?`, u.ID).Scan(&handle, &confirmed); err != nil {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	if handle == "" || !pathcode.Valid(handle) {
+		writeErr(w, apperr.New(400, "INVALID_CODE", "choose a username before confirming it"))
+		return
+	}
+	if confirmed == 0 {
+		if _, err := tx.Exec(`UPDATE users SET handle_confirmed=1 WHERE id=?`, u.ID); err != nil {
+			writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+			return
+		}
+		if !auth.CommitMutation(tx, w, r, personalOrgID(tx, u.ID), u, "user.handle.confirm", "user/"+u.ID, map[string]any{"handle": handle}) {
+			return
+		}
+	}
+	writeJSON(w, 200, map[string]any{"handle": handle, "handle_confirmed": true})
+}
+
+func personalOrgID(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, userID string) string {
+	var id string
+	_ = q.QueryRow(`SELECT id FROM orgs WHERE kind='personal' AND owner_user_id=?`, userID).Scan(&id)
+	return id
 }
 
 func totpEnabledOf(db *sql.DB, userID string) bool {
@@ -350,10 +508,10 @@ func (s *Service) ListProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.From(r)
 	role, restricted, _ := auth.MemberInfo(s.DB, orgID, u.ID)
-	q := `SELECT id, name, slug, created_at FROM projects WHERE org_id = ? ORDER BY created_at`
+	q := `SELECT id, name, slug, created_at, approval_required FROM projects WHERE org_id = ? ORDER BY created_at`
 	args := []any{orgID}
 	if restricted && !rbac.Privileged(role) {
-		q = `SELECT p.id, p.name, p.slug, p.created_at FROM projects p
+		q = `SELECT p.id, p.name, p.slug, p.created_at, p.approval_required FROM projects p
 			JOIN project_grants g ON g.project_id = p.id AND g.user_id = ?
 			WHERE p.org_id = ? ORDER BY p.created_at`
 		args = []any{u.ID, orgID}
@@ -365,15 +523,18 @@ func (s *Service) ListProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type proj struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		Slug    string `json:"slug"`
-		Created string `json:"created_at"`
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Slug     string `json:"slug"`
+		Created  string `json:"created_at"`
+		Approval bool   `json:"approval_required"`
 	}
 	out := []proj{}
 	for rows.Next() {
 		var p proj
-		_ = rows.Scan(&p.ID, &p.Name, &p.Slug, &p.Created)
+		var approval int
+		_ = rows.Scan(&p.ID, &p.Name, &p.Slug, &p.Created, &approval)
+		p.Approval = approval == 1
 		out = append(out, p)
 	}
 	writeJSON(w, 200, map[string]any{"projects": out})
@@ -389,38 +550,48 @@ func (s *Service) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var b struct {
 		Name string `json:"name"`
+		Code string `json:"code"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&b)
 	if strings.TrimSpace(b.Name) == "" {
 		writeErr(w, apperr.InvalidInput)
 		return
 	}
-	slug := slugify(b.Name)
-	for {
-		var x string
-		if err := s.DB.QueryRow(`SELECT id FROM projects WHERE org_id = ? AND slug = ?`, orgID, slug).Scan(&x); err != nil {
-			break
-		}
-		slug += "-" + tc.NewID()[:4]
+	slug := strings.ToLower(strings.TrimSpace(b.Code))
+	if slug == "" {
+		slug = slugify(b.Name)
 	}
+	if !pathcode.ValidToken(slug) {
+		writeErr(w, apperr.New(400, "INVALID_CODE", "project code must be 1-39 lowercase letters, digits, or inner hyphens"))
+		return
+	}
+	var existing string
+	err := s.DB.QueryRow(`SELECT id FROM projects WHERE org_id = ? AND slug = ?`, orgID, slug).Scan(&existing)
+	if err == nil {
+		writeErr(w, apperr.New(409, "CODE_TAKEN", "this project code is already used"))
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+		return
+	}
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
+		return
+	}
+	defer tx.Rollback()
 	pid := tc.NewID()
-	if _, err := s.DB.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, ?, ?)`,
+	if _, err := tx.Exec(`INSERT INTO projects (id, org_id, name, slug) VALUES (?, ?, ?, ?)`,
 		pid, orgID, b.Name, slug); err != nil {
 		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
 		return
 	}
-	for i, env := range []string{"dev", "staging", "prod"} {
-		envID := tc.NewID()
-		prot := 0
-		if env == "prod" {
-			prot = 1
-		}
-		_, _ = s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
-			envID, pid, env, env, i, prot)
-		ensureRootFolder(s.DB, envID)
+	if err := ensureRootFolder(tx, pid); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "change was not committed"))
+		return
 	}
-	if err := auth.AuditReq(s.DB, r, orgID, auth.From(r), "project.create", "project/"+slug, nil); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+
+	if !auth.CommitMutation(tx, w, r, orgID, auth.From(r), "project.create", "project/"+slug, nil) {
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": pid, "name": b.Name, "slug": slug})
@@ -435,43 +606,14 @@ func (s *Service) projectOf(w http.ResponseWriter, r *http.Request) (secret.Proj
 		return p, false
 	}
 	u := auth.From(r)
-	if !auth.Can(s.DB, u, p.OrgID, p.ID, "read", "") {
+	if !auth.ProjectVisible(s.DB, u, p.OrgID, p.ID) {
 		auth.Deny(s.DB, w, r, p.OrgID, "read", "project/"+p.Slug)
 		return p, false
 	}
 	return p, true
 }
 
-func (s *Service) ListEnvs(w http.ResponseWriter, r *http.Request) {
-	p, ok := s.projectOf(w, r)
-	if !ok {
-		return
-	}
-	rows, err := s.DB.Query(`SELECT id, name, slug, sort_order, COALESCE(protected,0) FROM environments WHERE project_id = ? ORDER BY sort_order`, p.ID)
-	if err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
-		return
-	}
-	defer rows.Close()
-	type env struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		Slug      string `json:"slug"`
-		Sort      int    `json:"sort_order"`
-		Protected bool   `json:"protected"`
-	}
-	out := []env{}
-	for rows.Next() {
-		var e env
-		var prot int
-		_ = rows.Scan(&e.ID, &e.Name, &e.Slug, &e.Sort, &prot)
-		e.Protected = prot == 1
-		out = append(out, e)
-	}
-	writeJSON(w, 200, map[string]any{"environments": out})
-}
-
-func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
+func (s *Service) PatchProject(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.projectOf(w, r)
 	if !ok {
 		return
@@ -480,34 +622,29 @@ func (s *Service) CreateEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var b struct {
-		Name      string `json:"name"`
-		Protected bool   `json:"protected"`
+		ApprovalRequired *bool `json:"approval_required"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&b)
-	if strings.TrimSpace(b.Name) == "" {
+	if json.NewDecoder(r.Body).Decode(&b) != nil || b.ApprovalRequired == nil {
 		writeErr(w, apperr.InvalidInput)
 		return
 	}
-	var maxSort int
-	_ = s.DB.QueryRow(`SELECT COALESCE(MAX(sort_order), -1) FROM environments WHERE project_id = ?`, p.ID).Scan(&maxSort)
-	id := tc.NewID()
-	slug := slugify(b.Name)
-	prot := 0
-	if b.Protected || slug == "prod" {
-		prot = 1
+	flag := 0
+	if *b.ApprovalRequired {
+		flag = 1
 	}
-	if _, err := s.DB.Exec(`INSERT INTO environments (id, project_id, name, slug, sort_order, protected) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, p.ID, b.Name, slug, maxSort+1, prot); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	tx, started := auth.BeginMutation(s.DB, w, r)
+	if !started {
 		return
 	}
-	ensureRootFolder(s.DB, id)
-	if err := auth.AuditReq(s.DB, r, p.OrgID, auth.From(r), "env.create", "project/"+p.Slug+"/env/"+slug,
-		map[string]any{"protected": prot == 1}); err != nil {
-		writeErr(w, apperr.New(500, "INTERNAL", err.Error()))
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE projects SET approval_required=? WHERE id=?`, flag, p.ID); err != nil {
+		writeErr(w, apperr.New(503, "STORAGE_UNAVAILABLE", "try again"))
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": id, "name": b.Name, "slug": slug, "protected": prot == 1})
+	if !auth.CommitMutation(tx, w, r, p.OrgID, auth.From(r), "project.approval", "project/"+p.Slug, map[string]any{"approval_required": flag == 1}) {
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": p.ID, "approval_required": flag == 1})
 }
 
 // ---------- 审计查询 ----------

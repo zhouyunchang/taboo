@@ -22,10 +22,22 @@ type ctxKey string
 const UserKey ctxKey = "taboo.user"
 
 type Actor struct {
-	ID    string `json:"id"`
-	Email string `json:"email,omitempty"`
-	Name  string `json:"name"`
-	Kind  string `json:"kind"` // "user" | "identity"
+	WorkloadBinding      string   `json:"-"`
+	OAuthScopes          []string `json:"-"`
+	ID                   string   `json:"id"`
+	Email                string   `json:"email,omitempty"`
+	Name                 string   `json:"name"`
+	Kind                 string   `json:"kind"` // "user" | "identity"
+	OrganizationID       string   `json:"-"`
+	AuthenticationSource string   `json:"-"`
+	BrowserOrigin        string   `json:"-"`
+	SessionHash          string   `json:"-"`
+	SessionProfile       string   `json:"-"`
+	SensitiveAllowed     bool     `json:"-"`
+	SessionExpires       int64    `json:"-"`
+	ReauthenticationURL  string   `json:"-"`
+	AuthValidUntil       int64    `json:"-"`
+	RPLogoutEnabled      bool     `json:"-"`
 }
 
 const (
@@ -46,17 +58,7 @@ func MemberInfo(db *sql.DB, orgID, userID string) (role string, restricted bool,
 }
 
 func EnvProtected(db *sql.DB, projectID, envSlug string) bool {
-	if envSlug == "" {
-		return false
-	}
-	var p int
-	err := db.QueryRow(`SELECT COALESCE(protected, 0) FROM environments WHERE project_id = ? AND slug = ?`,
-		projectID, envSlug).Scan(&p)
-	if err != nil {
-		// 未找到环境时按 slug==prod 兜底，避免新建环境漏标时误开
-		return envSlug == "prod"
-	}
-	return p == 1
+	return false
 }
 
 func projectGrant(db *sql.DB, projectID, userID string) (role string, ok bool) {
@@ -73,17 +75,39 @@ func Can(db *sql.DB, actor *Actor, orgID, projectID, action, envSlug string) boo
 	if actor == nil {
 		return false
 	}
+	if actor.OrganizationID != "" && actor.OrganizationID != orgID {
+		return false
+	}
 	if actor.Kind == KindIdentity {
+		if actor.WorkloadBinding != "" {
+			return workloadCan(db, actor, orgID, projectID, action, envSlug)
+		}
 		return identityCan(db, actor.ID, orgID, projectID, action, envSlug)
+	}
+	if actor.BrowserOrigin != "" && rbac.Sensitive(action) && !actor.SensitiveAllowed {
+		return false
 	}
 	orgRole, restricted, ok := MemberInfo(db, orgID, actor.ID)
 	if !ok {
 		return false
 	}
+	if jitAllows(db, actor, orgID, projectID, action, envSlug) {
+		return true
+	}
 	grantRole, hasGrant := projectGrant(db, projectID, actor.ID)
 	eff, ok := rbac.EffectiveRole(orgRole, restricted, grantRole, hasGrant)
 	if !ok {
 		return false
+	}
+	if actor.AuthenticationSource != "" && projectID != "" {
+		switch action {
+		case rbac.Read, rbac.Write, rbac.Reveal, rbac.Export, rbac.Rollback, rbac.Delete:
+			// Explicit grants are the authority for secret actions of federated
+			// people. A mapped developer/admin role cannot imply plaintext access.
+			var n int
+			err := db.QueryRow(`SELECT COUNT(*) FROM member_action_grants WHERE org_id=? AND user_id=? AND project_id=? AND action=?`, orgID, actor.ID, projectID, action).Scan(&n)
+			return err == nil && n > 0 && rbac.UserAllows(eff, rbac.Read, false)
+		}
 	}
 	return rbac.UserAllows(eff, action, EnvProtected(db, projectID, envSlug))
 }
@@ -94,13 +118,7 @@ func identityCan(db *sql.DB, identityID, orgID, projectID, action, envSlug strin
 	if err != nil || status != "active" {
 		return false
 	}
-	envCond, args := `AND e.slug = ?`, []any{identityID, projectID, envSlug}
-	if envSlug == "" {
-		envCond, args = ``, []any{identityID, projectID}
-	}
-	rows, err := db.Query(`SELECT s.permission FROM identity_scopes s
-		JOIN environments e ON e.id = s.env_id
-		WHERE s.identity_id = ? AND s.project_id = ? `+envCond, args...)
+	rows, err := db.Query(`SELECT permission FROM identity_scopes WHERE identity_id = ? AND project_id = ?`, identityID, projectID)
 	if err != nil {
 		return false
 	}
@@ -122,6 +140,9 @@ func recOf(orgID string, actor *Actor, action, resource string, metadata map[str
 	actorID, actorName, actorType := "system", "", KindUser
 	if actor != nil {
 		actorID, actorName, actorType = actor.ID, actor.Name, actor.Kind
+		if actor.AuthenticationSource != "" {
+			metadata["authentication_source"] = actor.AuthenticationSource
+		}
 		if actor.Kind == KindIdentity {
 			actorName = "identity:" + actor.Name
 		}
@@ -155,9 +176,15 @@ func failClosed(action string) bool {
 		return true
 	case strings.HasPrefix(action, "identity.") && action != "identity.list":
 		return true
-	case strings.HasPrefix(action, "members."):
+	case strings.HasPrefix(action, "scan_report."):
 		return true
-	case action == "auth.login", action == "auth.register", action == "project.create", action == "env.create":
+	case strings.HasPrefix(action, "admin."):
+		return true
+	case strings.HasPrefix(action, "auth.totp."), strings.HasPrefix(action, "members."), strings.HasPrefix(action, "oidc."), strings.HasPrefix(action, "workload."):
+		return true
+	case strings.HasPrefix(action, "approval."), strings.HasPrefix(action, "access."), strings.HasPrefix(action, "scim."), strings.HasPrefix(action, "auth.device"), strings.HasPrefix(action, "auth.cli"):
+		return true
+	case action == "auth.session.refresh", action == "auth.logout", action == "auth.oidc.login", action == "auth.login", action == "auth.register", action == "auth.backchannel_logout", action == "project.create", action == "env.create", action == "env.approval":
 		return true
 	}
 	return false
@@ -195,7 +222,7 @@ type TokenPair struct {
 	ExpiresIn int    `json:"expiresIn"`
 }
 
-func IssueTokens(db *sql.DB, secret string, u *Actor) (*TokenPair, error) {
+func IssueTokens(db audit.DBTX, secret string, u *Actor) (*TokenPair, error) {
 	access, err := tc.SignJWT(u.ID, u.Email, secret, 15*time.Minute)
 	if err != nil {
 		return nil, err
@@ -209,9 +236,54 @@ func IssueTokens(db *sql.DB, secret string, u *Actor) (*TokenPair, error) {
 	return &TokenPair{Access: access, Refresh: refresh, TokenType: "Bearer", ExpiresIn: 900}, nil
 }
 
-func Middleware(db *sql.DB, jwtSecret string) func(http.Handler) http.Handler {
+type ExternalAuthenticator func(*http.Request) (*Actor, error)
+
+func Middleware(db *sql.DB, jwtSecret string, policies ...BrowserPolicy) func(http.Handler) http.Handler {
+	return MiddlewareWithExternal(db, jwtSecret, nil, policies...)
+}
+func MiddlewareWithExternal(db *sql.DB, jwtSecret string, external ExternalAuthenticator, policies ...BrowserPolicy) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Taboo-Trust") != "" {
+				if external == nil {
+					writeErr(w, apperr.Unauthorized)
+					return
+				}
+				actor, err := external(r)
+				if err != nil {
+					if e, ok := err.(*apperr.Error); ok {
+						writeErr(w, e)
+					} else {
+						writeErr(w, apperr.Unauthorized)
+					}
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), UserKey, actor)))
+				return
+			}
+			if _, err := r.Cookie(BrowserCookie); err == nil && r.Header.Get("Authorization") == "" {
+				a, err := BrowserActor(db, r)
+				if err != nil {
+					if e, ok := err.(*apperr.Error); ok {
+						writeErr(w, e)
+					} else {
+						writeErr(w, apperr.Unauthorized)
+					}
+					return
+				}
+				for _, allowed := range policies {
+					if err := allowed(r, a); err != nil {
+						if e, ok := err.(*apperr.Error); ok {
+							writeErr(w, e)
+						} else {
+							writeErr(w, apperr.Unauthorized)
+						}
+						return
+					}
+				}
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), UserKey, a)))
+				return
+			}
 			token := bearer(r)
 			if token == "" {
 				writeErr(w, apperr.Unauthorized)
@@ -227,8 +299,22 @@ func Middleware(db *sql.DB, jwtSecret string) func(http.Handler) http.Handler {
 			var actor *Actor
 			if typ == KindIdentity {
 				actor, err = loadIdentity(db, sub)
-			} else {
+				if err == nil && !IdentityIPAllowed(db, actor.ID, httpx.ClientIP(r)) {
+					writeErr(w, apperr.New(403, "IP_NOT_ALLOWED", "client address is not allowed for this machine identity"))
+					return
+				}
+			} else if typ == KindUser {
 				actor, err = loadUser(db, sub)
+				var source string
+				if err == nil {
+					err = db.QueryRow(`SELECT auth_source FROM users WHERE id=?`, sub).Scan(&source)
+					if source != "local" {
+						err = apperr.Unauthorized
+					}
+				}
+			} else {
+				writeErr(w, apperr.Unauthorized)
+				return
 			}
 			if err != nil {
 				writeErr(w, apperr.Unauthorized)
@@ -254,7 +340,7 @@ func loadUser(db *sql.DB, id string) (*Actor, error) {
 func loadIdentity(db *sql.DB, id string) (*Actor, error) {
 	var a Actor
 	var status string
-	err := db.QueryRow(`SELECT id, name, status FROM machine_identities WHERE id = ?`, id).
+	err := db.QueryRow(`SELECT id, name, status FROM machine_identities WHERE id = ? AND auth_type='client_credentials'`, id).
 		Scan(&a.ID, &a.Name, &status)
 	if err != nil || status != "active" {
 		return nil, apperr.Unauthorized
@@ -287,4 +373,24 @@ func writeErr(w http.ResponseWriter, e *apperr.Error) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(e)
+}
+
+func workloadCan(db *sql.DB, a *Actor, org, project, action, env string) bool {
+	rows, err := db.Query(`SELECT g.required_scope FROM workload_grants g JOIN workload_bindings b ON b.id=g.binding_id AND b.org_id=g.org_id JOIN oauth_trusts t ON t.id=b.trust_id AND t.org_id=b.org_id JOIN machine_identities m ON m.id=b.id AND m.org_id=b.org_id WHERE b.id=? AND b.org_id=? AND b.enabled=1 AND t.enabled=1 AND m.status='active' AND m.auth_type='external_oauth' AND g.project_id=? AND g.action=?`, a.WorkloadBinding, org, project, rbac.Normalize(action))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var scope string
+		if rows.Scan(&scope) != nil {
+			return false
+		}
+		for _, granted := range a.OAuthScopes {
+			if scope == granted {
+				return true
+			}
+		}
+	}
+	return false
 }

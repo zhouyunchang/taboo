@@ -49,18 +49,9 @@ function migrate(db) {
     UNIQUE (org_id, slug)
   );
 
-  CREATE TABLE IF NOT EXISTS environments (
-    id         TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    name       TEXT NOT NULL,
-    slug       TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (project_id, slug)
-  );
-
   CREATE TABLE IF NOT EXISTS secrets (
     id               TEXT PRIMARY KEY,
-    env_id           TEXT NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    project_id       TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     folder           TEXT NOT NULL DEFAULT '/',
     key              TEXT NOT NULL,
     comment          TEXT NOT NULL DEFAULT '',
@@ -68,7 +59,7 @@ function migrate(db) {
     latest_version   INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (env_id, folder, key)
+    UNIQUE (project_id, folder, key)
   );
 
   -- 只追加不修改：版本历史 + 密文（AES-256-GCM, nonce|tag|ct）

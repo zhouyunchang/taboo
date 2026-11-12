@@ -1,0 +1,2 @@
+# Docker entrypoint shell scripts must stay LF on Windows, or `env: can't execute 'sh\r'` breaks init.
+*.sh text eol=lf

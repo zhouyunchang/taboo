@@ -2,6 +2,20 @@ package oidc
 
 import "strings"
 
+// MapRoleExact does not infer vendor-specific aliases or match group basenames.
+func MapRoleExact(claims map[string]any, path string, mapping map[string]string, def string) string {
+	best := ""
+	for _, v := range claimValues(claims, path) {
+		if role, ok := mapping[v]; ok && validRoles[role] && roleRank[role] > roleRank[best] {
+			best = role
+		}
+	}
+	if best == "" {
+		return pickRole(def)
+	}
+	return best
+}
+
 // claimValues 读取点分路径 claim（如 groups、realm_access.roles）。
 func claimValues(claims map[string]any, path string) []string {
 	path = strings.TrimSpace(path)

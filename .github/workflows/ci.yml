@@ -4,7 +4,7 @@ name: ci
 # 发布流水线见 release.yml（tag 触发，GoReleaser）
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 permissions:
@@ -49,8 +49,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - uses: extractions/setup-just@v3
       - name: build Go server (含前端 embed)
-        run: make -C apps/server-go build
+        run: just build
       - name: start server & smoke
         run: |
           ./apps/server-go/bin/taboo-server &
@@ -62,7 +63,9 @@ jobs:
           done
           npm run smoke
 
-  # Node 版 server 契约回归（同一套 14 项冒烟检查）
+  # Node 版参考 server 契约回归：只覆盖两种后端都支持的 API；
+  # rotation / scan / Doppler preview / secret deletion 是 Go server 专属面，
+  # 由 smoke-go 覆盖，不在 Node MVP 上伪装成已实现。
   smoke-node:
     runs-on: ubuntu-latest
     steps:
@@ -73,6 +76,8 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - name: start server & smoke
+        env:
+          TABOO_SMOKE_BACKEND: node
         run: |
           npm run start:node &
           SRV=$!
@@ -82,3 +87,86 @@ jobs:
             sleep 1
           done
           npm run smoke:node
+
+  federation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - uses: extractions/setup-just@v3
+      - run: npm exec --workspace=@taboo/web -- playwright install --with-deps chromium
+      - run: npm run types && git diff --exit-code -- apps/web/src/api-types.ts
+      - run: npm exec --workspace=@taboo/web -- tsc --noEmit
+      - name: Public Keycloak, negative protocol tests and real browser
+        run: TABOO_TEST_BROWSER=1 ./scripts/test-federation.sh
+      - name: Upload Playwright failure context
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-federation
+          path: |
+            apps/web/test-results
+            apps/web/playwright-report
+          if-no-files-found: ignore
+
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Required PostgreSQL RLS, recovery, migration and Keycloak interoperability
+        run: TABOO_TEST_CONSUMERS=1 TABOO_TEST_WITH_KEYCLOAK=1 ./scripts/test-postgres.sh
+
+  consumers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: go test -race ./... && go vet ./...
+        working-directory: packages/sdk-go
+      - run: go test -race ./... && go vet ./...
+        working-directory: apps/mcp
+      - run: node --test apps/cli/oauth.test.js
+      - name: Real SDK, CLI and MCP processes with JWT, opaque and local credentials
+        run: ./scripts/test-consumers.sh
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: apps/server-go/go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: extractions/setup-just@v3
+      - name: Validate release configuration
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.0
+          args: check
+      - name: Build archives and release image without publishing or signing
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.0
+          args: release --snapshot --clean --skip=publish,sign,sbom
+      - name: Build public standalone image and migration utility
+        run: docker build -f apps/server-go/Dockerfile -t taboo:standard-federation-test .
+      - name: Fresh install, restart and original-key recovery
+        run: node scripts/test-container-recovery.mjs
+      # The pre-federation schema is intentionally not upgradable (see the
+      # schema README); a release now starts from a fresh volume and keeps the
+      # previous image for rollback. Do not gate on the retired upgrade path.
+      - name: Helm single-instance and shared PostgreSQL profiles
+        run: ./scripts/test-helm.sh

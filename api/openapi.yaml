@@ -1,6 +1,6 @@
 # taboo（禁制）OpenAPI 3.1 契约 —— 前后端与 SDK 的唯一事实源（M3 #7）
 # 约定：
-#   - 错误统一 {code, message, details}；Bearer 鉴权；写路径支持 Idempotency-Key 头（幂等约定，v1.5 强制）
+#   - 错误统一 {code, message, details}；Bearer 鉴权；秘密写入、回滚和删除支持可选 Idempotency-Key；结果未知时用原请求重试
 #   - 审计类列表为 cursor 分页预留（当前 limit/offset 兼容实现）
 openapi: 3.1.0
 info:
@@ -22,13 +22,87 @@ tags:
   - { name: members, description: 组织成员 / 邀请 / 项目授权矩阵 }
 
 paths:
+  /api/v1/auth/oidc/{slug}/connections:
+    parameters:
+      - in: path
+        name: slug
+        required: true
+        schema: {type: string}
+    get:
+      summary: List registered sign-in choices for the current organization member
+      security: [{browserSession: []}, {bearerAuth: []}]
+      responses:
+        '200':
+          description: Public connection identifiers and current authentication source
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connections, authentication]
+                properties:
+                  authentication: {type: string, enum: [local, oidc]}
+                  connections:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, issuer, current]
+                      properties:
+                        id: {type: string}
+                        name: {type: string}
+                        issuer: {type: string}
+                        current: {type: boolean}
+  /api/v1/auth/oidc/{slug}/replace:
+    parameters:
+      - in: path
+        name: slug
+        required: true
+        schema: {type: string}
+      - in: query
+        name: pid
+        required: true
+        schema: {type: string}
+    post:
+      summary: Begin explicit proof of a replacement sign-in identity
+      description: Requires exact Origin, current membership and either a recent BFF session with CSRF or local password plus enabled TOTP. The browser-bound one-use OIDC callback preserves local IDs and grants, rejects an identity already owned by another account, unbinds the old identity and revokes old sessions. It never merges by email or copies legacy plaintext permissions.
+      security: [{browserSession: []}, {bearerAuth: []}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password: {type: string, format: password}
+                code: {type: string}
+      responses:
+        '200':
+          description: Browser flow cookie set; navigate to the registered authorization endpoint
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorization_url]
+                properties:
+                  authorization_url: {type: string}
+        '401': {description: Old identity proof is invalid or expired}
+        '403': {description: Organization policy or required authentication strength is not satisfied}
   /api/v1/healthz:
     get:
       tags: [orgs]
       summary: 进程存活
       operationId: healthz
       responses:
-        '200': { description: 进程活着 }
+        '200':
+          description: 进程活着，附带构建版本（-ldflags 注入；未注入时 version=dev）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, version, commit]
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string, example: 0.1.0 }
+                  commit: { type: string, example: 815f0a7 }
+                  build_time: { type: string, example: '2026-10-31T08:00:00Z' }
   /api/v1/readyz:
     get:
       tags: [orgs]
@@ -52,6 +126,7 @@ paths:
                 properties:
                   register_enabled: { type: boolean }
                   password_enabled: { type: boolean }
+                  github_enabled: { type: boolean, description: 实例级「使用 GitHub 登录」是否已配置（TABOO_GITHUB_*） }
                   sources:
                     type: array
                     items: { $ref: '#/components/schemas/AuthSource' }
@@ -185,12 +260,168 @@ paths:
         '200': { description: 登录成功, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/github/login:
+    get:
+      tags: [auth]
+      summary: 使用 GitHub 登录（OAuth App 授权码 + state + PKCE S256）；302 到 github.com，未配置时 404
+      operationId: githubLogin
+      responses:
+        '302': { description: 跳转 GitHub 授权页（设置 10 分钟 HttpOnly 加密 flow cookie） }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/v1/auth/github/callback:
+    get:
+      tags: [auth]
+      summary: GitHub OAuth 回调（校验 state/PKCE、已验证主邮箱、准入策略；GitHub token 用后即吊销、不落库）
+      operationId: githubCallback
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        '302':
+          description: >-
+            成功：/?github=ok（设置 60 秒 SameSite=Strict 一次性 ticket cookie）或 /?github=linked；
+            失败：/?github=error&reason=state_mismatch|flow_expired|missing_code|authorization_denied|token_exchange_failed|github_api_failed|
+            no_verified_primary_email|not_allowed|not_linked|email_in_use|account_disabled|already_linked|already_linked_elsewhere|external_identity_exists|internal
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/auth/github/session:
+    post:
+      tags: [auth]
+      summary: 用一次性 ticket cookie 换 Taboo token（要求 Origin 与 TABOO_PUBLIC_ORIGIN 一致；已开 2FA 返回 totp challenge）
+      operationId: githubSession
+      responses:
+        '200': { description: 登录成功（或需二次验证）, content: { application/json: { schema: { $ref: '#/components/schemas/LoginResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/auth/github/link:
+    get:
+      tags: [auth]
+      summary: 当前用户的 GitHub 绑定状态
+      operationId: githubLinkStatus
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      responses:
+        '200':
+          description: 绑定状态
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  linked: { type: boolean }
+                  github_id: { type: string }
+                  has_password: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [auth]
+      summary: 发起绑定 GitHub（返回授权 URL；组织 SSO 会话不可用）
+      operationId: githubLinkStart
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 授权 URL, content: { application/json: { schema: { type: object, properties: { authorization_url: { type: string, format: uri } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [auth]
+      summary: 解绑 GitHub（同时吊销该用户全部 refresh token；无密码账号拒绝，避免锁死）
+      operationId: githubUnlink
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: 已解绑, content: { application/json: { schema: { type: object, properties: { linked: { type: boolean }, refresh_tokens_revoked: { type: boolean } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/access:
+    get:
+      tags: [secrets]
+      summary: 按定位符列出目录、读取一把密钥或导出 .env
+      operationId: accessLocator
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { name: locator, in: query, required: true, schema: { type: string }, description: 归属/项目/目录。根目录不写目录段 }
+        - { name: key, in: query, schema: { type: string }, description: 密钥名。省略时列出该目录 }
+        - { name: export, in: query, schema: { type: string, enum: ['1'] }, description: 为 1 时导出 .env }
+        - { name: recursive, in: query, schema: { type: boolean, default: false, description: 与 export=1 同用；true 时包含子目录，缺省只导出该定位符目录 } }
+      responses:
+        '200': { description: 目录内容、密钥明文或 .env }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [secrets]
+      summary: 按定位符导入 .env
+      operationId: importLocator
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { name: locator, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                format: { type: string }
+                strategy: { type: string }
+                preview: { type: boolean }
+      responses:
+        '200': { description: 导入结果 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [secrets]
+      summary: 按定位符写入密钥
+      operationId: putLocator
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { name: locator, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key: { type: string }
+                value: { type: string }
+                locator: { type: string }
+      responses:
+        '200': { description: 已写入 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [secrets]
+      summary: 按定位符删除密钥
+      operationId: deleteLocator
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { name: locator, in: query, required: true, schema: { type: string } }
+        - { name: key, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已删除 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/me:
     get:
       tags: [orgs]
       summary: 当前用户 + 组织列表 + 2FA 状态
       operationId: me
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       responses:
         '200':
           description: 当前用户
@@ -203,12 +434,93 @@ paths:
                   orgs: { type: array, items: { $ref: '#/components/schemas/OrgMembership' } }
                   totp_enabled: { type: boolean }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/me/handle:
+    patch:
+      tags: [orgs]
+      summary: 确认前修改用户名
+      operationId: updateHandle
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [handle]
+              properties:
+                handle: { type: string, maxLength: 39 }
+      responses:
+        '200':
+          description: 已改名，仍可再次修改
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handle, handle_confirmed]
+                properties:
+                  handle: { type: string }
+                  handle_confirmed: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/me/handle/confirm:
+    post:
+      tags: [orgs]
+      summary: 确认用户名。确认后不能再改
+      operationId: confirmHandle
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      responses:
+        '200':
+          description: 用户名已锁定
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handle, handle_confirmed]
+                properties:
+                  handle: { type: string }
+                  handle_confirmed: { type: boolean, enum: [true] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/orgs:
+    post:
+      tags: [orgs]
+      summary: 创建组织（个人空间不能加人；本地会话）
+      operationId: createOrganization
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 80 }
+                code: { type: string, maxLength: 39, description: 组织 code。省略时由名称生成。创建后不能修改 }
+      responses:
+        '201':
+          description: 已创建，调用者是 owner
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, name, slug, kind, role]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  slug: { type: string }
+                  kind: { type: string, enum: [organization] }
+                  role: { type: string, enum: [owner] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/orgs/{slug}/projects:
     get:
       tags: [orgs]
       summary: 组织项目列表
       operationId: listProjects
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       responses:
         '200': { description: 项目列表, content: { application/json: { schema: { type: object, properties: { projects: { type: array, items: { $ref: '#/components/schemas/Project' } } } } } } }
@@ -217,7 +529,7 @@ paths:
       tags: [orgs]
       summary: 新建项目（自动建 dev/staging/prod + 根文件夹）
       operationId: createProject
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       requestBody:
         required: true
@@ -226,7 +538,9 @@ paths:
             schema:
               type: object
               required: [name]
-              properties: { name: { type: string } }
+              properties:
+                name: { type: string }
+                code: { type: string, maxLength: 39, description: 项目代号。省略时由名称生成。同一归属下唯一 }
       responses:
         '201': { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/Project' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -235,7 +549,7 @@ paths:
       tags: [orgs]
       summary: 审计日志（append-only）
       operationId: audit
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: limit, in: query, schema: { type: integer, default: 100 } }
@@ -260,7 +574,7 @@ paths:
       tags: [orgs]
       summary: 验真审计哈希链与 checkpoint
       operationId: verifyAudit
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       responses:
         '200':
@@ -280,7 +594,7 @@ paths:
       tags: [members]
       summary: 成员列表（owner）
       operationId: listMembers
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       responses:
         '200':
@@ -295,7 +609,7 @@ paths:
       tags: [members]
       summary: 添加已注册用户为成员
       operationId: addMember
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       requestBody:
         required: true
@@ -315,7 +629,7 @@ paths:
       tags: [members]
       summary: 改角色 / restricted
       operationId: patchMember
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: userId, in: path, required: true, schema: { type: string } }
@@ -333,7 +647,7 @@ paths:
       tags: [members]
       summary: 移除成员
       operationId: removeMember
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: userId, in: path, required: true, schema: { type: string } }
@@ -344,7 +658,7 @@ paths:
       tags: [members]
       summary: 替换项目授权矩阵
       operationId: putMemberGrants
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: userId, in: path, required: true, schema: { type: string } }
@@ -363,12 +677,116 @@ paths:
                       role: { type: string }
       responses:
         '200': { description: 已更新 }
+  /api/v1/orgs/{slug}/oidc/{id}/security:
+    get:
+      tags: [oidc]
+      summary: 读取连接会话与敏感操作策略
+      operationId: getOIDCSecurity
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 会话策略；变更使已有会话与登录请求失效
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OIDCSecurity' }
+    put:
+      tags: [oidc]
+      summary: 替换连接会话与敏感操作策略
+      operationId: putOIDCSecurity
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OIDCSecurity' }
+      responses:
+        '200':
+          description: 会话策略；变更使已有会话与登录请求失效
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OIDCSecurity' }
+  /api/v1/orgs/{slug}/security:
+    get:
+      tags: [members]
+      summary: getOrganizationSecurity
+      operationId: getOrganizationSecurity
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200':
+          description: 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationSecurity' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [members]
+      summary: putOrganizationSecurity
+      operationId: putOrganizationSecurity
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrganizationSecurity' }
+      responses:
+        '200':
+          description: 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrganizationSecurity' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/orgs/{slug}/members/{userId}/actions:
+    get:
+      tags: [members]
+      summary: getMemberActions
+      operationId: getMemberActions
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberActions' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [members]
+      summary: putMemberActions
+      operationId: putMemberActions
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: userId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberActions' }
+      responses:
+        '200':
+          description: 成功；策略修改需 owner，启用外部登录需当前外部 owner 证明
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberActions' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/orgs/{slug}/invites:
     post:
       tags: [members]
       summary: 创建邀请（自托管返回一次性链接）
       operationId: createInvite
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       requestBody:
         content:
@@ -406,7 +824,7 @@ paths:
       tags: [identities]
       summary: 机器身份列表（owner/admin）
       operationId: listIdentities
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       responses:
         '200': { description: 身份列表, content: { application/json: { schema: { type: object, properties: { identities: { type: array, items: { $ref: '#/components/schemas/Identity' } } } } } } }
@@ -416,7 +834,7 @@ paths:
       tags: [identities]
       summary: 创建机器身份（client_secret 仅此一次返回）
       operationId: createIdentity
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
       requestBody:
         required: true
@@ -431,7 +849,7 @@ paths:
       tags: [identities]
       summary: 吊销机器身份（token 立即失效）
       operationId: revokeIdentity
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -466,22 +884,33 @@ paths:
                   token_type: { type: string, example: Bearer }
                   expires_in: { type: integer, example: 900 }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: 凭据有效但客户端 IP 不在白名单, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '429': { $ref: '#/components/responses/RateLimited' }
-  /api/v1/projects/{pid}/environments:
-    get:
-      tags: [orgs]
-      summary: 项目环境列表
-      operationId: listEnvs
-      security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }]
+  /api/v1/orgs/{slug}/identities/{id}:
+    patch:
+      tags: [identities]
+      summary: 更新机器身份的 IP 白名单或扫描报告可见范围（owner/admin）
+      operationId: updateIdentity
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IdentityUpdateRequest' }
       responses:
-        '200': { description: 环境列表, content: { application/json: { schema: { type: object, properties: { environments: { type: array, items: { $ref: '#/components/schemas/Environment' } } } } } } }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-    post:
+        '200': { description: 已更新, content: { application/json: { schema: { type: object, properties: { id: { type: string }, updated: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}:
+    patch:
       tags: [orgs]
-      summary: 新建环境（自动建根文件夹）
-      operationId: createEnv
-      security: [{ bearerAuth: [] }]
+      summary: 开关项目的变更审批
+      operationId: patchProject
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Pid' }]
       requestBody:
         required: true
@@ -489,17 +918,20 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name]
-              properties: { name: { type: string } }
+              required: [approval_required]
+              properties: { approval_required: { type: boolean } }
       responses:
-        '201': { description: 已创建, content: { application/json: { schema: { $ref: '#/components/schemas/Environment' } } } }
+        '200': { description: 已更新, content: { application/json: { schema: { type: object, properties: { id: { type: string }, approval_required: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/projects/{pid}/folders:
     get:
       tags: [folders]
       summary: 平铺文件夹列表（前端按 parent_id 建树）
       operationId: listFolders
-      security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
       responses:
         '200': { description: 文件夹列表, content: { application/json: { schema: { type: object, properties: { folders: { type: array, items: { $ref: '#/components/schemas/Folder' } } } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -507,8 +939,8 @@ paths:
       tags: [folders]
       summary: 创建文件夹（自动补中间节点，幂等）
       operationId: createFolder
-      security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
       requestBody:
         required: true
         content:
@@ -524,10 +956,9 @@ paths:
       tags: [folders]
       summary: 删除空文件夹（无子目录且无密钥；根目录拒绝）
       operationId: deleteFolder
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: path, in: query, required: true, schema: { type: string } }
       responses:
         '200': { description: 已删除 }
@@ -538,8 +969,8 @@ paths:
       tags: [folders]
       summary: 移动/重命名文件夹（级联更新子孙物化路径与密钥 folder 冗余列）
       operationId: moveFolder
-      security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
       requestBody:
         required: true
         content:
@@ -557,26 +988,24 @@ paths:
   /api/v1/projects/{pid}/secrets:
     get:
       tags: [secrets]
-      summary: 密钥列表（无值；?path= 按文件夹过滤，缺省全环境）
+      summary: 密钥列表（无值；?path= 按文件夹过滤，缺省整个项目）
       operationId: listSecrets
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
-        - { name: path, in: query, schema: { type: string, description: 物化路径 /a/b/，缺省列出整个环境 } }
+        - { name: path, in: query, schema: { type: string, description: 物化路径 /a/b/，缺省列出整个项目 } }
       responses:
-        '200': { description: 密钥元数据列表, content: { application/json: { schema: { type: object, properties: { secrets: { type: array, items: { $ref: '#/components/schemas/SecretMeta' } } } } } } }
+        '200': { description: 密钥元数据列表, content: { application/json: { schema: { type: object, properties: { secrets: { type: array, items: { $ref: '#/components/schemas/SecretMeta' } }, permissions: { $ref: '#/components/schemas/SecretPermissions' } } } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
       tags: [secrets]
       summary: 创建/更新密钥（AES-256-GCM 信封加密，产生新版本；同 key 不同目录互不冲突）
       operationId: upsertSecret
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: path, in: query, schema: { type: string, default: / } }
-        - { name: Idempotency-Key, in: header, schema: { type: string }, description: 幂等约定（v1.5 强制） }
+        - { name: Idempotency-Key, in: header, schema: { type: string }, description: 可选，最长 128 字符；同一主体和组织内相同请求重放原响应，不同请求复用返回 409 }
       requestBody:
         required: true
         content:
@@ -591,25 +1020,40 @@ paths:
       tags: [secrets]
       summary: 读取明文（reveal 权限，记审计；?path= 定位目录）
       operationId: revealSecret
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
+        - { $ref: '#/components/parameters/Resolve' }
       responses:
         '200': { description: 明文, content: { application/json: { schema: { $ref: '#/components/schemas/SecretValue' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [secrets]
+      summary: 删除密钥和历史版本（独立 delete 权限，事务审计）
+      operationId: deleteSecret
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { name: key, in: path, required: true, schema: { type: string } }
+        - { name: path, in: query, schema: { type: string, default: / } }
+        - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 }, description: 同一请求重放原响应，不同请求复用返回 409 }
+        - { name: expectedVersion, in: query, schema: { type: integer, minimum: 1 }, description: 当前版本前置条件，不匹配返回 409 }
+      responses:
+        '200': { description: 已删除, content: { application/json: { schema: { type: object, required: [key, deleted], properties: { key: { type: string }, deleted: { type: boolean } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: 版本或幂等键冲突 }
   /api/v1/projects/{pid}/secrets/{key}/versions:
     get:
       tags: [secrets]
       summary: 版本历史（只追加）
       operationId: secretVersions
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
       responses:
@@ -622,16 +1066,33 @@ paths:
                 properties:
                   versions: { type: array, items: { $ref: '#/components/schemas/SecretVersion' } }
                   latest: { type: integer }
+                  canRollback: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/secrets/{key}/versions/{version}:
+    get:
+      tags: [secrets]
+      summary: 读取指定版本明文（reveal 权限，记审计；不落新的明文存储）
+      operationId: revealSecretVersion
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { name: key, in: path, required: true, schema: { type: string } }
+        - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+        - { name: path, in: query, schema: { type: string, default: / } }
+        - { $ref: '#/components/parameters/Resolve' }
+      responses:
+        '200': { description: 该版本明文, content: { application/json: { schema: { $ref: '#/components/schemas/SecretVersionValue' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/projects/{pid}/secrets/{key}/rollback:
     post:
       tags: [secrets]
       summary: 回滚到历史版本（以旧值产生新版本 v+1）
       operationId: rollbackSecret
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
+        - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 }, description: 同一请求重放原响应，不同请求复用返回 409 }
         - { $ref: '#/components/parameters/Pid' }
-        - { $ref: '#/components/parameters/Env' }
         - { name: key, in: path, required: true, schema: { type: string } }
         - { name: path, in: query, schema: { type: string, default: / } }
       requestBody:
@@ -641,29 +1102,221 @@ paths:
             schema:
               type: object
               required: [version]
-              properties: { version: { type: integer } }
+              properties:
+                version: { type: integer }
+                expectedVersion: { type: integer, minimum: 0, description: 当前版本前置条件，不匹配返回 409 }
       responses:
         '200': { description: 已回滚, content: { application/json: { schema: { type: object, properties: { version: { type: integer } } } } } }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/projects/{pid}/export:
     get:
       tags: [secrets]
-      summary: 导出 .env 格式（reveal 权限；值仅出现在响应体）
+      summary: 导出 .env 格式（export 权限；resolve=true 时展开引用，值仅出现在响应体）
       operationId: exportSecrets
       security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/Pid' }, { $ref: '#/components/parameters/Env' }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { name: path, in: query, schema: { type: string, description: 物化路径 /a/b/；缺省导出整个项目，指定时缺省只导出该目录 } }
+        - { name: recursive, in: query, schema: { type: boolean, default: false, description: 与 path 同用；true 时包含子目录。path 为空或 / 时等价于整个项目 } }
+        - { $ref: '#/components/parameters/Resolve' }
       responses:
         '200':
           description: text/plain .env 内容
           content:
             text/plain: {}
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/import:
+    post:
+      tags: [secrets]
+      summary: 导入 .env、Doppler JSON 或 1Password CLI JSON（preview 只返回计划；已有 key 必须选择 skip 或 overwrite；文件夹与密钥同一事务，响应不含值）
+      operationId: importSecrets
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Pid' }
+        - { name: path, in: query, schema: { type: string, default: / } }
+        - { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImportRequest' }
+      responses:
+        '200': { description: 预览或已导入, content: { application/json: { schema: { $ref: '#/components/schemas/ImportResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/projects/{pid}/secrets/{key}/rotation:
+    get:
+      tags: [secrets]
+      summary: 读取密钥轮换策略（status/mode/负责人/生成档位；fixed 没有到期）
+      operationId: getRotationPolicy
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 策略, content: { application/json: { schema: { $ref: '#/components/schemas/RotationPolicy' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [secrets]
+      summary: 保存轮换策略（草稿/启用/暂停/固定；生成模式需 generation）
+      operationId: putRotationPolicy
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RotationPolicyInput' }
+      responses:
+        '200': { description: 已保存, content: { application/json: { schema: { $ref: '#/components/schemas/RotationPolicy' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [secrets]
+      summary: 删除密钥轮换策略
+      operationId: deleteRotationPolicy
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 已删除 }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/rotations:
+    get:
+      tags: [secrets]
+      summary: 项目轮换策略列表（含未设置数量）
+      operationId: listRotations
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }]
+      responses:
+        '200': { description: 策略列表与计数 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/preview:
+    post:
+      tags: [secrets]
+      summary: 预览未来三次轮换时间（不写库）
+      operationId: previewRotation
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { interval_seconds: { type: integer }, cron: { type: string } } }
+      responses:
+        '200': { description: 未来时间 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/run:
+    post:
+      tags: [secrets]
+      summary: 立即创建一条手动轮换轮次
+      operationId: runRotationNow
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 已创建轮次 }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs:
+    get:
+      tags: [secrets]
+      summary: 轮换轮次列表
+      operationId: listRotationRuns
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }, { name: limit, in: query, schema: { type: integer, default: 20 } }]
+      responses:
+        '200': { description: 轮次列表 }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}:
+    get:
+      tags: [secrets]
+      summary: 轮次详情
+      operationId: getRotationRun
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: run_id, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 轮次 }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/generate:
+    post:
+      tags: [secrets]
+      summary: 生成新值并写入新版本（mode=generate）
+      operationId: generateRotationRun
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: run_id, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 新值（仅本次响应返回，no-store） }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/distribute:
+    post:
+      tags: [secrets]
+      summary: 确认生成值已分发
+      operationId: distributeRotationRun
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: run_id, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 已完成 }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/complete:
+    post:
+      tags: [secrets]
+      summary: 完成人工/外部轮换轮次
+      operationId: completeRotationRun
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: run_id, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 已完成 }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/fail:
+    post:
+      tags: [secrets]
+      summary: 外部报告轮换失败
+      operationId: failRotationRun
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: run_id, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 已记录失败 }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/skip:
+    post:
+      tags: [secrets]
+      summary: 跳过本轮（必须给原因）
+      operationId: skipRotationRun
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: run_id, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 已跳过 }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/notify:
+    post:
+      tags: [secrets]
+      summary: 重新发送轮换通知
+      operationId: notifyRotationRun
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: run_id, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 已入队 }
+  /api/v1/projects/{pid}/secrets/{key}/rotation/runs/{run_id}/retry:
+    post:
+      tags: [secrets]
+      summary: 失败后新建一轮
+      operationId: retryRotationRun
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Pid' }, { name: key, in: path, required: true, schema: { type: string } }, { name: run_id, in: path, required: true, schema: { type: string } }, { name: path, in: query, schema: { type: string, default: / } }]
+      responses:
+        '200': { description: 新轮次 }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/orgs/{slug}/rotation/health:
+    get:
+      tags: [secrets]
+      summary: 轮换 worker 心跳与组织计数
+      operationId: rotationHealth
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200': { description: worker 健康 }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/projects/{pid}/dynamic-engines:
     get:
       tags: [secrets]
       summary: 动态密钥引擎列表 + 活跃 lease（不含连接串/密码）
       operationId: listDynamicEngines
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Pid' }]
       responses:
         '200':
@@ -678,9 +1331,9 @@ paths:
                     items: { $ref: '#/components/schemas/DynamicEngine' }
     post:
       tags: [secrets]
-      summary: 创建 PostgreSQL 动态密钥引擎（owner/admin；连接串 Master Key 加密落库）
+      summary: 创建 PostgreSQL 或 MySQL 动态密钥引擎（owner/admin；连接串 Master Key 加密落库）
       operationId: createDynamicEngine
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Pid' }]
       requestBody:
         required: true
@@ -694,7 +1347,7 @@ paths:
   /api/v1/projects/{pid}/dynamic-engines/{eid}/lease:
     post:
       tags: [secrets]
-      summary: 申请动态密钥 lease（仅限机器身份 token，绑定 identity；服务端 CREATE USER ... VALID UNTIL）
+      summary: 申请动态密钥 lease（仅限机器身份 token；PostgreSQL 用 VALID UNTIL，MySQL 用 PASSWORD EXPIRE 加到期 DROP）
       operationId: requestLease
       security: [{ bearerAuth: [] }]
       parameters:
@@ -719,7 +1372,7 @@ paths:
       tags: [secrets]
       summary: 续期 lease（延长 VALID UNTIL，不超 max_ttl；lease 所属身份或 owner/admin）
       operationId: renewLease
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
         - { name: lid, in: path, required: true, schema: { type: string } }
@@ -735,14 +1388,16 @@ paths:
   /api/v1/projects/{pid}/dynamic-leases/{lid}/revoke:
     post:
       tags: [secrets]
-      summary: 手动回收 lease（立即 DROP USER；lease 所属身份或 owner/admin）
+      summary: 持久化回收 lease；失败保留任务并重试（外部登录仅 owner）
       operationId: revokeLease
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/Pid' }
         - { name: lid, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: 已回收（或原本非活跃）, content: { application/json: { schema: { type: object, properties: { id: { type: string }, status: { type: string } } } } } }
+        '200': { description: 已回收, content: { application/json: { schema: { type: object, properties: { id: { type: string }, status: { type: string } } } } } }
+        '202': { description: 已持久化回收请求，后台继续重试 }
+        '409': { description: 回收任务正在执行 }
 
   # ---------- Secret Sync（M5 #11） ----------
   /api/v1/orgs/{slug}/sync/targets:
@@ -750,7 +1405,7 @@ paths:
       tags: [sync]
       summary: 同步目标列表（成员可见；config 只回显已配置的键名）
       operationId: listSyncTargets
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -767,7 +1422,7 @@ paths:
       tags: [sync]
       summary: 创建同步目标（owner；平台凭证 Master Key 加密落库；?ping=1 先自检连通性）
       operationId: createSyncTarget
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       requestBody:
@@ -784,7 +1439,7 @@ paths:
       tags: [sync]
       summary: 删除同步目标（owner）
       operationId: deleteSyncTarget
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -797,7 +1452,7 @@ paths:
       tags: [sync]
       summary: 手动全量重推（owner；绑定范围内所有密钥入队）
       operationId: retrySyncTarget
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -810,7 +1465,7 @@ paths:
       tags: [sync]
       summary: 同步记录（指纹审计，不含明文；可按目标/状态筛选）
       operationId: listSyncRuns
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: target_id, in: query, schema: { type: string } }
@@ -833,7 +1488,7 @@ paths:
       tags: [webhooks]
       summary: Webhook 订阅列表（不含签名密钥）
       operationId: listWebhooks
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -850,7 +1505,7 @@ paths:
       tags: [webhooks]
       summary: 创建订阅（owner；secret 缺省自动生成，仅本次响应返回）
       operationId: createWebhook
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       requestBody:
@@ -863,7 +1518,7 @@ paths:
               properties:
                 url: { type: string, format: uri }
                 secret: { type: string, description: HMAC 签名密钥（缺省自动生成） }
-                events: { type: array, items: { type: string, enum: [secret.created, secret.updated, secret.rolled_back, secret.deleted, '*'] }, description: 空 = 全部事件 }
+                events: { type: array, items: { type: string, enum: [secret.created, secret.updated, secret.rolled_back, secret.deleted, secret.rotation_due, secret.rotation_overdue, secret.rotation_succeeded, secret.rotation_failed, secret.rotation_skipped, '*'] }, description: 空 = 全部事件 }
       responses:
         '201': { description: 已创建（secret 仅此一次返回）, content: { application/json: { schema: { $ref: '#/components/schemas/Webhook' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -873,7 +1528,7 @@ paths:
       tags: [webhooks]
       summary: 删除订阅（owner）
       operationId: deleteWebhook
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -886,7 +1541,7 @@ paths:
       tags: [webhooks]
       summary: 投递日志（至少一次 + 指数退避；payload 不含明文）
       operationId: listWebhookDeliveries
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -914,6 +1569,79 @@ paths:
                         delivered_at: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /api/v1/auth/organizations:
+    get:
+      tags: [auth]
+      summary: 当前外部用户已加入的组织及匹配 issuer 的登录连接；切换需要重新验证
+      operationId: listBrowserOrganizations
+      security: [{ browserSession: [] }]
+      responses:
+        '200':
+          description: 仅返回当前用户的组织名称和已登记的登录链接
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  organizations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        connection: { type: string }
+                        current: { type: boolean }
+                        login_url: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/auth/session:
+    get:
+      tags: [sso]
+      summary: 检查 BFF 会话；必要时刷新上游 Token，但不延长本地会话绝对期限
+      operationId: getBrowserSession
+      responses:
+        '200':
+          description: authenticated=false 或当前组织及内存 CSRF 凭据；Cache-Control no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authenticated]
+                properties:
+                  authenticated: { type: boolean }
+                  csrf_token: { type: string }
+                  organization_id: { type: string }
+                  authentication: { type: string, enum: [oidc] }
+                  revocation_profile: { type: string, enum: [BOUNDED, ONLINE_REQUIRED] }
+                  sensitive_operations_allowed: { type: boolean }
+                  expires_at: { type: integer, format: int64 }
+                  auth_valid_until: { type: integer, format: int64 }
+                  reauthentication_url: { type: string }
+                  rp_logout: { type: boolean }
+  /api/v1/auth/logout:
+    post:
+      tags: [sso]
+      summary: 删除本地 BFF 会话并清除 Cookie；已启用 RP Logout 时返回发现的上游退出 URL
+      operationId: logoutBrowserSession
+      security: [{ browserSession: [] }]
+      parameters:
+        - { name: X-CSRF-Token, in: header, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 本地会话已删除；浏览器可导航到上游 RP Logout
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [logout_url]
+                properties:
+                  logout_url: { type: string }
+        '204': { description: 会话已删除 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   # ---------- OIDC SSO（M5 #13） ----------
   /api/v1/auth/oidc/{slug}/login:
     get:
@@ -930,14 +1658,14 @@ paths:
   /api/v1/auth/oidc/{slug}/callback:
     get:
       tags: [sso]
-      summary: OIDC callback（code 换 id_token，验签 + JIT 入组 + 发本地会话）
+      summary: OIDC callback（code 换 id_token，验签 + 显式 JIT 准入 + HttpOnly BFF 会话）
       operationId: oidcCallback
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: code, in: query, required: true, schema: { type: string } }
         - { name: state, in: query, required: true, schema: { type: string } }
       responses:
-        '200': { description: HTML 中间页：token 写入 localStorage 后跳转 / }
+        '303': { description: 设置 HttpOnly taboo.session Cookie 后跳转 /；不向浏览器暴露 Token }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '502': { description: IdP 不可达/换 token 失败, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -946,7 +1674,7 @@ paths:
       tags: [sso]
       summary: IdP 配置列表（成员可见；不含 client_secret）
       operationId: listOIDCProviders
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -963,7 +1691,7 @@ paths:
       tags: [sso]
       summary: 接入 IdP（owner；创建前做 discovery 连通性自检；client_secret 加密落库）
       operationId: createOIDCProvider
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       requestBody:
@@ -980,7 +1708,7 @@ paths:
       tags: [sso]
       summary: 更新 IdP 配置（owner；client_secret 可选轮换）
       operationId: updateOIDCProvider
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -998,7 +1726,7 @@ paths:
       tags: [sso]
       summary: 删除 IdP 配置（owner）
       operationId: deleteOIDCProvider
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1007,13 +1735,72 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/orgs/{slug}/scan-reports:
+    get:
+      tags: [orgs]
+      summary: 扫描报告列表（不含命中原文；机器身份默认只看自己上传的）
+      operationId: listScanReports
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200':
+          description: 报告摘要
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reports, can_delete]
+                properties:
+                  reports: { type: array, items: { $ref: '#/components/schemas/ScanReport' } }
+                  can_delete: { type: boolean, description: 当前用户是否可删除报告（owner/admin） }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [orgs]
+      summary: 上传扫描报告（match 只用于计算组织 HMAC，不落库、不回显）
+      operationId: createScanReport
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScanReportInput' }
+      responses:
+        '201': { description: 已保存, content: { application/json: { schema: { $ref: '#/components/schemas/ScanReport' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/orgs/{slug}/scan-reports/{id}:
+    get:
+      tags: [orgs]
+      summary: 扫描报告详情（规则、文件、行号、指纹；没有命中原文；旧报告 alg=sha256）
+      operationId: getScanReport
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 报告详情, content: { application/json: { schema: { $ref: '#/components/schemas/ScanReport' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [orgs]
+      summary: 删除扫描报告（owner/admin，写审计）
+      operationId: deleteScanReport
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已删除, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean } } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   # ---------- 审计导出（M5 #14） ----------
   /api/v1/orgs/{slug}/audit/export:
     get:
       tags: [orgs]
       summary: 审计导出 CSV/JSONL（筛选同审计查询；async=1 走异步任务 + 下载链接）
       operationId: auditExport
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: format, in: query, schema: { type: string, enum: [csv, jsonl], default: csv } }
@@ -1032,7 +1819,7 @@ paths:
       tags: [orgs]
       summary: 导出任务列表
       operationId: listAuditExports
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
       responses:
@@ -1050,7 +1837,7 @@ paths:
       tags: [orgs]
       summary: 失败的导出任务重试一次
       operationId: retryAuditExport
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1061,7 +1848,7 @@ paths:
       tags: [orgs]
       summary: 下载导出文件（未完成时返回任务状态）
       operationId: downloadAuditExport
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrgSlug' }
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1069,17 +1856,461 @@ paths:
         '200': { description: 文件内容或任务状态 JSON }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/orgs/{slug}/oauth-trusts:
+    get:
+      tags: [identities]
+      summary: 读取机器 OAuth 信任连接（组织 owner）
+      operationId: listOAuthTrusts
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200': { description: 信任连接，不含凭据, content: { application/json: { schema: { type: object, required: [trusts], properties: { trusts: { type: array, items: { $ref: '#/components/schemas/OAuthTrust' } } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+    post:
+      tags: [identities]
+      summary: 登记机器 OAuth 信任连接（组织 owner）
+      operationId: createOAuthTrust
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OAuthTrustInput' }
+      responses:
+        '201': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/orgs/{slug}/oauth-trusts/{id}:
+    patch:
+      tags: [identities]
+      summary: 更新或停用机器 OAuth 信任连接（组织 owner）
+      operationId: updateOAuthTrust
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OAuthTrustInput' }
+      responses:
+        '200': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+    delete:
+      tags: [identities]
+      summary: 删除信任并撤销其工作负载（组织 owner）
+      operationId: deleteOAuthTrust
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/orgs/{slug}/workloads:
+    get:
+      tags: [identities]
+      summary: 读取外部工作负载与权限（组织 owner）
+      operationId: listWorkloads
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      responses:
+        '200': { description: 外部工作负载, content: { application/json: { schema: { type: object, required: [workloads], properties: { workloads: { type: array, items: { $ref: '#/components/schemas/Workload' } } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+    post:
+      tags: [identities]
+      summary: 显式绑定外部机器主体（组织 owner）
+      operationId: createWorkload
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkloadInput' }
+      responses:
+        '201': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/orgs/{slug}/workloads/{id}/grants:
+    put:
+      tags: [identities]
+      summary: 替换工作负载显式权限（组织 owner）
+      operationId: putWorkloadGrants
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkloadGrantsInput' }
+      responses:
+        '200': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/orgs/{slug}/workloads/{id}/revoke:
+    post:
+      tags: [identities]
+      summary: 撤销工作负载绑定（组织 owner）
+      operationId: revokeWorkload
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 操作成功, content: { application/json: { schema: { type: object, properties: { id: { type: string }, deleted: { type: boolean }, revoked: { type: boolean } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 绑定冲突或更换 issuer 需要新信任 }
+        '503': { description: 协议、存储或审计不可用 }
+  /api/v1/auth/device:
+    post:
+      tags: [auth]
+      summary: 开始 CLI 设备码登录
+      operationId: startDeviceLogin
+      responses:
+        '200': { description: 设备码与用户码 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/v1/auth/device/token:
+    post:
+      tags: [auth]
+      summary: 轮询设备码是否已批准
+      operationId: pollDeviceLogin
+      responses:
+        '200': { description: 用户令牌 }
+        '400': { description: authorization_pending、slow_down、access_denied 或 expired_token }
+  /api/v1/auth/device/decision:
+    post:
+      tags: [auth]
+      summary: 批准或拒绝设备码
+      operationId: decideDeviceLogin
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      responses:
+        '200': { description: 已决定 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/auth/cli/authorize:
+    post:
+      tags: [auth]
+      summary: 为回环 PKCE 发放一次性授权码
+      operationId: authorizeCli
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      responses:
+        '200': { description: 回环重定向 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/v1/auth/cli/token:
+    post:
+      tags: [auth]
+      summary: 用授权码和 PKCE verifier 换用户令牌
+      operationId: exchangeCliCode
+      responses:
+        '200': { description: 用户令牌 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/v1/auth/oidc/{slug}/backchannel-logout:
+    post:
+      tags: [sso]
+      summary: OIDC Back-Channel Logout
+      operationId: oidcBackChannelLogout
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: pid, in: query, schema: { type: string }, description: 提供方 id；省略时用该组织最早的启用提供方 }
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [logout_token]
+              properties: { logout_token: { type: string } }
+      responses:
+        '200': { description: 已接受。匹配到的会话已结束 }
+        '400': { description: logout token 被拒绝 }
+  /api/v1/orgs/{slug}/approvals:
+    get:
+      tags: [orgs]
+      summary: 审批列表。管理员看全部，其他人只看自己的
+      operationId: listApprovals
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200': { description: 不含明文 }
+  /api/v1/orgs/{slug}/approvals/{id}/approve:
+    post:
+      tags: [orgs]
+      summary: 批准并执行密钥变更。申请人不能批自己的
+      operationId: approveChange
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已写入 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: 已过期、已决定或版本冲突 }
+  /api/v1/orgs/{slug}/approvals/{id}/reject:
+    post:
+      tags: [orgs]
+      summary: 拒绝审批
+      operationId: rejectChange
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已拒绝 }
+        '409': { description: 已不再 pending }
+  /api/v1/orgs/{slug}/approvals/{id}/cancel:
+    post:
+      tags: [orgs]
+      summary: 申请人撤回
+      operationId: cancelChange
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已撤回 }
+  /api/v1/orgs/{slug}/access-requests:
+    get:
+      tags: [orgs]
+      summary: 限时访问申请
+      operationId: listAccessRequests
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200': { description: 申请列表 }
+    post:
+      tags: [orgs]
+      summary: 申请限时权限
+      operationId: createAccessRequest
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, action]
+              properties:
+                project_id: { type: string }
+                action: { type: string, enum: [reveal, export, write, delete, rollback] }
+                ttl_seconds: { type: integer, minimum: 60, maximum: 14400 }
+                reason: { type: string }
+      responses:
+        '201': { description: 已提交 }
+  /api/v1/orgs/{slug}/access-requests/{id}/approve:
+    post:
+      tags: [orgs]
+      summary: 批准限时访问
+      operationId: approveAccessRequest
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已生效 }
+  /api/v1/orgs/{slug}/access-requests/{id}/reject:
+    post:
+      tags: [orgs]
+      summary: 拒绝限时访问
+      operationId: rejectAccessRequest
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已拒绝 }
+  /api/v1/orgs/{slug}/access-requests/{id}/revoke:
+    post:
+      tags: [orgs]
+      summary: 提前收回限时访问
+      operationId: revokeAccessRequest
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已收回 }
+  /api/v1/orgs/{slug}/scim/tokens:
+    get:
+      tags: [sso]
+      summary: SCIM 令牌列表（不含秘密）
+      operationId: listScimTokens
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '200': { description: 令牌元数据 }
+    post:
+      tags: [sso]
+      summary: 创建 SCIM 令牌。明文只返回这一次
+      operationId: createScimToken
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrgSlug' }]
+      responses:
+        '201': { description: 含一次性 token }
+  /api/v1/orgs/{slug}/scim/tokens/{id}:
+    delete:
+      tags: [sso]
+      summary: 吊销 SCIM 令牌
+      operationId: revokeScimToken
+      security: [{ bearerAuth: [] }, { browserSession: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrgSlug' }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 已吊销 }
+  /api/v1/scim/v2/ServiceProviderConfig:
+    get:
+      tags: [sso]
+      summary: SCIM ServiceProviderConfig
+      operationId: scimConfig
+      responses: { '200': { description: SCIM 配置 } }
+  /api/v1/scim/v2/ResourceTypes:
+    get:
+      tags: [sso]
+      summary: SCIM ResourceTypes
+      operationId: scimResourceTypes
+      responses: { '200': { description: User 与 Group } }
+  /api/v1/scim/v2/Schemas:
+    get:
+      tags: [sso]
+      summary: SCIM Schemas
+      operationId: scimSchemas
+      responses: { '200': { description: 支持的 schema } }
+  /api/v1/scim/v2/Users:
+    get:
+      tags: [sso]
+      summary: SCIM 列出用户
+      operationId: scimListUsers
+      security: [{ bearerAuth: [] }]
+      responses: { '200': { description: ListResponse } }
+    post:
+      tags: [sso]
+      summary: SCIM 创建用户
+      operationId: scimCreateUser
+      security: [{ bearerAuth: [] }]
+      responses:
+        '201': { description: 已创建 }
+        '409': { description: userName 或 externalId 冲突 }
+  /api/v1/scim/v2/Users/{id}:
+    get:
+      tags: [sso]
+      summary: SCIM 读取用户
+      operationId: scimGetUser
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: 用户 } }
+    put:
+      tags: [sso]
+      summary: SCIM 替换用户
+      operationId: scimPutUser
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: 已替换 } }
+    patch:
+      tags: [sso]
+      summary: SCIM 修改用户
+      operationId: scimPatchUser
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: 已修改 } }
+    delete:
+      tags: [sso]
+      summary: SCIM 停用用户
+      operationId: scimDeleteUser
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: 已停用 } }
+  /api/v1/scim/v2/Groups:
+    get:
+      tags: [sso]
+      summary: SCIM 列出组
+      operationId: scimListGroups
+      security: [{ bearerAuth: [] }]
+      responses: { '200': { description: ListResponse } }
+    post:
+      tags: [sso]
+      summary: SCIM 创建组
+      operationId: scimCreateGroup
+      security: [{ bearerAuth: [] }]
+      responses: { '201': { description: 已创建 } }
+  /api/v1/scim/v2/Groups/{id}:
+    get:
+      tags: [sso]
+      summary: SCIM 读取组
+      operationId: scimGetGroup
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: 组 } }
+    put:
+      tags: [sso]
+      summary: SCIM 替换组
+      operationId: scimPutGroup
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: 已替换 } }
+    patch:
+      tags: [sso]
+      summary: SCIM 修改组
+      operationId: scimPatchGroup
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: 已修改 } }
+    delete:
+      tags: [sso]
+      summary: SCIM 删除组
+      operationId: scimDeleteGroup
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: 已删除 } }
+
 components:
   securitySchemes:
-    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    browserSession:
+      type: apiKey
+      in: cookie
+      name: taboo.session
+      description: OIDC BFF；写入还要求精确 Origin 和 X-CSRF-Token；只允许已适配的组织范围路由
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT or opaque with explicit registered profile }
   parameters:
     OrgSlug: { name: slug, in: path, required: true, schema: { type: string } }
     Pid: { name: pid, in: path, required: true, schema: { type: string } }
-    Env: { name: env, in: query, schema: { type: string, default: dev } }
+    Resolve:
+      name: resolve
+      in: query
+      description: 为 true 时展开 ${env:KEY} 与 ${project:env:KEY}。每个目标单独鉴权并审计；缺省返回存储原文。
+      schema: { type: boolean, default: false }
   responses:
     BadRequest: { description: 参数错误, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Unauthorized: { description: 未认证/凭证错误, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    Forbidden: { description: 权限不足（RBAC），如 viewer 取明文、developer 写 prod, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: 权限不足（RBAC），如 viewer 取明文, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     NotFound: { description: 资源不存在, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Conflict: { description: 冲突（如邮箱已注册）, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     RateLimited: { description: 限流（5 次/分钟/IP，可用 TABOO_LOGIN_RATE_LIMIT 调整）, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -1097,6 +2328,8 @@ components:
         email: { type: string, format: email }
         name: { type: string }
         kind: { type: string, enum: [user, identity] }
+        handle: { type: string }
+        handle_confirmed: { type: boolean }
     AuthSource:
       type: object
       properties:
@@ -1105,10 +2338,12 @@ components:
         login_url: { type: string }
     OrgMembership:
       type: object
+      required: [id, name, slug, role]
       properties:
         id: { type: string }
         name: { type: string }
         slug: { type: string }
+        kind: { type: string, enum: [personal, organization], description: personal 只有本人；organization 可以添加成员 }
         role: { type: string, enum: [owner, admin, developer, viewer] }
         restricted: { type: boolean }
     OrgMember:
@@ -1131,28 +2366,33 @@ components:
               role: { type: string }
     Project:
       type: object
+      required: [id, name, slug]
       properties:
         id: { type: string }
         name: { type: string }
         slug: { type: string }
         created_at: { type: string, format: date-time }
-    Environment:
-      type: object
-      properties:
-        id: { type: string }
-        name: { type: string }
-        slug: { type: string }
-        sort_order: { type: integer }
-        protected: { type: boolean }
+        approval_required: { type: boolean, description: 为真时写入、删除和回滚进入审批，不立即改密钥 }
     Folder:
       type: object
+      required: [id, parent_id, name, path]
       properties:
         id: { type: string }
         parent_id: { type: string, description: 根目录为空串 }
         name: { type: string }
         path: { type: string, example: /db/mysql/ }
+    SecretPermissions:
+      type: object
+      required: [write, reveal, export, rollback, delete]
+      properties:
+        write: { type: boolean }
+        reveal: { type: boolean }
+        export: { type: boolean }
+        rollback: { type: boolean }
+        delete: { type: boolean }
     SecretMeta:
       type: object
+      required: [id, folder, key, comment, tags, version, updated_at, canReveal, canWrite]
       properties:
         id: { type: string }
         folder: { type: string }
@@ -1163,23 +2403,195 @@ components:
         updated_at: { type: string }
         canReveal: { type: boolean }
         canWrite: { type: boolean }
+        canDelete: { type: boolean }
+        canRollback: { type: boolean }
     SecretValue:
       allOf:
         - { $ref: '#/components/schemas/SecretMeta' }
         - type: object
-          properties: { value: { type: string } }
+          required: [value]
+          properties:
+            value: { type: string }
+            resolved: { type: boolean, description: resolve=true 时值为展开结果 }
+            references:
+              type: array
+              items: { type: string }
+              description: 原文中的引用字面量，不含目标明文
+    SecretVersionValue:
+      type: object
+      required: [key, version, value]
+      properties:
+        key: { type: string }
+        version: { type: integer }
+        value: { type: string }
+        resolved: { type: boolean }
+    ImportRequest:
+      type: object
+      required: [content]
+      properties:
+        content: { type: string, description: .env 文本、Doppler JSON 或 1Password op JSON，最大 1MB }
+        strategy: { type: string, enum: [skip, overwrite], description: 已有 key 的处理；预览可省略 }
+        preview: { type: boolean, default: false }
+        format: { type: string, enum: [dotenv, doppler, 1password], default: dotenv }
+    ImportEntry:
+      type: object
+      required: [key, action, version]
+      properties:
+        key: { type: string }
+        action: { type: string, enum: [create, overwrite, skip, conflict] }
+        version: { type: integer }
+    ImportResult:
+      type: object
+      required: [preview, created, updated, skipped, conflicts, entries]
+      properties:
+        preview: { type: boolean }
+        strategy: { type: string }
+        created: { type: integer }
+        updated: { type: integer }
+        skipped: { type: integer }
+        conflicts: { type: array, items: { type: string } }
+        entries: { type: array, items: { $ref: '#/components/schemas/ImportEntry' } }
+    ScanFindingInput:
+      type: object
+      required: [rule_id, level, file, line, match]
+      additionalProperties: false
+      properties:
+        rule_id: { type: string }
+        level: { type: string, enum: [critical, warning] }
+        file: { type: string, description: 相对路径 }
+        line: { type: integer, minimum: 1 }
+        match: { type: string, description: 命中原文，只用于计算组织 HMAC，不落库、不回显 }
+    ScanFinding:
+      type: object
+      required: [rule_id, level, file, line, fingerprint, alg]
+      additionalProperties: false
+      properties:
+        rule_id: { type: string }
+        level: { type: string, enum: [critical, warning] }
+        file: { type: string, description: 相对路径 }
+        line: { type: integer, minimum: 1 }
+        fingerprint: { type: string, description: hmac-sha256 或旧报告的 sha256，64 位十六进制；不是命中原文 }
+        alg: { type: string, enum: [hmac-sha256, sha256], description: sha256 表示升级前的未加盐指纹 }
+    ScanReportInput:
+      type: object
+      required: [findings]
+      additionalProperties: false
+      properties:
+        source: { type: string }
+        findings: { type: array, maxItems: 2000, items: { $ref: '#/components/schemas/ScanFindingInput' } }
+    ScanReport:
+      type: object
+      required: [id, source, finding_count, critical_count, warning_count]
+      properties:
+        id: { type: string }
+        source: { type: string }
+        actor_name: { type: string }
+        finding_count: { type: integer }
+        critical_count: { type: integer }
+        warning_count: { type: integer }
+        created_at: { type: string }
+        findings: { type: array, items: { $ref: '#/components/schemas/ScanFinding' } }
     SecretVersion:
       type: object
+      required: [version, created_by, created_at]
       properties:
         version: { type: integer }
         created_by: { type: string }
         created_at: { type: string }
+    OIDCSecurity:
+      type: object
+      required: [profile, session_ttl, max_auth_age, required_acr, required_amr, online_audience, rp_logout]
+      properties:
+        profile: { type: string, enum: [BOUNDED, ONLINE_REQUIRED] }
+        session_ttl: { type: integer, minimum: 60, maximum: 900 }
+        max_auth_age: { type: integer, minimum: 60, maximum: 900 }
+        required_acr: { type: array, maxItems: 16, items: { type: string }, description: 可接受的精确 acr 值，满足任一项 }
+        required_amr: { type: array, maxItems: 16, items: { type: string }, description: 必须同时存在的精确 amr 值 }
+        online_audience: { type: string, description: ONLINE_REQUIRED 必填；上游内省必须返回此 audience }
+        rp_logout: { type: boolean, description: 显式启用发现的 RP-Initiated Logout }
+    OrganizationSecurity:
+      type: object
+      required: [login_policy]
+      properties:
+        login_policy: { type: string, enum: [LOCAL_OR_EXTERNAL, EXTERNAL_REQUIRED] }
+        external_secret_permissions: { type: string, readOnly: true, enum: [EXPLICIT_ACTIONS] }
+    MemberActionGrant:
+      type: object
+      required: [project_id, action]
+      properties:
+        project_id: { type: string }
+        action: { type: string, enum: [read, write, reveal, export, rollback, delete] }
+    MemberActions:
+      type: object
+      required: [grants]
+      properties:
+        grants:
+          type: array
+          maxItems: 200
+          items: { $ref: '#/components/schemas/MemberActionGrant' }
+    OAuthTrustInput:
+      type: object
+      properties:
+        name: { type: string, maxLength: 200 }
+        issuer: { type: string, description: 操作员允许的精确 issuer；已有信任不允许更换 issuer }
+        audience: { type: string, description: 必须在资源 Token 中验证的 audience }
+        metadata_mode: { type: string, enum: [oauth, oidc], default: oauth }
+        token_profile: { type: string, enum: [JWT_RFC9068, INTROSPECTION_RFC7662], default: JWT_RFC9068 }
+        client_id: { type: string, description: 内省使用的资源服务器 Client }
+        client_secret: { type: string, writeOnly: true }
+        max_lifetime: { type: integer, minimum: 60, maximum: 900, default: 900 }
+        enabled: { type: boolean }
+    OAuthTrust:
+      type: object
+      required: [id, name, issuer, audience, metadata_mode, token_profile, max_lifetime, enabled, revocation_profile]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        issuer: { type: string }
+        audience: { type: string }
+        metadata_mode: { type: string, enum: [oauth, oidc] }
+        token_profile: { type: string, enum: [JWT_RFC9068, INTROSPECTION_RFC7662] }
+        client_id: { type: string }
+        max_lifetime: { type: integer }
+        enabled: { type: boolean }
+        revocation_profile: { type: string, enum: [BOUNDED, ONLINE_REQUIRED] }
+    WorkloadGrant:
+      type: object
+      required: [project_id, action, required_scope]
+      properties:
+        project_id: { type: string }
+        action: { type: string, enum: [read, reveal, write, export, rollback, delete], description: 六种动作独立，不隐含其他动作 }
+        required_scope: { type: string, description: 该动作必须在已验证 Token 中出现的精确 scope }
+    WorkloadGrantsInput:
+      type: object
+      required: [grants]
+      properties:
+        grants: { type: array, minItems: 0, maxItems: 200, items: { $ref: '#/components/schemas/WorkloadGrant' } }
+    WorkloadInput:
+      allOf:
+        - { $ref: '#/components/schemas/WorkloadGrantsInput' }
+        - type: object
+          required: [name, trust_id, subject, client_id]
+          properties:
+            name: { type: string }
+            trust_id: { type: string }
+            subject: { type: string, description: 已确认的外部机器 sub，与 client_id 不假定相等 }
+            client_id: { type: string }
+    Workload:
+      allOf:
+        - { $ref: '#/components/schemas/WorkloadInput' }
+        - type: object
+          required: [id, enabled]
+          properties:
+            id: { type: string }
+            enabled: { type: boolean }
     SecretUpsertRequest:
       type: object
       required: [key, value]
       properties:
         key: { type: string, pattern: '^[^/\s][^/]*[^/\s]$|^[^/\s]$', description: '单段 key，禁止包含 /（folder 与 key 分离，#16）' }
         value: { type: string }
+        expectedVersion: { type: integer, minimum: 0, description: 当前版本前置条件，0 表示仅创建；不匹配返回 409 }
         comment: { type: string }
         tags: { type: array, items: { type: string } }
     AuditLog:
@@ -1199,7 +2611,6 @@ components:
         name: { type: string }
         platform: { type: string, enum: [github, vercel, cloudflare] }
         project_id: { type: string }
-        env_slug: { type: string, description: "'*' 为全部环境" }
         enabled: { type: boolean }
         created_at: { type: string }
         config_keys: { type: array, items: { type: string }, description: 已配置键名（不含值） }
@@ -1210,7 +2621,6 @@ components:
         name: { type: string }
         platform: { type: string, enum: [github, vercel, cloudflare] }
         project_id: { type: string, description: 缺省 = 组织内全部项目 }
-        env_slug: { type: string, default: '*' }
         config:
           type: object
           additionalProperties: { type: string }
@@ -1234,6 +2644,7 @@ components:
         updated_at: { type: string }
     Webhook:
       type: object
+      required: [id, url, events, active, created_at]
       properties:
         id: { type: string }
         url: { type: string }
@@ -1255,7 +2666,7 @@ components:
         default_role: { type: string, enum: [viewer, developer, admin, owner] }
         public_login: { type: boolean, description: 在登录页展示为实例级 Realm }
         autocreate: { type: boolean }
-        sync_role: { type: boolean, description: 每次 SSO 登录按组映射同步角色（不降级最后一名 owner） }
+        sync_role: { type: boolean, description: 仅同步仍由此连接管理的角色；不覆盖本地显式赋权 }
         enabled: { type: boolean }
         created_at: { type: string }
         login_url: { type: string }
@@ -1263,16 +2674,16 @@ components:
       type: object
       properties:
         name: { type: string }
-        issuer: { type: string, example: https://keycloak.example.com/realms/company }
+        issuer: { type: string, example: https://idp.example.org }
         client_id: { type: string }
         client_secret: { type: string, description: Master Key 加密落库，不回显；PATCH 时可省略 }
         scopes: { type: string, default: openid,email,profile }
         role_claim: { type: string, default: groups, description: 支持点分路径，如 realm_access.roles }
-        username_claim: { type: string, default: email }
-        role_map: { type: object, additionalProperties: { type: string }, description: claim 值 → 角色；Keycloak 组路径会匹配末段 }
+        username_claim: { type: string, deprecated: true, description: 兼容旧配置；新身份键固定为 issuer 与 sub }
+        role_map: { type: object, additionalProperties: { type: string }, description: claim 完整值精确匹配 → 角色；不匹配路径末段 }
         default_role: { type: string, default: viewer }
         public_login: { type: boolean, default: true }
-        autocreate: { type: boolean, default: true }
+        autocreate: { type: boolean, default: false }
         sync_role: { type: boolean, default: true }
         enabled: { type: boolean }
     AuditExport:
@@ -1290,10 +2701,10 @@ components:
       properties:
         project_id: { type: string }
         project_slug: { type: string }
-        env: { type: string, description: 显式环境，禁止通配 }
         permission: { type: string, enum: [read, reveal, write] }
     Identity:
       type: object
+      required: [id, name, client_id, status, token_ttl, created_at, scopes, allowed_cidrs, list_scan_reports]
       properties:
         id: { type: string }
         name: { type: string }
@@ -1301,6 +2712,8 @@ components:
         status: { type: string, enum: [active, revoked] }
         token_ttl: { type: integer }
         created_at: { type: string }
+        allowed_cidrs: { type: array, items: { type: string }, description: 空数组表示不限制来源 IP }
+        list_scan_reports: { type: boolean, description: 为 true 时可列出组织全部扫描报告，否则只能看自己上传的 }
         scopes: { type: array, items: { $ref: '#/components/schemas/IdentityScope' } }
     IdentityWithSecret:
       allOf:
@@ -1318,11 +2731,65 @@ components:
           minItems: 1
           items:
             type: object
-            required: [project_id, env, permission]
+            required: [project_id, permission]
             properties:
               project_id: { type: string }
-              env: { type: string }
               permission: { type: string, enum: [read, reveal, write] }
+        allowed_cidrs: { type: array, items: { type: string }, description: 可选来源 IP 或 CIDR；省略或空数组表示不限制 }
+        list_scan_reports: { type: boolean, default: false }
+    IdentityUpdateRequest:
+      type: object
+      properties:
+        allowed_cidrs: { type: array, items: { type: string } }
+        list_scan_reports: { type: boolean }
+    RotationGeneration:
+      type: object
+      properties:
+        profile: { type: string, enum: [alnum32, alnum64, base64url32, hex32, password24, custom] }
+        length: { type: integer }
+        prefix: { type: string }
+        min_entropy_bits: { type: integer, description: 服务端计算；低于 128 拒绝 }
+    RotationPolicy:
+      type: object
+      required: [id, key, status, enabled, interval_seconds, cron, next_run_at]
+      properties:
+        id: { type: string }
+        key: { type: string }
+        folder: { type: string }
+        status: { type: string, enum: [draft, active, paused, fixed] }
+        mode: { type: string, enum: [generate, manual, webhook, ""], description: "fixed 时为空" }
+        enabled: { type: boolean }
+        interval_seconds: { type: integer }
+        cron: { type: string, description: 五段 UTC cron；与 interval_seconds 二选一 }
+        owner: { type: object, properties: { id: { type: string }, name: { type: string } } }
+        grace_seconds: { type: integer }
+        next_run_at: { type: integer, description: 0 = 没有下次轮换（draft/paused/fixed） }
+        last_run_at: { type: integer }
+        last_run_id: { type: string }
+        fixed_reason: { type: string }
+        fixed_by: { type: string }
+        fixed_by_name: { type: string }
+        fixed_at: { type: string }
+        generation: { $ref: '#/components/schemas/RotationGeneration' }
+        auto_generate: { type: boolean }
+        open_run: { type: object, properties: { id: { type: string }, status: { type: string }, due_at: { type: integer } } }
+        created_at: { type: string }
+        updated_at: { type: string }
+        version: { type: integer }
+    RotationPolicyInput:
+      type: object
+      properties:
+        status: { type: string, enum: [draft, active, paused, fixed] }
+        mode: { type: string, enum: [generate, manual, webhook] }
+        interval_seconds: { type: integer, minimum: 300, description: 与 cron 二选一，最少 300 秒 }
+        cron: { type: string }
+        owner_id: { type: string }
+        grace_seconds: { type: integer }
+        generation: { $ref: '#/components/schemas/RotationGeneration' }
+        auto_generate: { type: boolean }
+        fixed_reason: { type: string }
+        expected_version: { type: integer }
+        enabled: { type: boolean, deprecated: true }
     RegisterRequest:
       type: object
       required: [email, password]
@@ -1353,7 +2820,7 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
-        type: { type: string, example: postgres }
+        type: { type: string, enum: [postgres, mysql] }
         database: { type: string }
         default_ttl: { type: integer }
         max_ttl: { type: integer }
@@ -1366,8 +2833,8 @@ components:
       required: [name, connection_string]
       properties:
         name: { type: string }
-        type: { type: string, enum: [postgres] }
-        connection_string: { type: string, description: 高权限连接串（postgres://…），加密落库 }
+        type: { type: string, enum: [postgres, mysql], default: postgres }
+        connection_string: { type: string, description: postgres://… 或 mysql://user:pass@host:3306/db，加密落库 }
         database: { type: string, default: postgres }
         default_ttl: { type: integer, default: 3600 }
         max_ttl: { type: integer, default: 86400 }
@@ -1376,7 +2843,7 @@ components:
       properties:
         id: { type: string }
         username: { type: string, example: taboo_a1b2c3d4e5f6 }
-        status: { type: string, enum: [active, expired, revoked, failed] }
+        status: { type: string, enum: [active, revoking, expired, revoked, failed] }
         expires_at: { type: integer }
         seconds_left: { type: integer }
         created_at: { type: string }
