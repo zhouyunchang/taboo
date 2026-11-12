@@ -61,9 +61,9 @@ const projects = await api('GET', `/api/v1/orgs/${orgSlug}/projects`, { token })
 const pid = projects.data.projects[0].id;
 await api('POST', `/api/v1/projects/${pid}/secrets`, { token, body: { key: 'MCP_DEMO', value: 'mcp-secret-value', tags: ['mcp'] } });
 
-// 机器身份：read scope，限 dev
+// 机器身份：reveal scope（新模型里 reveal 覆盖读取，list 与掩码 get 都可）
 const ident = await api('POST', `/api/v1/orgs/${orgSlug}/identities`, {
-  token, body: { name: 'mcp-agent', token_ttl: 900, scopes: [{ project_id: pid, env: 'dev', permission: 'read' }] },
+  token, body: { name: 'mcp-agent', token_ttl: 900, scopes: [{ project_id: pid, permission: 'reveal' }] },
 });
 check('identity created', ident.status === 201 && !!ident.data.client_secret, JSON.stringify(ident.data));
 
@@ -108,7 +108,7 @@ const audit = await api('GET', `/api/v1/orgs/${orgSlug}/audit?limit=300`, { toke
 const actorHit = audit.data.logs.some((l) => (l.actor_name || '').startsWith('identity:') || (l.actor_type === 'identity'));
 const revealHit = audit.data.logs.some((l) => l.action === 'secrets.reveal');
 check('audit has identity actor', actorHit);
-check('audit has secrets.reveal (masked list) / reveal attempt', revealHit, audit.data.logs.map((l) => l.action).slice(0, 10).join(','));
+check('audit has secrets.reveal', revealHit, audit.data.logs.map((l) => l.action).slice(0, 10).join(','));
 
 mcp.child.kill();
 console.log(failures ? `\nFAILED: ${failures} check(s)` : '\nALL MCP CHECKS PASSED');
