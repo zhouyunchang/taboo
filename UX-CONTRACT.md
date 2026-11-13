@@ -8,8 +8,13 @@
 | Login/logout/loading/retry and workspace lifetime | `apps/web/src/App.tsx` |
 | Identity connection form and confirmation | `apps/web/src/pages/Settings.tsx`, shared `components/Modal.tsx` |
 | Native inputs/select/labels/focus/scrollbars | `apps/web/src/styles.css` and native HTML semantics |
+| Theme choice, bootstrapping, cross-tab sync | `apps/web/src/design/theme.ts`, `apps/web/index.html` |
 | Organization and project access | Server authorization; UI visibility is supplementary |
 | Secret record, compare, rotation chapter, per-secret audit | `apps/web/src/pages/SecretRecord.tsx`, `components/SecretCompare.tsx`, `components/SecretRotation.tsx`, `components/SecretTraces.tsx` |
+
+## Theme
+
+The console has two themes of one world: 墨夜 (dark) and 宣纸 (light). The user's choice is presentation state only and persists in `localStorage['taboo:theme']` as `system | light | dark` (default `system`); `system` follows `prefers-color-scheme` live and other tabs sync through the `storage` event. The resolved theme is written to `<html data-theme>` and the choice to `data-theme-mode` by an inline script in `apps/web/index.html` before first paint, so no screen may flash the wrong theme. The switch is `ThemeSwitch` (`role="group"`, `aria-label="界面主题"`, three `aria-pressed` options 跟随系统 / 亮色 / 暗色) and appears in the workspace appbar, the login footer, the first-run head, the organisation topbar and the CLI consent corner. Theme must never change accessible names, copy, authorization, session semantics, sensitive-value behaviour or the native `<select>` / `<dialog>` contracts, and no theme value is persisted server-side.
 
 ## Session and sensitive state
 

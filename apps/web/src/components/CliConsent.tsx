@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, ApiError } from '../api';
 import type { Org } from '../api';
 import Icon from '../design/Icon';
+import ThemeSwitch from '../design/ThemeSwitch';
 import { Field, Select } from '../design/primitives';
 import VersionTag from './VersionTag';
 
@@ -123,6 +124,7 @@ export default function CliConsent({ orgs }: { orgs: Org[] }) {
         </footer>
         <VersionTag />
       </section>
+      <ThemeSwitch className="theme-corner" />
     </div>
   );
 }

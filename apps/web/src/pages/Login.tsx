@@ -5,6 +5,7 @@ import type { User } from '../api';
 import VersionTag from '../components/VersionTag';
 import { githubErrorMessage } from '../components/GitHub';
 import Icon from '../design/Icon';
+import ThemeSwitch from '../design/ThemeSwitch';
 
 interface Tokens { access: string; refresh: string }
 interface Props { onSuccess: (d: { user: User; tokens: Tokens }) => void }
@@ -129,7 +130,7 @@ export default function Login({ onSuccess }: Props) {
                   返回重新登录
                 </button>
               </ValidatedForm>
-              <footer className="auth-foot"><VersionTag /></footer>
+              <footer className="auth-foot"><VersionTag /><ThemeSwitch /></footer>
             </>
           ) : (
             <>
@@ -198,6 +199,7 @@ export default function Login({ onSuccess }: Props) {
 
               <footer className="auth-foot">
                 <VersionTag />
+                <ThemeSwitch />
               </footer>
             </>
           )}

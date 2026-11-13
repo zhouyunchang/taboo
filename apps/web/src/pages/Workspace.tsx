@@ -18,6 +18,7 @@ import RotationPanel from '../components/RotationPanel';
 import Icon from '../design/Icon';
 import type { IconName } from '../design/Icon';
 import { Button, Check, EmptyState, Field, IconButton, MetaList, Notice, PageHead, Pill, Section, Skeleton, TableWrap } from '../design/primitives';
+import ThemeSwitch from '../design/ThemeSwitch';
 import { FolderTree, SecretRow } from '../ui/SecretRows';
 import { normalizeCode, suggestCode } from '../pathcode';
 
@@ -207,6 +208,7 @@ export default function Workspace({ user, orgs, onManageOrgs, onLogout, logoutEr
 
         <div className="appbar-spacer" />
         <div className="appbar-actions">
+          <ThemeSwitch />
           <span className="status-chip" title={federated ? '外部登录会话' : '本地账号会话'}>
             <span className={`dot ${federated && session?.sensitive_operations_allowed === false ? 'warn' : federated ? '' : 'warn'}`} aria-hidden="true" />
             <span>{federated ? '外部登录' : '本地会话'}</span>

@@ -2,7 +2,7 @@
 
 <!-- impeccable:design-schema 1 -->
 
-Built with the 禁制 / 印鉴 redesign (2026-11-11, direction seed `9ee163f2`). This document describes the world as built; it does not generate a second theme. `apps/web/src/styles.css` remains the only runtime source of tokens and shared element styles, and `src/design/Icon.tsx` + `src/design/primitives.tsx` are the only shared component vocabulary.
+Built with the 禁制 / 印鉴 redesign (2026-11-11, direction seed `9ee163f2`), extended 2026-11-13 with the 宣纸 day theme and user-controlled switching. This document describes the world as built; `apps/web/src/styles.css` remains the only runtime source of tokens and shared element styles — `:root` holds the night regime, `html[data-theme='light']` the day one — and `src/design/Icon.tsx` + `src/design/primitives.tsx` are the only shared component vocabulary.
 
 ## The world
 
@@ -10,9 +10,13 @@ Built with the 禁制 / 印鉴 redesign (2026-11-11, direction seed `9ee163f2`).
 
 Three images carry every screen: **墨** (ink: the ground and its layers), **朱砂** (vermilion: the seal, the danger, the current thing), **结界** (the barrier: 1px seams that divide regions instead of shadows and rounded card stacks). Anything that does not serve one of those three is not in the world.
 
+**Two exposures, one world.** Night (墨底) is the incumbent; day (宣纸) is the same ink and the same vermilion printed on warm paper. Neither is a category skin: both keep 墨 / 朱砂 / 结界, the same type, the same seams, the same ciphertext. Only the ground and what the foreground sits on change.
+
 ## Palette
 
-Defined in `:root` of `styles.css`; never re-declare a hex outside that block.
+Defined in `styles.css` — night values in `:root`, day overrides in `html[data-theme='light']`. Never re-declare a hex anywhere else: a component reads tokens and inherits both themes.
+
+Night (default):
 
 | Role | Token | Value | Used for |
 | --- | --- | --- | --- |
@@ -26,9 +30,37 @@ Defined in `:root` of `styles.css`; never re-declare a hex outside that block.
 | Jade (ok) | `--jade` `--jade-tint` | `#6db98a` | success, active identity, diff additions |
 | Amber (warn) | `--amber` `--amber-tint` | `#d59a3a` | pending approvals, references, degraded session |
 
-**One saturated colour carries authority.** Vermilion may appear only for: the primary action on a screen, the current/active item, danger or revocation, the revealed value, and the seal mark itself. Everything else is ink, porcelain or a status hue. Status hues colour state and never decoration. Text on vermilion uses `--on-seal` (`#fff6ea`), never a grey.
+Day (宣纸), the same roles re-inked:
 
-Contrast floor: body and placeholder ≥ 4.5:1, large text ≥ 3:1. Secondary text on a tinted surface is tinted from that hue, never greyed.
+| Role | Token | Day value | Used for |
+| --- | --- | --- | --- |
+| Ink ground | `--ink-950` | `#f7f4ec` | page field, `--meta-theme-color` |
+| Chrome / recessed | `--ink-925` | `#f1ece2` | rail wash, table heads, inputs, record leaf |
+| Surface | `--ink-900` | `#fffdfa` | cards, popovers, dialogs, the 古籍 leaf (`--book-bg` `#fbf7ec`) |
+| Raised field | `--ink-850` `--ink-800` | `#faf6ee` `#f2ece0` | controls, active item, hover |
+| Seam | `--border` `--border-strong` | `#ded4c4` `#cec2ab` | all dividers and control borders |
+| Foreground | `--porcelain` / `--porcelain-dim` / `--porcelain-faint` | `#1d1913` `#494134` `#6a6050` | body / secondary / tertiary |
+| Cipher | `--cipher` | `#5f5546` | masked ● dots; in day they hold one ink weight (length reads from count and spacing) |
+| Seal ink | `--vermilion` `--vermilion-hi` `--vermilion-lo` | `#b5371f` `#9e2c16` `#872112` | primary fill, danger text, current item, focus |
+| Seal face | `--seal-face` `--seal-face-hi` `--seal-face-lo` | `#b93a21` `#cc4d31` `#902812` | the 印 gradient only, so the mark keeps its own ink |
+| Seal tint | `--seal-tint` `--seal-line` | `rgb(181 55 31 / 9%)` / `38%` | revealed value chip, danger buttons, once-secret |
+| Jade / Amber | `--jade` `--amber` | `#276340` `#74500f` | success / warning state, diff, traces |
+| Amber on layered tint | `--amber-strong` | `#60400a` | `${env:KEY}` reference chips that sit on a revealed value's seal tint; night keeps `#d59a3a` |
+
+The `--ink-*` names are material roles, not luminance: in day `--ink-950` is the page and `--ink-900` the card, the reverse of the night ramp. New rules must read the role, never "950 is darkest". The day ramp is one continuous 素白宣 paper, not a plain white admin: the page, the chrome and the raised sheet stay three distinguishable paper weights, and the seams carry the boundaries once the fills get close.
+
+**One saturated colour carries authority.** Vermilion may appear only for: the primary action on a screen, the current/active item, danger or revocation, the revealed value, and the seal mark itself. Everything else is ink, porcelain or a status hue. Status hues colour state and never decoration. Text on vermilion uses `--on-seal` (`#fff6ea` on ink, `#fff8ec` on paper), never a grey.
+
+Contrast floor: body and placeholder ≥ 4.5:1, large text ≥ 3:1. Secondary text on a tinted surface is tinted from that hue, never greyed. Both regimes are measured against their real surfaces; the day theme uses the deeper `--vermilion-hi` for text because `#d4432e` on paper does not reach 4.5:1, and its status hues are deepened the same way.
+
+**Alpha is a token too.** Washes, rings, focus halos, the modal backdrop and the lifted shadows are theme values (`--row-wash`, `--seal-ring`, `--focus-ring`, `--jade-line`, `--amber-line`, `--backdrop`, `--shadow-pop`, `--shadow-dialog`, `--seal-shadow`), never literals inside a rule. Night washes lift with white light. Day keeps a white paper bloom and a faint vermilion stain on the page edge, while row hovers sink with warm ink and the lifted shadows become warm paper lifts. `--meta-theme-color` carries the resolved page colour that `theme.ts` hands to the mobile browser chrome.
+
+## Two themes, one runtime
+
+- **Switch.** `ThemeSwitch` is a three-state 印钮 group (`跟随系统` / `亮色` / `暗色`, `role="group"`, `aria-label="界面主题"`, each option `aria-pressed`); the current option presses into a seal-tint wash with a vermilion underline. It sits first in the workspace appbar action cluster, and on the account-less surfaces in the login footer, the first-run head, the organisation topbar, and the CLI consent corner (`.theme-corner`).
+- **State.** `src/design/theme.ts` owns the mode: `localStorage['taboo:theme']` = `system | light | dark`, default `system`; `system` follows `prefers-color-scheme` live, other tabs sync through `storage`, and the resolved value + choice land on `<html data-theme>` / `data-theme-mode`.
+- **No flash.** `apps/web/index.html` resolves the mode in an inline script before any stylesheet or module runs (the document also ships `data-theme="dark"` as the no-JS fallback). The switch reflects the resolved state on the first frame; changing it never reloads or remounts the app.
+- **Invariants.** Theme is presentation only. Accessible names, copy, server authorization, sensitive-state behaviour (blur clears a revealed value, the 20-second clipboard wipe) and the native `<select>` / `<dialog>` contracts are identical in both regimes.
 
 ## Type
 
@@ -53,7 +85,7 @@ Contrast floor: body and placeholder ≥ 4.5:1, large text ≥ 3:1. Secondary te
 - Scale 2 / 4 / 8 / 12 / 16 / 20 / 24 / 32 / 48. `.main` is 24px × `--pad`, stage gap 20px.
 - Radii: `--r-sm` 3px (chips, keycaps), `--r-md` 5px (controls), `--r-lg` 8px (panels, dialogs' inner blocks), `--r-xl` 14px (dialogs, cards). Pills are round only for avatars and dots.
 - **Depth is a seam, not a shadow.** 1px borders divide regions. Shadows exist only where something is lifted out of the page: `.popover`, `.modal`, `.flash-dialog` (`--shadow-pop`, `--shadow-dialog`). A bordered element with a wide soft shadow is wrong in this world.
-- Every browser surface is themed: selection is vermilion on `--on-seal`, scrollbars are `--scrollbar-thumb` on the page field, focus is `2px --vermilion-hi` with 2px offset, `caret-color` is vermilion.
+- Every browser surface is themed: selection is vermilion on `--on-seal`, scrollbars are `--scrollbar-thumb` on the page field, focus is `2px --vermilion-hi` with 2px offset, `caret-color` is vermilion. All of it resolves through tokens, so the day theme re-inks selection, scrollbars, caret and focus instead of falling back to browser defaults.
 
 ## Components (the vocabulary)
 
@@ -120,7 +152,7 @@ Structural, not fluid type. ≤1100px the rail narrows and the audit column stac
 
 ## Accessibility commitments
 
-Keyboard-operable everywhere; native `<dialog>` focus containment and Escape; `role="alert"` / `role="status"` for errors and state; visible focus ring on every control; form validation names the first invalid field and focuses it; icon-only buttons carry an `aria-label` equal to the action word (显示 / 隐藏 / 复制 / 编辑 / 删除); native `<select>` popups are accepted; `.sr-only` for table action headers. This is a scoped check, not a WCAG certification claim.
+Keyboard-operable everywhere; native `<dialog>` focus containment and Escape; `role="alert"` / `role="status"` for errors and state; visible focus ring on every control; form validation names the first invalid field and focuses it; icon-only buttons carry an `aria-label` equal to the action word (显示 / 隐藏 / 复制 / 编辑 / 删除); native `<select>` popups are accepted; `.sr-only` for table action headers. The theme switch is keyboard-operable and announces 跟随系统 / 亮色 / 暗色; both themes hold the contrast floor against their own surfaces, and changing the theme never moves focus or remounts a panel. This is a scoped check, not a WCAG certification claim.
 
 ## Scope and migration ledger
 
@@ -129,6 +161,8 @@ Replaced: the GitHub-dark palette (`#0d1117` / `#58a6ff` / `#7c3aed`), the topba
 Preserved because the product depends on it: session/CSRF/BFF behaviour in `api.ts`, organization-bound workspace lifetimes, `taboo:permissions-refresh` and `taboo:verification-unavailable` listeners, blur-clears-revealed-value and the 20-second clipboard wipe, server-side authorization as the only truth, and every accessible name the browser suite asserts (`显示`, `隐藏`, `复制`, `编辑`, `删除`, `＋ 新建密钥`, `保存（产生新版本）`, `回滚到此`, `对比`, `版本历史`, `添加身份连接`, `当前组织`, `退出`, heading `taboo · 禁制`).
 
 Still native by contract (`UX-CONTRACT.md` owns the behaviour): `<select>` lists, the six-form grant matrix, OIDC connection form and identity replacement, cross-tab session invalidation.
+
+Added 2026-11-13: the 宣纸 day theme and its three-state switch (`src/design/ThemeSwitch.tsx`, `src/design/theme.ts`). Night tokens are untouched; day arrived by tokenising the washes, rings, backdrop and shadows that used to be literals inside rules, so both regimes share one rule set and one component vocabulary. Both-theme captures and the contrast audit live under `.impeccable/review/theme/`.
 
 Open items: none outstanding from the finish review. Two recorded decisions replaced the earlier gaps: the rail's current-project block is a seam-only row (`.rail-project`, no box) in the same rhythm as the nav; compact tables at 390px scroll inside their named region at a 420px minimum (not 560px) because hiding columns or clipping identifiers would lose data.
 

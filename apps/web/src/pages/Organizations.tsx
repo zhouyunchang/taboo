@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { api, ApiError, hasBrowserSession } from '../api';
 import type { User, Org } from '../api';
 import Icon from '../design/Icon';
+import ThemeSwitch from '../design/ThemeSwitch';
 import { Button, EmptyState, Field, MetaList, Notice, Pill, Section, Skeleton } from '../design/primitives';
 import { codeIssue, normalizeCode, suggestCode } from '../pathcode';
 
@@ -148,6 +149,7 @@ export default function Organizations({ user, orgs, onOrgsChange, onEnter, onBac
           <span className="spaces-crumb-title">组织</span>
         </div>
         <div className="spaces-topbar-actions">
+          <ThemeSwitch />
           <span className="spaces-user">{user.name || user.email}</span>
           <Button variant="quiet" icon="arrow-left" onClick={onBack}>返回控制台</Button>
         </div>

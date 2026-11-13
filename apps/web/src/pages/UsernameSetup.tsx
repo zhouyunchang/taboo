@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { api, ApiError } from '../api';
 import type { User, Org } from '../api';
 import Icon from '../design/Icon';
+import ThemeSwitch from '../design/ThemeSwitch';
 import { codeIssue, normalizeCode } from '../pathcode';
 
 // 与 server-go/internal/pathcode 的规则保持一致：定位符第一段是小写字母、
@@ -74,6 +75,7 @@ export default function UsernameSetup({ user, onDone, onLogout, logoutError }: P
             <span className="onboard-brand">taboo · <span className="cjk">禁制</span></span>
             <span className="onboard-kicker">入府 · 落款</span>
           </div>
+          <ThemeSwitch />
         </header>
 
         <div className="onboard-intro">

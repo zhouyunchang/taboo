@@ -8,7 +8,7 @@ export type IconName =
   | 'shield' | 'seal' | 'audit' | 'robot' | 'db' | 'settings' | 'users' | 'logout'
   | 'alert' | 'lock' | 'unlock' | 'arrow-right' | 'arrow-left' | 'x' | 'menu' | 'more'
   | 'upload' | 'download' | 'refresh' | 'scan' | 'link' | 'terminal' | 'globe' | 'bell' | 'swap'
-  | 'chevron-left' | 'sliders' | 'file' | 'play';
+  | 'chevron-left' | 'sliders' | 'file' | 'play' | 'monitor' | 'sun' | 'moon';
 
 const paths: Record<IconName, string> = {
   key: 'M6.5 2.5a4 4 0 1 0 2.9 6.7l1.1 1.1v1.9h1.9v1.9h1.9v-1.9l-3.4-3.4A4 4 0 0 0 6.5 2.5Z M6.5 5.2h.01',
@@ -55,6 +55,10 @@ const paths: Record<IconName, string> = {
   file: 'M3.6 2h5.2l3.6 3.6V14H3.6V2Z M8.6 2v3.8h3.8',
   play: 'M4.6 2.6 13 8l-8.4 5.4V2.6Z',
   swap: 'M2.5 5.5h9 M9 3l2.5 2.5L9 8 M13.5 10.5h-9 M7 8l-2.5 2.5L7 13',
+  // 主题三态：显示器（跟随系统）、太阳（亮色）、月牙（暗色）。
+  monitor: 'M2.2 2.8h11.6v7.6H2.2V2.8Z M5.8 13.2h4.4 M8 10.4v2.8',
+  sun: 'M8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Z M8 1.6v1.5 M8 12.9v1.5 M1.6 8h1.5 M12.9 8h1.5 M3.5 3.5l1.1 1.1 M11.4 11.4l1.1 1.1 M12.5 3.5l-1.1 1.1 M4.6 11.4l-1.1 1.1',
+  moon: 'M13.6 8.6a5.8 5.8 0 1 1-6.2-6.2 4.6 4.6 0 0 0 6.2 6.2Z',
 };
 
 export default function Icon({ name, size = 16, className = '', strokeWidth = 1.5 }: {
