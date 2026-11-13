@@ -1,0 +1,472 @@
+{
+  "generatedAt": "2026-11-13T04:02:14.091Z",
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "viewports": [
+    "desktop",
+    "mobile"
+  ],
+  "summary": {
+    "shots": 52,
+    "checks": 45,
+    "checksPassed": 45,
+    "checksFailed": 0,
+    "pageErrorCount": 0,
+    "http5xxCount": 0,
+    "captureFailures": 0
+  },
+  "checks": [
+    {
+      "id": "dist-inline-bootstrap-first",
+      "category": "no-flash",
+      "theme": null,
+      "viewport": null,
+      "pass": true,
+      "expected": "内联 data-theme bootstrap 早于 <script type=\"module\"> 与样式 <link rel=stylesheet>",
+      "actual": "inline@412, module@1423, stylesheet@1503",
+      "detail": "dist/index.html（vite build 产物）静态顺序；首帧前落好 data-theme 才可能无闪。"
+    },
+    {
+      "id": "dist-html-default-theme",
+      "category": "no-flash",
+      "theme": null,
+      "viewport": null,
+      "pass": true,
+      "expected": "<html> 上有初始 data-theme（无 JS 时也有确定底色）",
+      "actual": "<html data-theme=\"dark\">",
+      "detail": ""
+    },
+    {
+      "id": "persist-dark-reload",
+      "category": "persistence",
+      "theme": "dark",
+      "viewport": null,
+      "pass": true,
+      "expected": "data-theme=dark，localStorage=dark，背景属于暗色",
+      "actual": "before={\"theme\":\"dark\",\"mode\":\"dark\",\"stored\":\"dark\",\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"} after={\"theme\":\"dark\",\"mode\":\"dark\",\"stored\":\"dark\",\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"}；相对亮度 0.003（暗色应 ≤0.25）",
+      "detail": ""
+    },
+    {
+      "id": "persist-light-reload",
+      "category": "persistence",
+      "theme": "light",
+      "viewport": null,
+      "pass": true,
+      "expected": "data-theme=light，localStorage=light，背景属于亮色",
+      "actual": "before={\"theme\":\"light\",\"mode\":\"light\",\"stored\":\"light\",\"bodyBg\":\"rgb(247, 244, 236)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"} after={\"theme\":\"light\",\"mode\":\"light\",\"stored\":\"light\",\"bodyBg\":\"rgb(247, 244, 236)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"}；相对亮度 0.905（亮色应 ≥0.45）",
+      "detail": ""
+    },
+    {
+      "id": "system-dark-follows",
+      "category": "system",
+      "theme": "system",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "localStorage=system + 系统 dark → data-theme=dark、data-theme-mode=system",
+      "actual": "{\"theme\":\"dark\",\"mode\":\"system\",\"stored\":\"system\",\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"}；相对亮度 0.003（暗色应 ≤0.25）",
+      "detail": ""
+    },
+    {
+      "id": "default-system-dark",
+      "category": "system",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "localStorage 为空 + 系统 dark → 解析为 dark（mode=system）",
+      "actual": "{\"theme\":\"dark\",\"mode\":\"system\",\"stored\":null,\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"}",
+      "detail": ""
+    },
+    {
+      "id": "system-light-follows",
+      "category": "system",
+      "theme": "system",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "localStorage=system + 系统 light → data-theme=light、data-theme-mode=system",
+      "actual": "{\"theme\":\"light\",\"mode\":\"system\",\"stored\":\"system\",\"bodyBg\":\"rgb(247, 244, 236)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"}；相对亮度 0.905（亮色应 ≥0.45）",
+      "detail": ""
+    },
+    {
+      "id": "default-system-light",
+      "category": "system",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "localStorage 为空 + 系统 light → 解析为 light（mode=system）",
+      "actual": "{\"theme\":\"light\",\"mode\":\"system\",\"stored\":null,\"bodyBg\":\"rgb(247, 244, 236)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"}",
+      "detail": ""
+    },
+    {
+      "id": "control-present-desktop",
+      "category": "control",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "appbar 内 1 个 role=group[aria-label=界面主题]，含 亮色/暗色/跟随系统 三个按钮",
+      "actual": "count=1 visible=true buttons=3 labels=[\"跟随系统\",\"亮色\",\"暗色\"]",
+      "detail": ""
+    },
+    {
+      "id": "theme-opt-size-desktop",
+      "category": "control",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "主题按钮 26×24px（高 24px）",
+      "actual": "26×24px",
+      "detail": ""
+    },
+    {
+      "id": "control-initial-pressed-desktop",
+      "category": "control",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "system 模式下「跟随系统」aria-pressed=true，其余 false",
+      "actual": "{\"跟随系统\":true,\"亮色\":false,\"暗色\":false}",
+      "detail": ""
+    },
+    {
+      "id": "control-click-亮色-desktop",
+      "category": "control",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "点击「亮色」→ data-theme=light、data-theme-mode=light、localStorage=light、aria-pressed=true",
+      "actual": "click=true {\"theme\":\"light\",\"mode\":\"light\",\"stored\":\"light\",\"bodyBg\":\"rgb(247, 244, 236)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"} aria-pressed=true",
+      "detail": ""
+    },
+    {
+      "id": "control-click-暗色-desktop",
+      "category": "control",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "点击「暗色」→ data-theme=dark、data-theme-mode=dark、localStorage=dark、aria-pressed=true",
+      "actual": "click=true {\"theme\":\"dark\",\"mode\":\"dark\",\"stored\":\"dark\",\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"} aria-pressed=true",
+      "detail": ""
+    },
+    {
+      "id": "control-click-跟随系统-desktop",
+      "category": "control",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "点击「跟随系统」→ data-theme=dark、data-theme-mode=system、localStorage=system、aria-pressed=true",
+      "actual": "click=true {\"theme\":\"dark\",\"mode\":\"system\",\"stored\":\"system\",\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"} aria-pressed=true",
+      "detail": ""
+    },
+    {
+      "id": "control-keyboard-desktop",
+      "category": "control",
+      "theme": null,
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "三个主题按钮都能通过 Tab 聚焦（aria-label 可被读屏读出）",
+      "actual": "找到 [\"亮色\",\"暗色\",\"跟随系统\"]",
+      "detail": ""
+    },
+    {
+      "id": "control-present-mobile",
+      "category": "control",
+      "theme": null,
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "appbar 内 1 个 role=group[aria-label=界面主题]，含 亮色/暗色/跟随系统 三个按钮",
+      "actual": "count=1 visible=true buttons=3 labels=[\"跟随系统\",\"亮色\",\"暗色\"]",
+      "detail": ""
+    },
+    {
+      "id": "theme-opt-size-mobile",
+      "category": "control",
+      "theme": null,
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "主题按钮 24×24px",
+      "actual": "24×24px",
+      "detail": ""
+    },
+    {
+      "id": "mobile-appbar-ctx-full",
+      "category": "control",
+      "theme": null,
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "390px 顶栏仅显示项目名 core-api（.ctx-owner「个人 /」被 ≤760px 隐藏），无省略裁切",
+      "actual": "{\"projectName\":\"个人 / core-api\",\"ownerHidden\":true,\"clientWidth\":49,\"scrollWidth\":49,\"overflow\":\"ellipsis\",\"ellipsisClipped\":false}",
+      "detail": ""
+    },
+    {
+      "id": "control-initial-pressed-mobile",
+      "category": "control",
+      "theme": null,
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "system 模式下「跟随系统」aria-pressed=true，其余 false",
+      "actual": "{\"跟随系统\":true,\"亮色\":false,\"暗色\":false}",
+      "detail": ""
+    },
+    {
+      "id": "control-click-亮色-mobile",
+      "category": "control",
+      "theme": null,
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "点击「亮色」→ data-theme=light、data-theme-mode=light、localStorage=light、aria-pressed=true",
+      "actual": "click=true {\"theme\":\"light\",\"mode\":\"light\",\"stored\":\"light\",\"bodyBg\":\"rgb(247, 244, 236)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"} aria-pressed=true",
+      "detail": ""
+    },
+    {
+      "id": "control-click-暗色-mobile",
+      "category": "control",
+      "theme": null,
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "点击「暗色」→ data-theme=dark、data-theme-mode=dark、localStorage=dark、aria-pressed=true",
+      "actual": "click=true {\"theme\":\"dark\",\"mode\":\"dark\",\"stored\":\"dark\",\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"} aria-pressed=true",
+      "detail": ""
+    },
+    {
+      "id": "control-click-跟随系统-mobile",
+      "category": "control",
+      "theme": null,
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "点击「跟随系统」→ data-theme=dark、data-theme-mode=system、localStorage=system、aria-pressed=true",
+      "actual": "click=true {\"theme\":\"dark\",\"mode\":\"system\",\"stored\":\"system\",\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"} aria-pressed=true",
+      "detail": ""
+    },
+    {
+      "id": "control-keyboard-mobile",
+      "category": "control",
+      "theme": null,
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "三个主题按钮都能通过 Tab 聚焦（aria-label 可被读屏读出）",
+      "actual": "找到 [\"亮色\",\"暗色\",\"跟随系统\"]",
+      "detail": ""
+    },
+    {
+      "id": "no-flash-dark",
+      "category": "no-flash",
+      "theme": "dark",
+      "viewport": null,
+      "pass": true,
+      "expected": "首帧 data-theme=dark（不依赖 React 挂载），加载完成后仍为 dark 且背景与主题一致",
+      "actual": "early={\"theme\":\"dark\",\"mode\":\"dark\",\"bodyBg\":\"rgb(10, 9, 7)\",\"metaThemeColor\":\"#0a0907\"} late={\"theme\":\"dark\",\"mode\":\"dark\",\"stored\":\"dark\",\"bodyBg\":\"rgb(10, 9, 7)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"}；相对亮度 0.003（暗色应 ≤0.25）",
+      "detail": ""
+    },
+    {
+      "id": "body-bg-dark",
+      "category": "palette",
+      "theme": "dark",
+      "viewport": null,
+      "pass": true,
+      "expected": "body 背景 rgb(10, 9, 7)（#0a0907）",
+      "actual": "rgb(10, 9, 7)",
+      "detail": ""
+    },
+    {
+      "id": "meta-theme-color-dark",
+      "category": "meta",
+      "theme": "dark",
+      "viewport": null,
+      "pass": true,
+      "expected": "meta[name=theme-color]=#0a0907（bootstrap/CSS 同步，Early BootSurface 也正确）",
+      "actual": "content=#0a0907 --meta-theme-color=#0a0907（早期 meta=#0a0907）",
+      "detail": ""
+    },
+    {
+      "id": "no-flash-light",
+      "category": "no-flash",
+      "theme": "light",
+      "viewport": null,
+      "pass": true,
+      "expected": "首帧 data-theme=light（不依赖 React 挂载），加载完成后仍为 light 且背景与主题一致",
+      "actual": "early={\"theme\":\"light\",\"mode\":\"light\",\"bodyBg\":\"rgb(247, 244, 236)\",\"metaThemeColor\":\"#f7f4ec\"} late={\"theme\":\"light\",\"mode\":\"light\",\"stored\":\"light\",\"bodyBg\":\"rgb(247, 244, 236)\",\"htmlBg\":\"rgba(0, 0, 0, 0)\"}；相对亮度 0.905（亮色应 ≥0.45）",
+      "detail": ""
+    },
+    {
+      "id": "body-bg-light",
+      "category": "palette",
+      "theme": "light",
+      "viewport": null,
+      "pass": true,
+      "expected": "body 背景 rgb(247, 244, 236)（#f7f4ec）",
+      "actual": "rgb(247, 244, 236)",
+      "detail": ""
+    },
+    {
+      "id": "meta-theme-color-light",
+      "category": "meta",
+      "theme": "light",
+      "viewport": null,
+      "pass": true,
+      "expected": "meta[name=theme-color]=#f7f4ec（bootstrap/CSS 同步，Early BootSurface 也正确）",
+      "actual": "content=#f7f4ec --meta-theme-color=#f7f4ec（早期 meta=#f7f4ec）",
+      "detail": ""
+    },
+    {
+      "id": "mount-console-appbar-dark",
+      "category": "mount",
+      "theme": "dark",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "console-appbar 有 1 个主题开关（3 个按钮）且页面 data-theme=dark",
+      "actual": "count=1 visible=true buttons=3 data-theme=dark stored=dark",
+      "detail": ""
+    },
+    {
+      "id": "mount-login-auth-foot-dark",
+      "category": "mount",
+      "theme": "dark",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "login-auth-foot 有 1 个主题开关（3 个按钮）且页面 data-theme=dark",
+      "actual": "count=1 visible=true buttons=3 data-theme=dark stored=dark",
+      "detail": ""
+    },
+    {
+      "id": "mount-organizations-topbar-dark",
+      "category": "mount",
+      "theme": "dark",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "organizations-topbar 有 1 个主题开关（3 个按钮）且页面 data-theme=dark",
+      "actual": "count=1 visible=true buttons=3 data-theme=dark stored=dark",
+      "detail": ""
+    },
+    {
+      "id": "mount-cli-theme-corner-dark",
+      "category": "mount",
+      "theme": "dark",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "cli-theme-corner 有 1 个主题开关（3 个按钮）且页面 data-theme=dark",
+      "actual": "count=1 visible=true buttons=3 data-theme=dark stored=dark",
+      "detail": ""
+    },
+    {
+      "id": "mount-console-appbar-light",
+      "category": "mount",
+      "theme": "light",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "console-appbar 有 1 个主题开关（3 个按钮）且页面 data-theme=light",
+      "actual": "count=1 visible=true buttons=3 data-theme=light stored=light",
+      "detail": ""
+    },
+    {
+      "id": "mount-login-auth-foot-light",
+      "category": "mount",
+      "theme": "light",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "login-auth-foot 有 1 个主题开关（3 个按钮）且页面 data-theme=light",
+      "actual": "count=1 visible=true buttons=3 data-theme=light stored=light",
+      "detail": ""
+    },
+    {
+      "id": "mount-organizations-topbar-light",
+      "category": "mount",
+      "theme": "light",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "organizations-topbar 有 1 个主题开关（3 个按钮）且页面 data-theme=light",
+      "actual": "count=1 visible=true buttons=3 data-theme=light stored=light",
+      "detail": ""
+    },
+    {
+      "id": "mount-cli-theme-corner-light",
+      "category": "mount",
+      "theme": "light",
+      "viewport": "desktop",
+      "pass": true,
+      "expected": "cli-theme-corner 有 1 个主题开关（3 个按钮）且页面 data-theme=light",
+      "actual": "count=1 visible=true buttons=3 data-theme=light stored=light",
+      "detail": ""
+    },
+    {
+      "id": "overflow-login-dark",
+      "category": "overflow",
+      "theme": "dark",
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "documentElement.scrollWidth ≤ innerWidth(390)",
+      "actual": "scrollWidth=390 body=390 diff=0；越界元素=[]",
+      "detail": ""
+    },
+    {
+      "id": "overflow-console-dark",
+      "category": "overflow",
+      "theme": "dark",
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "documentElement.scrollWidth ≤ innerWidth(390)",
+      "actual": "scrollWidth=390 body=390 diff=0；越界元素=[]",
+      "detail": ""
+    },
+    {
+      "id": "overflow-settings-dark",
+      "category": "overflow",
+      "theme": "dark",
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "documentElement.scrollWidth ≤ innerWidth(390)",
+      "actual": "scrollWidth=390 body=390 diff=0；越界元素=[\"table.table.compact right=435\",\"thead right=435\",\"tr right=435\",\"th right=435\",\"tbody right=435\",\"tr right=435\",\"td right=435\",\"tr right=435\"]",
+      "detail": ""
+    },
+    {
+      "id": "overflow-organizations-dark",
+      "category": "overflow",
+      "theme": "dark",
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "documentElement.scrollWidth ≤ innerWidth(390)",
+      "actual": "scrollWidth=390 body=390 diff=0；越界元素=[]",
+      "detail": ""
+    },
+    {
+      "id": "overflow-login-light",
+      "category": "overflow",
+      "theme": "light",
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "documentElement.scrollWidth ≤ innerWidth(390)",
+      "actual": "scrollWidth=390 body=390 diff=0；越界元素=[]",
+      "detail": ""
+    },
+    {
+      "id": "overflow-console-light",
+      "category": "overflow",
+      "theme": "light",
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "documentElement.scrollWidth ≤ innerWidth(390)",
+      "actual": "scrollWidth=390 body=390 diff=0；越界元素=[]",
+      "detail": ""
+    },
+    {
+      "id": "overflow-settings-light",
+      "category": "overflow",
+      "theme": "light",
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "documentElement.scrollWidth ≤ innerWidth(390)",
+      "actual": "scrollWidth=390 body=390 diff=0；越界元素=[\"table.table.compact right=435\",\"thead right=435\",\"tr right=435\",\"th right=435\",\"tbody right=435\",\"tr right=435\",\"td right=435\",\"tr right=435\"]",
+      "detail": ""
+    },
+    {
+      "id": "overflow-organizations-light",
+      "category": "overflow",
+      "theme": "light",
+      "viewport": "mobile",
+      "pass": true,
+      "expected": "documentElement.scrollWidth ≤ innerWidth(390)",
+      "actual": "scrollWidth=390 body=390 diff=0；越界元素=[]",
+      "detail": ""
+    }
+  ]
+}
