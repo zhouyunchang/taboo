@@ -15,3 +15,6 @@ data/
 # Ephemeral browser verification output
 apps/web/test-results/
 apps/web/playwright-report/
+
+# Impeccable design artifacts (local evidence, not source; PRODUCT/DESIGN are the source of truth)
+.impeccable/
